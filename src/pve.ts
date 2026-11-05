@@ -3,18 +3,29 @@ import https from "node:https";
 import tls from "node:tls";
 import type { Config } from "./config.js";
 
-/** Read-only Proxmox client. It has no way to send anything except GET. */
-export class PveClient {
-  constructor(private readonly config: Pick<Config, "pveUrl" | "pveToken" | "pveCa" | "pveTlsName">) {}
+export interface LoginResult {
+  username: string;
+  ticket: string;
+  needsCode: boolean;
+}
 
-  get<T>(path: string): Promise<T> {
+/**
+ * Proxmox client. Reads use the signed-in person's own ticket, so Proxmox applies their permissions.
+ * The only POST it can send is the sign-in request, so this version can't change anything.
+ */
+export class PveClient {
+  constructor(private readonly config: Pick<Config, "pveUrl" | "pveCa" | "pveTlsName">) {}
+
+  private request<T>(method: "GET" | "POST", path: string, ticket?: string, body?: string): Promise<T> {
     const url = new URL("/api2/json" + path, this.config.pveUrl);
     const secure = url.protocol === "https:";
-    const options: https.RequestOptions = {
-      method: "GET",
-      headers: { Authorization: `PVEAPIToken=${this.config.pveToken}` },
-      timeout: 8000,
-    };
+    const headers: Record<string, string> = {};
+    if (ticket) headers.Cookie = `PVEAuthCookie=${encodeURIComponent(ticket)}`;
+    if (body !== undefined) {
+      headers["Content-Type"] = "application/x-www-form-urlencoded";
+      headers["Content-Length"] = String(Buffer.byteLength(body));
+    }
+    const options: https.RequestOptions = { method, headers, timeout: 8000 };
     if (secure && this.config.pveCa) options.ca = this.config.pveCa;
     const tlsName = this.config.pveTlsName;
     if (secure && tlsName) {
@@ -42,8 +53,19 @@ export class PveClient {
       const req = secure ? https.request(url, options, onResponse) : http.request(url, options, onResponse);
       req.on("timeout", () => req.destroy(new Error("Proxmox took too long to answer")));
       req.on("error", reject);
-      req.end();
+      req.end(body);
     });
+  }
+
+  get<T>(path: string, ticket?: string): Promise<T> {
+    return this.request<T>("GET", path, ticket);
+  }
+
+  async login(username: string, password: string, tfaChallenge?: string): Promise<LoginResult> {
+    const form = new URLSearchParams({ username, password });
+    if (tfaChallenge) form.set("tfa-challenge", tfaChallenge);
+    const data = await this.request<{ username: string; ticket: string; NeedTFA?: number }>("POST", "/access/ticket", undefined, form.toString());
+    return { username: data.username, ticket: data.ticket, needsCode: data.NeedTFA === 1 };
   }
 }
 

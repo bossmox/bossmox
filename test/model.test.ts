@@ -42,7 +42,15 @@ test("builds the overview from real-shaped data", () => {
   assert.deepEqual(o.issues.map((i) => i.kind), ["server-offline", "no-backup", "storage-full"]);
 });
 
-test("refuses to send a token over plain http to another machine", () => {
-  assert.throws(() => loadConfig({ PVE_URL: "http://192.0.2.1:8006", PVE_TOKEN: "x" }), /https/);
-  assert.equal(loadConfig({ PVE_URL: "http://127.0.0.1:9", PVE_TOKEN: "x" }).pveUrl.port, "9");
+test("refuses to send passwords to Proxmox over plain http", () => {
+  assert.throws(() => loadConfig({ PVE_URL: "http://192.0.2.1:8006" }), /https/);
+  assert.equal(loadConfig({ PVE_URL: "http://127.0.0.1:9" }).pveUrl.port, "9");
+});
+
+test("refuses to serve a network without HTTPS", () => {
+  const base = { PVE_URL: "https://192.0.2.1:8006", HOST: "0.0.0.0" };
+  assert.throws(() => loadConfig(base), /plain HTTP/);
+  assert.equal(loadConfig({ ...base, BOSSMOX_BEHIND_HTTPS_PROXY: "1" }).behindProxy, true);
+  assert.equal(loadConfig({ ...base, BOSSMOX_ALLOW_HTTP: "1" }).allowHttp, true);
+  assert.equal(loadConfig({ PVE_URL: "https://192.0.2.1:8006" }).host, "127.0.0.1");
 });

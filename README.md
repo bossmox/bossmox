@@ -8,26 +8,27 @@ BossMox is an independent project. It is not affiliated with or endorsed by Prox
 
 ## Status
 
-Early and **read only**. This version shows servers, VMs, containers, snapshots and storage, and points out things worth a look. It cannot change anything on Proxmox.
+Early and **read only**. Sign in with your normal Proxmox account, including authenticator-app 2FA. You see what your Proxmox permissions allow. This version shows servers, VMs, containers, snapshots and storage, and points out things worth a look. It cannot change anything on Proxmox, even for an administrator.
 
-There is no BossMox login yet, so keep it bound to localhost as shown below. Don't expose it to a network.
+Hardware security keys (WebAuthn) and recovery codes don't work in BossMox yet.
 
 ## Run it
 
-1. In Proxmox, create a user with the `PVEAuditor` role on `/`, and an API token for that user.
-2. Copy `/etc/pve/pve-root-ca.pem` from Proxmox to `./pve-root-ca.pem`.
-3. Copy `.env.example` to `.env` and fill in `PVE_URL` and `PVE_TOKEN`.
-4. Run:
+1. Copy `/etc/pve/pve-root-ca.pem` from Proxmox to `./pve-root-ca.pem`.
+2. Copy `.env.example` to `.env` and fill in `PVE_URL`.
+3. Run:
 
 ```sh
 docker build -t bossmox .
-docker run --rm --env-file .env -e PVE_CA_FILE=/ca.pem \
+docker run --rm --env-file .env -e PVE_CA_FILE=/ca.pem -e BOSSMOX_ALLOW_HTTP=1 \
   -v "$PWD/pve-root-ca.pem:/ca.pem:ro" -p 127.0.0.1:8080:8080 bossmox
 ```
 
 Then open http://localhost:8080.
 
-To try it without Proxmox, run `npm run mock`, and set `PVE_URL=http://127.0.0.1:8079` with any `PVE_TOKEN`.
+To use it from other machines, it needs HTTPS because passwords pass through it. Set `TLS_CERT_FILE` and `TLS_KEY_FILE`, or put it behind an HTTPS proxy and set `BOSSMOX_BEHIND_HTTPS_PROXY=1`. List the host names you use in `BOSSMOX_ALLOWED_HOSTS`. BossMox refuses to start on a network address without one of those, or `BOSSMOX_ALLOW_HTTP=1`, which is only for a port published to `127.0.0.1` as above.
+
+To try it without Proxmox, run `npm run mock`, and set `PVE_URL=http://127.0.0.1:8079`. Sign in as `demo` with the password `demo`.
 
 ## How it's built
 

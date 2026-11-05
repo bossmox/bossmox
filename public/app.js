@@ -254,14 +254,114 @@ function tick() {
   $("#clock").textContent = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
 
+/* Signing in */
+const post = (url, body) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-BossMox": "1" }, body: JSON.stringify(body) });
+let challenge = null;
+let polling = null;
+
+function showError(text) {
+  const e = $("#loginerr");
+  e.hidden = !text;
+  e.textContent = text || "";
+}
+function setStep(two) {
+  $("#stepone").hidden = two;
+  $("#steptwo").hidden = !two;
+  $("#lcode").required = two;
+  $("#luser").required = !two;
+  $("#lpass").required = !two;
+  $("#lgo").textContent = two ? "Confirm" : "Sign in";
+  $("#loginsub").textContent = two ? "Your account uses two-factor sign-in." : "BossMox uses your Proxmox login and permissions.";
+  (two ? $("#lcode") : $("#luser")).focus();
+}
+async function showLogin(message) {
+  clearInterval(polling);
+  polling = null;
+  S.data = null;
+  S.sel = null;
+  Object.keys(wins).forEach((k) => {
+    wins[k].remove();
+    delete wins[k];
+  });
+  renderTasks();
+  challenge = null;
+  $("#desk").hidden = true;
+  $("#who").hidden = true;
+  $("#signout").hidden = true;
+  $("#stale").hidden = true;
+  $("#login").hidden = false;
+  $("#lpass").value = "";
+  $("#lcode").value = "";
+  setStep(false);
+  showError(message);
+  try {
+    const res = await fetch("api/login-info");
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error);
+    const rank = (r) => (r.default ? 2 : r.realm === "pam" ? 1 : 0);
+    const realms = [...body.realms].sort((a, b) => rank(b) - rank(a));
+    $("#lrealm").innerHTML = realms.map((r) => `<option value="${esc(r.realm)}">${esc(r.comment || r.realm)}</option>`).join("");
+  } catch (err) {
+    showError(`BossMox can't reach Proxmox right now. ${err.message || ""}`);
+  }
+}
+function showDesk() {
+  $("#login").hidden = true;
+  $("#desk").hidden = false;
+  $("#signout").hidden = false;
+  showError("");
+  refresh();
+  polling ??= setInterval(refresh, 10000);
+}
+$("#loginform").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const go = $("#lgo");
+  go.disabled = true;
+  showError("");
+  try {
+    const res = challenge
+      ? await post("api/login/code", { challenge, code: $("#lcode").value })
+      : await post("api/login", { username: $("#luser").value.trim(), realm: $("#lrealm").value, password: $("#lpass").value });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error);
+    $("#lpass").value = "";
+    if (body.needsCode) {
+      challenge = body.challenge;
+      setStep(true);
+    } else {
+      challenge = null;
+      showDesk();
+    }
+  } catch (err) {
+    $("#lpass").value = "";
+    $("#lcode").value = "";
+    showError(err.message || "BossMox couldn't reach Proxmox.");
+  } finally {
+    go.disabled = false;
+  }
+});
+$("#signout").addEventListener("click", async () => {
+  try { await post("api/logout", {}); } finally { showLogin(); }
+});
+
 /* Live data */
 async function refresh() {
   let error = "";
   try {
     const res = await fetch("api/overview");
     const body = await res.json();
+    if (res.status === 401) {
+      showLogin(S.data ? "You've been signed out. Sign in again to continue." : "");
+      return;
+    }
     if (!res.ok) throw new Error(body.error);
     S.data = body;
+    $("#who").textContent = body.username;
+    $("#who").hidden = false;
+    $("#login").hidden = true;
+    $("#desk").hidden = false;
+    $("#signout").hidden = false;
+    polling ??= setInterval(refresh, 10000);
     if (S.sel === null && body.vms[0]) S.sel = body.vms[0].id;
     S.failed = false;
   } catch (err) {
@@ -284,6 +384,4 @@ try { saved = localStorage.getItem("bossmox-look"); } catch { /* use the default
 setLook(q.get("look") || saved || "daylight");
 tick();
 setInterval(tick, 20000);
-(q.get("open") || "").split(",").filter((k) => APPS[k]).forEach(openWin);
 refresh();
-setInterval(refresh, 10000);

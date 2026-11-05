@@ -212,3 +212,18 @@ summary{cursor:pointer;font-weight:650}
 .store small{display:block;color:var(--muted)}
 .empty{padding:24px;color:var(--muted)}
 @media (max-width:760px){.ro{display:none}}
+
+/* Sign in */
+[hidden]{display:none!important}
+#login{position:fixed;inset:46px 0 0 0;display:grid;place-items:center;padding:16px;overflow:auto}
+#login[hidden],#desk[hidden]{display:none}
+#loginform{width:390px;max-width:100%;background:var(--pane);backdrop-filter:blur(var(--blur));border:1px solid var(--line);border-radius:var(--r);padding:26px;box-shadow:var(--shadow);animation:rise .4s ease-out both}
+#loginform h1{font-size:25px;line-height:1.15;font-weight:800;letter-spacing:-.02em}
+#loginform .sub{color:var(--muted);margin:6px 0 18px}
+#loginform input,#loginform select{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface)}
+#loginform .btn{width:100%;padding:10px}
+.loginerr{color:var(--bad);font-weight:600;margin-bottom:12px}
+.who{font-size:13px;color:var(--muted);margin-left:12px;white-space:nowrap}
+.signout{font-size:13px;font-weight:600;padding:4px 8px;margin-left:4px;border-radius:var(--r-s)}
+.signout:hover{background:var(--surface2)}
+@media (max-width:760px){.who{display:none}#login{position:absolute;min-height:100vh;padding-top:62px;inset:0}}

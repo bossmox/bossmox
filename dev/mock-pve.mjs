@@ -20,8 +20,37 @@ const configs = {
   108: { ostype: "l26", scsihw: "virtio-scsi-single", scsi0: "x,size=60G", net0: "virtio=AA,bridge=vmbr0" },
 };
 
+const reply = (res, data, status = 200) => {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ data }));
+};
+
+// Sign in as demo / demo with any realm. demo2 / demo also asks for the code 123456.
 http.createServer((req, res) => {
   const p = req.url.replace("/api2/json", "");
+  if (p === "/access/domains") return reply(res, [{ realm: "pam", comment: "Linux PAM" }, { realm: "pve", comment: "Proxmox VE", default: 1 }]);
+  if (req.method === "POST" && p === "/access/ticket") {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const f = new URLSearchParams(body);
+      const user = f.get("username") ?? "";
+      if (f.get("tfa-challenge")) {
+        if (f.get("password") === "totp:123456") reply(res, { username: user, ticket: "MOCKTICKET" });
+        else reply(res, null, 401);
+        return;
+      }
+      if (user.startsWith("demo2@") && f.get("password") === "demo") {
+        reply(res, { username: user, ticket: "MOCKCHALLENGE", NeedTFA: 1 });
+        return;
+      }
+      const good = user.startsWith("demo@") && ["demo", "MOCKTICKET"].includes(f.get("password"));
+      if (good) reply(res, { username: user, ticket: "MOCKTICKET" });
+      else reply(res, null, 401);
+    });
+    return;
+  }
+  if (!req.headers.cookie?.includes("PVEAuthCookie=MOCKTICKET")) return reply(res, null, 401);
   const m = p.match(/qemu\/(\d+)\/(config|snapshot)$/);
   let data;
   if (p === "/cluster/resources") data = resources;

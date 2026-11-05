@@ -1,0 +1,85 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { AuthError, Sessions, type LoginClient } from "../src/auth.js";
+import { PveError, type LoginResult } from "../src/pve.js";
+
+const HOUR = 60 * 60 * 1000;
+const ok = (ticket = "T1"): LoginResult => ({ username: "a@pve", ticket, needsCode: false });
+const client = (fn: LoginClient["login"]): LoginClient => ({ login: fn });
+const wrong = async (): Promise<LoginResult> => {
+  throw new PveError(401, "no");
+};
+
+test("a good login returns a random ID and never the ticket", async () => {
+  const s = new Sessions(client(async () => ok("SECRET")));
+  const out = await s.login("a@pve", "pw", "1.1.1.1");
+  assert.equal(out.kind, "ok");
+  assert.ok(out.id.length >= 40);
+  assert.equal(JSON.stringify(out).includes("SECRET"), false);
+  assert.equal((await s.get(out.id))?.ticket, "SECRET");
+});
+
+test("a wrong password is refused with a plain message", async () => {
+  const s = new Sessions(client(wrong));
+  await assert.rejects(s.login("a@pve", "bad", "1.1.1.1"), (e: AuthError) => e.status === 401 && /Wrong username/.test(e.message));
+});
+
+test("ten failures from one address lock it out, others stay open", async () => {
+  const s = new Sessions(client(wrong));
+  for (let i = 0; i < 10; i++) await assert.rejects(s.login("a@pve", "bad", "1.1.1.1"), AuthError);
+  await assert.rejects(s.login("a@pve", "bad", "1.1.1.1"), (e: AuthError) => e.status === 429);
+  await assert.rejects(s.login("a@pve", "bad", "2.2.2.2"), (e: AuthError) => e.status === 401);
+});
+
+test("2FA needs the code, sends the challenge, and works once", async () => {
+  const calls: [string, string | undefined][] = [];
+  const s = new Sessions(client(async (_u, pw, ch) => {
+    calls.push([pw, ch]);
+    return ch ? ok("FULL") : { username: "a@pve", ticket: "CHALLENGE", needsCode: true };
+  }));
+  const first = await s.login("a@pve", "pw", "1.1.1.1");
+  assert.equal(first.kind, "code");
+  assert.equal(await s.get(first.id), undefined, "a challenge is not a session");
+  const done = await s.submitCode(first.id, "123456", "1.1.1.1");
+  assert.deepEqual(calls[1], ["totp:123456", "CHALLENGE"]);
+  assert.equal((await s.get(done.id))?.ticket, "FULL");
+  await assert.rejects(s.submitCode(first.id, "123456", "1.1.1.1"), AuthError);
+});
+
+test("tickets renew after an hour and sessions end after 12", async () => {
+  let t = 0;
+  const seen: string[] = [];
+  const s = new Sessions(client(async (_u, pw) => {
+    seen.push(pw);
+    return ok(`T${seen.length}`);
+  }), () => t);
+  const out = await s.login("a@pve", "pw", "1.1.1.1");
+  t = HOUR + 1;
+  assert.equal((await s.get(out.id))?.ticket, "T2");
+  assert.equal(seen[1], "T1", "the old ticket renews it, the password is not kept");
+  t = 12 * HOUR + 1;
+  assert.equal(await s.get(out.id), undefined);
+});
+
+test("a refused renewal ends the session, an outage does not", async () => {
+  let t = 0;
+  let mode: "ok" | "refuse" | "down" = "ok";
+  const s = new Sessions(client(async () => {
+    if (mode === "refuse") throw new PveError(401, "no");
+    if (mode === "down") throw new Error("connect failed");
+    return ok();
+  }), () => t);
+  const out = await s.login("a@pve", "pw", "1.1.1.1");
+  t = HOUR + 1;
+  mode = "down";
+  assert.ok(await s.get(out.id));
+  mode = "refuse";
+  assert.equal(await s.get(out.id), undefined);
+});
+
+test("signing out ends the session", async () => {
+  const s = new Sessions(client(async () => ok()));
+  const out = await s.login("a@pve", "pw", "1.1.1.1");
+  s.end(out.id);
+  assert.equal(await s.get(out.id), undefined);
+});

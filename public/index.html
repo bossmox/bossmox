@@ -25,9 +25,26 @@
   <span class="ro" title="This version can look at Proxmox but can't change anything">Read only</span>
   <div id="looks" role="group" aria-label="Look"><span>Look</span></div>
   <div id="clock"></div>
+  <span class="who" id="who" hidden></span>
+  <button class="signout" id="signout" hidden>Sign out</button>
 </header>
 
-<main id="desk">
+<section id="login" hidden>
+  <form id="loginform" aria-labelledby="logintitle">
+    <h1 id="logintitle">Sign in with your Proxmox account</h1>
+    <p class="sub" id="loginsub">BossMox uses your Proxmox login and permissions.</p>
+    <div id="stepone">
+      <label class="field"><span>Username</span><input id="luser" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+      <label class="field"><span>Password</span><input id="lpass" type="password" autocomplete="current-password" required></label>
+      <label class="field"><span>Login type</span><select id="lrealm"></select></label>
+    </div>
+    <label class="field" id="steptwo" hidden><span>Code from your authenticator app</span><input id="lcode" inputmode="numeric" autocomplete="one-time-code" maxlength="8"></label>
+    <p class="loginerr" id="loginerr" role="alert" hidden></p>
+    <button class="btn primary" id="lgo" type="submit">Sign in</button>
+  </form>
+</section>
+
+<main id="desk" hidden>
   <nav id="icons" aria-label="Apps"></nav>
   <section id="health" aria-live="polite"><h1>Connecting to Proxmox</h1></section>
 </main>
