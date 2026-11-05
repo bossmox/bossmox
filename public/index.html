@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" data-look="daylight">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BossMox: management app for Proxmox Virtual Environment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="wall" aria-hidden="true">
+  <svg viewBox="0 0 1440 500" preserveAspectRatio="none">
+    <path fill="var(--h1)" d="M0 220 C180 130 340 150 520 215 S860 290 1060 170 1340 150 1440 200 V500 H0Z"/>
+    <path fill="var(--h2)" d="M0 330 C210 250 420 290 640 335 S1040 370 1440 260 V500 H0Z"/>
+    <path fill="var(--h3)" d="M0 425 C260 360 520 405 790 430 S1210 430 1440 375 V500 H0Z"/>
+  </svg>
+</div>
+
+<header id="bar">
+  <div id="brand">BossMox</div>
+  <nav id="tasks" aria-label="Open apps"></nav>
+  <span class="stale" id="stale" hidden></span>
+  <span class="ro" title="This version can look at Proxmox but can't change anything">Read only</span>
+  <div id="looks" role="group" aria-label="Look"><span>Look</span></div>
+  <div id="clock"></div>
+</header>
+
+<main id="desk">
+  <nav id="icons" aria-label="Apps"></nav>
+  <section id="health" aria-live="polite"><h1>Connecting to Proxmox</h1></section>
+</main>
+
+<div id="windows"></div>
+<script src="app.js"></script>
+</body>
+</html>

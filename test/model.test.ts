@@ -1,0 +1,48 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { loadConfig } from "../src/config.js";
+import { buildOverview, vmIssues, type RawResource } from "../src/model.js";
+
+const G = 1024 ** 3;
+
+test("flags IDE boot disks but ignores CD drives", () => {
+  assert.equal(vmIssues(1, "a", { ide0: "local:vm-1-disk-0,size=32G" })[0]?.kind, "disk-controller");
+  assert.equal(vmIssues(1, "a", { ide2: "none,media=cdrom" }).length, 0);
+});
+
+test("flags pvscsi only when a SCSI disk exists", () => {
+  assert.equal(vmIssues(1, "a", { scsihw: "pvscsi", scsi0: "x,size=1G" }).length, 1);
+  assert.equal(vmIssues(1, "a", { scsihw: "pvscsi" }).length, 0);
+  assert.equal(vmIssues(1, "a", { scsihw: "virtio-scsi-single", scsi0: "x,size=1G" }).length, 0);
+});
+
+test("flags older network cards", () => {
+  assert.equal(vmIssues(1, "a", { net0: "e1000=AA:BB,bridge=vmbr0" })[0]?.kind, "network-card");
+  assert.equal(vmIssues(1, "a", { net0: "virtio=AA:BB,bridge=vmbr0" }).length, 0);
+});
+
+test("builds the overview from real-shaped data", () => {
+  const res: RawResource[] = [
+    { type: "node", node: "n1", status: "online", cpu: 0.25, maxcpu: 6, mem: 4 * G, maxmem: 16 * G },
+    { type: "node", node: "n2", status: "offline" },
+    { type: "qemu", vmid: 100, node: "n1", name: "HA", status: "running", cpu: 0.1, maxcpu: 4, mem: G, maxmem: 4 * G, maxdisk: 32 * G },
+    { type: "qemu", vmid: 900, node: "n1", name: "tmpl", status: "stopped", template: 1 },
+    { type: "storage", storage: "fast", node: "n1", status: "available", disk: 90 * G, maxdisk: 100 * G },
+    { type: "storage", storage: "nas", node: "n1", shared: 1, status: "available", disk: G, maxdisk: 10 * G },
+    { type: "storage", storage: "nas", node: "n2", shared: 1, status: "available", disk: G, maxdisk: 10 * G },
+  ];
+  const guests = new Map([
+    [100, { config: { ostype: "l26", onboot: 1 }, snapshots: [{ name: "current" }, { name: "pre", snaptime: 5 }] }],
+  ]);
+  const o = buildOverview(res, guests, [{ vmid: 100 }]);
+  assert.equal(o.vms.length, 1, "templates are left out");
+  assert.equal(o.vms[0]?.os, "Linux");
+  assert.deepEqual(o.vms[0]?.snapshots.map((s) => s.name), ["pre"], "the current marker is not a snapshot");
+  assert.equal(o.storage.length, 2, "shared storage is counted once");
+  assert.deepEqual(o.issues.map((i) => i.kind), ["server-offline", "no-backup", "storage-full"]);
+});
+
+test("refuses to send a token over plain http to another machine", () => {
+  assert.throws(() => loadConfig({ PVE_URL: "http://192.0.2.1:8006", PVE_TOKEN: "x" }), /https/);
+  assert.equal(loadConfig({ PVE_URL: "http://127.0.0.1:9", PVE_TOKEN: "x" }).pveUrl.port, "9");
+});
