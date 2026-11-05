@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildServerDetail, friendlyUptime, groupUpdates, taskResult, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
+import { buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
 
 const repo = (uri: string, component: string, enabled = true): RawRepositories => ({
   files: [{ repositories: [{ Enabled: enabled, URIs: [uri], Components: [component] }] }],
@@ -50,6 +50,15 @@ test("uptime reads naturally", () => {
   assert.equal(friendlyUptime(90061), "1 day, 1 hour");
   assert.equal(friendlyUptime(3720), "1 hour, 2 minutes");
   assert.equal(friendlyUptime(60), "1 minute");
+});
+
+test("following a task reports running, success and failure", () => {
+  assert.equal(taskView({ status: "running" }, []).finished, false);
+  assert.equal(taskView({ status: "stopped", exitstatus: "OK" }, [{ t: "done" }]).result, "ok");
+  const failed = taskView({ status: "stopped", exitstatus: "command failed" }, [{ t: "no content" }, { t: "E: boom" }]);
+  assert.equal(failed.result, "failed");
+  assert.equal(failed.message, "command failed");
+  assert.deepEqual(failed.lines, ["E: boom"]);
 });
 
 test("task results", () => {

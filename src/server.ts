@@ -6,14 +6,16 @@ import { fileURLToPath } from "node:url";
 import { AuthError, Sessions, type LoginOutcome, type Session } from "./auth.js";
 import { loadConfig } from "./config.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
-import { PveClient, PveError } from "./pve.js";
+import { PveClient, PveError, type Identity } from "./pve.js";
 import {
   buildServerDetail,
+  taskView,
   type RawRepositories,
   type RawService,
   type RawStatus,
   type RawSubscription,
   type RawTask,
+  type RawTaskStatus,
   type RawUpdate,
   type Section,
   type ServerDetail,
@@ -103,6 +105,31 @@ function send(res: http.ServerResponse, status: number, type: string, body: stri
 const json = (res: http.ServerResponse, status: number, value: unknown, extra?: Record<string, string>) =>
   send(res, status, "application/json; charset=utf-8", JSON.stringify(value), extra);
 
+const NODE_NAME = /^[\w.-]{1,64}$/;
+const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w.@!-]+:$/;
+
+/** Everything BossMox can change on Proxmox is listed here. There is no general pass-through. */
+const ACTIONS: Record<string, (name: string, who: Identity) => Promise<string>> = {
+  "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
+};
+
+async function runAction(req: http.IncomingMessage, res: http.ServerResponse, action: string) {
+  const session = await sessions.get(cookieId(req));
+  if (!session) return json(res, 401, { error: "Sign in to continue." });
+  const run = ACTIONS[action];
+  if (!run) return json(res, 404, { error: "BossMox doesn't have that action." });
+  const name = text((await readJson(req)).server, 64);
+  if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+  try {
+    return json(res, 200, { task: await run(name, session) });
+  } catch (err) {
+    if (err instanceof PveError && err.status === 403) {
+      return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
+    }
+    throw err;
+  }
+}
+
 const stripPort = (host: string) => host.replace(/:\d+$/, "").toLowerCase();
 const hostAllowed = (header = "") => config.allowedHosts.has(stripPort(header));
 
@@ -180,7 +207,8 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
     sessions.end(cookieId(req));
     return json(res, 200, { ok: true }, setCookie("", 0));
   }
-  return json(res, 405, { error: "BossMox is read-only for now." });
+  if (route.startsWith("/api/action/")) return runAction(req, res, route.slice("/api/action/".length));
+  return json(res, 404, { error: "Not found." });
 }
 
 const handler: http.RequestListener = async (req, res) => {
@@ -190,19 +218,31 @@ const handler: http.RequestListener = async (req, res) => {
     }
     const route = new URL(req.url ?? "/", "http://local").pathname;
     if (req.method === "POST") return await handlePost(req, res, route);
-    if (req.method !== "GET") return json(res, 405, { error: "BossMox is read-only for now." });
+    if (req.method !== "GET") return json(res, 405, { error: "That method isn't allowed." });
     if (route === "/healthz") return json(res, 200, { ok: true });
     if (route === "/api/login-info") {
       return json(res, 200, { realms: await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains") });
     }
-    if (route === "/api/overview" || route === "/api/server") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
       try {
+        const params = new URL(req.url ?? "/", "http://local").searchParams;
+        if (route === "/api/task") {
+          const name = params.get("server") ?? "";
+          const upid = params.get("task") ?? "";
+          if (!NODE_NAME.test(name) || !UPID.test(upid)) return json(res, 400, { error: "That task isn't valid." });
+          const base = `/nodes/${encodeURIComponent(name)}/tasks/${encodeURIComponent(upid)}`;
+          const [status, log] = await Promise.all([
+            pve.get<RawTaskStatus>(`${base}/status`, session.ticket),
+            pve.get<{ n?: number; t?: string }[]>(`${base}/log?limit=1000`, session.ticket),
+          ]);
+          return json(res, 200, taskView(status, log));
+        }
         if (route === "/api/server") {
-          const name = new URL(req.url ?? "/", "http://local").searchParams.get("name") ?? "";
-          if (!/^[\w.-]{1,64}$/.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          const name = params.get("name") ?? "";
+          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
           const detail = await loadServerDetail(name, session.ticket);
           const known = detail.summary || detail.updates || detail.services || detail.tasks;
           return known ? json(res, 200, detail) : json(res, 404, { error: "BossMox can't find that server, or your account can't see it." });

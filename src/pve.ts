@@ -6,21 +6,27 @@ import type { Config } from "./config.js";
 export interface LoginResult {
   username: string;
   ticket: string;
+  csrf: string;
   needsCode: boolean;
+}
+export interface Identity {
+  ticket: string;
+  csrf: string;
 }
 
 /**
- * Proxmox client. Reads use the signed-in person's own ticket, so Proxmox applies their permissions.
- * The only POST it can send is the sign-in request, so this version can't change anything.
+ * Proxmox client. Everything runs with the signed-in person's own ticket, so Proxmox applies their
+ * permissions. Writes go through named actions in server.ts, never a general pass-through.
  */
 export class PveClient {
   constructor(private readonly config: Pick<Config, "pveUrl" | "pveCa" | "pveTlsName">) {}
 
-  private request<T>(method: "GET" | "POST", path: string, ticket?: string, body?: string): Promise<T> {
+  private request<T>(method: "GET" | "POST", path: string, ticket?: string, body?: string, csrf?: string): Promise<T> {
     const url = new URL("/api2/json" + path, this.config.pveUrl);
     const secure = url.protocol === "https:";
     const headers: Record<string, string> = {};
     if (ticket) headers.Cookie = `PVEAuthCookie=${encodeURIComponent(ticket)}`;
+    if (csrf) headers.CSRFPreventionToken = csrf;
     if (body !== undefined) {
       headers["Content-Type"] = "application/x-www-form-urlencoded";
       headers["Content-Length"] = String(Buffer.byteLength(body));
@@ -64,8 +70,12 @@ export class PveClient {
   async login(username: string, password: string, tfaChallenge?: string): Promise<LoginResult> {
     const form = new URLSearchParams({ username, password });
     if (tfaChallenge) form.set("tfa-challenge", tfaChallenge);
-    const data = await this.request<{ username: string; ticket: string; NeedTFA?: number }>("POST", "/access/ticket", undefined, form.toString());
-    return { username: data.username, ticket: data.ticket, needsCode: data.NeedTFA === 1 };
+    const data = await this.request<{ username: string; ticket: string; CSRFPreventionToken?: string; NeedTFA?: number }>("POST", "/access/ticket", undefined, form.toString());
+    return { username: data.username, ticket: data.ticket, csrf: data.CSRFPreventionToken ?? "", needsCode: data.NeedTFA === 1 };
+  }
+
+  post<T>(path: string, who: Identity, form: Record<string, string> = {}): Promise<T> {
+    return this.request<T>("POST", path, who.ticket, new URLSearchParams(form).toString(), who.csrf);
   }
 }
 

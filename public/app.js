@@ -257,7 +257,8 @@ const SERVER_TAB = {
     const group = (title, items, open) => items.length ? `<details class="upgroup" ${open ? "open" : ""}><summary>${title} (${items.length})</summary>
       ${items.map((u) => `<div class="snap"><div>${esc(u.name)}<small>${esc(u.title)}</small></div><code class="ver">${esc(u.from)} to ${esc(u.to)}</code></div>`).join("")}</details>` : "";
     return `
-    ${d.channel ? `<p class="meta">Update channel: ${esc(d.channel.name)}. ${esc(d.channel.note)}</p>` : ""}
+    <div class="head"><div>${d.channel ? `<p class="meta" style="margin-top:0">Update channel: ${esc(d.channel.name)}. ${esc(d.channel.note)}</p>` : ""}</div>
+      <button class="btn" data-check="${esc(d.name)}">Check for updates</button></div>
     ${d.updates.total ? `<p style="margin-top:10px"><b>${d.updates.total} waiting.</b> ${d.updates.rebootNeeded ? "The new kernel means a restart afterward." : "No restart should be needed."}</p>
       ${group("Kernel", d.updates.kernel, true)}${group("Proxmox", d.updates.proxmox, true)}${group("Everything else", d.updates.other, false)}
       <p class="meta">Installing from BossMox comes next. This list is from the server's last check for updates.</p>` : `<p class="empty">This server is up to date as of its last check for updates.</p>`}`;
@@ -298,10 +299,61 @@ function storeView() {
   if (!S.data) return `<p class="empty">Waiting for Proxmox.</p>`;
   return `<div class="store">${S.data.storage.map((s) => `<div><b>${esc(s.name)}</b><small>${s.freeGb} GB free of ${s.totalGb} GB, on ${esc(s.node)}${s.online ? "" : ", not available"}</small><div class="meter"><i style="width:${s.usedPct}%"></i></div></div>`).join("")}</div>`;
 }
+/* Confirmations and following a task */
+const dialog = (html) => {
+  $("#dialog").innerHTML = html;
+  $("#scrim").classList.add("on");
+  const last = [...document.querySelectorAll("#dialog button")].pop();
+  last?.focus();
+};
+const closeDialog = () => {
+  if (S.taskRunning) return;
+  $("#scrim").classList.remove("on");
+};
+function confirmAction(title, line, label, run) {
+  S.pending = run;
+  dialog(`<h3>${esc(title)}</h3><p>${esc(line)}</p><div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-dlg="ok">${esc(label)}</button></div>`);
+}
+function drawTask(title, view, error) {
+  const running = !error && !view?.finished;
+  const words = error || (running ? "Working on it." : { ok: "Finished.", warning: "Finished with warnings.", failed: `It failed. ${view.message}` }[view.result]);
+  dialog(`<h3>${esc(title)}</h3><p class="${error || view?.result === "failed" ? "loginerr" : ""}">${esc(words)}</p>
+    ${view?.lines?.length ? `<pre class="tasklog">${esc(view.lines.join("\n"))}</pre>` : ""}
+    <div class="row-end"><button class="btn" data-dlg="cancel" ${running ? "disabled" : ""}>Close</button></div>`);
+  const log = $("#dialog .tasklog");
+  if (log) log.scrollTop = log.scrollHeight;
+}
+async function runAction(action, server, title) {
+  S.taskRunning = true;
+  drawTask(title);
+  try {
+    const res = await post(`api/action/${action}`, { server });
+    const body = await res.json();
+    if (res.status === 401) {
+      S.taskRunning = false;
+      closeDialog();
+      return showLogin("You've been signed out. Sign in again to continue.");
+    }
+    if (!res.ok) throw new Error(body.error);
+    const url = `api/task?server=${encodeURIComponent(server)}&task=${encodeURIComponent(body.task)}`;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const view = await signal(url);
+      drawTask(title, view);
+      if (view.finished) break;
+    }
+    S.taskRunning = false;
+    loadServer();
+  } catch (err) {
+    S.taskRunning = false;
+    drawTask(title, null, err.message || "BossMox lost contact with Proxmox.");
+  }
+}
+
 const soon = (t, line) => () => `<div class="soon"><h2>${t}</h2><p>${line}</p></div>`;
 const RENDER = {
   vms: vmsShell, monitor: monView, storage: storeView,
-  create: soon("Create a VM", "This version is read only. Creating VMs comes after the test server is set up."),
+  create: soon("Create a VM", "Not built yet."),
   network: soon("Network", "Not built yet."),
   backups: soon("Backups", "Not built yet."),
 };
@@ -324,6 +376,17 @@ document.addEventListener("click", (e) => {
   if (d.server) {
     openWin("monitor");
     return pickServer(d.server);
+  }
+  if (d.dlg) {
+    const run = d.dlg === "ok" ? S.pending : null;
+    S.pending = null;
+    closeDialog();
+    if (run) run();
+    return;
+  }
+  if (d.check) {
+    const server = d.check;
+    return confirmAction(`Check ${server} for updates?`, "This only looks for new updates. It doesn't install anything.", `Check ${server}`, () => runAction("check-updates", server, `Checking ${server} for updates`));
   }
   if (d.servertab) {
     S.serverTab = d.servertab;

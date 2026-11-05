@@ -13,6 +13,7 @@ export interface LoginClient {
 export interface Session {
   username: string;
   ticket: string;
+  csrf: string;
   renewedAt: number;
   expiresAt: number;
 }
@@ -55,7 +56,7 @@ export class Sessions {
   private start(result: LoginResult): LoginOutcome {
     const id = randomBytes(32).toString("base64url");
     const t = this.now();
-    this.sessions.set(id, { username: result.username, ticket: result.ticket, renewedAt: t, expiresAt: t + SESSION_MS });
+    this.sessions.set(id, { username: result.username, ticket: result.ticket, csrf: result.csrf, renewedAt: t, expiresAt: t + SESSION_MS });
     return { kind: "ok", id, username: result.username };
   }
   private async attempt(address: string, run: () => Promise<LoginResult>, wrong: string): Promise<LoginResult> {
@@ -105,7 +106,9 @@ export class Sessions {
     if (t - s.renewedAt >= RENEW_MS) {
       s.renewedAt = t; // Stops every poll in this window from renewing at once.
       try {
-        s.ticket = (await this.client.login(s.username, s.ticket)).ticket;
+        const renewed = await this.client.login(s.username, s.ticket);
+        s.ticket = renewed.ticket;
+        s.csrf = renewed.csrf;
       } catch (err) {
         if (err instanceof PveError && err.status === 401) {
           this.sessions.delete(id);

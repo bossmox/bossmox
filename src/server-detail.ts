@@ -129,6 +129,21 @@ export function taskResult(t: RawTask): "running" | "ok" | "warning" | "failed" 
   return "failed";
 }
 
+export interface RawTaskStatus {
+  status?: string;
+  exitstatus?: string;
+}
+export function taskView(status: RawTaskStatus, log: { n?: number; t?: string }[]) {
+  const finished = status.status === "stopped";
+  const exit = status.exitstatus ?? "";
+  return {
+    finished,
+    result: !finished ? "running" : exit === "OK" ? "ok" : exit.startsWith("WARNINGS") ? "warning" : "failed",
+    message: finished && exit !== "OK" ? exit : "",
+    lines: log.map((l) => l.t ?? "").filter((l) => l !== "no content").slice(-200),
+  };
+}
+
 export function buildServerDetail(
   name: string,
   status: Section<RawStatus>,

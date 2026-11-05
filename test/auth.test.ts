@@ -4,7 +4,7 @@ import { AuthError, Sessions, type LoginClient } from "../src/auth.js";
 import { PveError, type LoginResult } from "../src/pve.js";
 
 const HOUR = 60 * 60 * 1000;
-const ok = (ticket = "T1"): LoginResult => ({ username: "a@pve", ticket, needsCode: false });
+const ok = (ticket = "T1"): LoginResult => ({ username: "a@pve", ticket, csrf: `C-${ticket}`, needsCode: false });
 const client = (fn: LoginClient["login"]): LoginClient => ({ login: fn });
 const wrong = async (): Promise<LoginResult> => {
   throw new PveError(401, "no");
@@ -35,7 +35,7 @@ test("2FA needs the code, sends the challenge, and works once", async () => {
   const calls: [string, string | undefined][] = [];
   const s = new Sessions(client(async (_u, pw, ch) => {
     calls.push([pw, ch]);
-    return ch ? ok("FULL") : { username: "a@pve", ticket: "CHALLENGE", needsCode: true };
+    return ch ? ok("FULL") : { username: "a@pve", ticket: "CHALLENGE", csrf: "", needsCode: true };
   }));
   const first = await s.login("a@pve", "pw", "1.1.1.1");
   assert.equal(first.kind, "code");
@@ -55,7 +55,9 @@ test("tickets renew after an hour and sessions end after 12", async () => {
   }), () => t);
   const out = await s.login("a@pve", "pw", "1.1.1.1");
   t = HOUR + 1;
-  assert.equal((await s.get(out.id))?.ticket, "T2");
+  const renewed = await s.get(out.id);
+  assert.equal(renewed?.ticket, "T2");
+  assert.equal(renewed?.csrf, "C-T2", "the CSRF token renews with the ticket");
   assert.equal(seen[1], "T1", "the old ticket renews it, the password is not kept");
   t = 12 * HOUR + 1;
   assert.equal(await s.get(out.id), undefined);

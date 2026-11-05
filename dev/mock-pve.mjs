@@ -36,7 +36,7 @@ http.createServer((req, res) => {
       const f = new URLSearchParams(body);
       const user = f.get("username") ?? "";
       if (f.get("tfa-challenge")) {
-        if (f.get("password") === "totp:123456") reply(res, { username: user, ticket: "MOCKTICKET" });
+        if (f.get("password") === "totp:123456") reply(res, { username: user, ticket: "MOCKTICKET", CSRFPreventionToken: "MOCKCSRF" });
         else reply(res, null, 401);
         return;
       }
@@ -45,12 +45,21 @@ http.createServer((req, res) => {
         return;
       }
       const good = user.startsWith("demo@") && ["demo", "MOCKTICKET"].includes(f.get("password"));
-      if (good) reply(res, { username: user, ticket: "MOCKTICKET" });
+      if (good) reply(res, { username: user, ticket: "MOCKTICKET", CSRFPreventionToken: "MOCKCSRF" });
       else reply(res, null, 401);
     });
     return;
   }
   if (!req.headers.cookie?.includes("PVEAuthCookie=MOCKTICKET")) return reply(res, null, 401);
+  if (req.method === "POST" && p.endsWith("/apt/update")) {
+    if (!req.headers.csrfpreventiontoken) return reply(res, null, 403);
+    req.resume();
+    return reply(res, "UPID:server1:0000AAAA:0000BBBB:0000CCCC:aptupdate::demo@pve:");
+  }
+  if (p.includes("/tasks/UPID")) {
+    if (p.includes("/log")) return reply(res, [{ n: 1, t: "Reading package lists" }, { n: 2, t: "TASK OK" }]);
+    return reply(res, { status: "stopped", exitstatus: "OK" });
+  }
   const n = p.match(/^\/nodes\/([\w-]+)\/(status|apt\/update|apt\/repositories|subscription|services|tasks)/);
   if (n) {
     const replies = {
