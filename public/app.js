@@ -12,13 +12,13 @@ const GLYPHS = {
 const APPS = {
   vms: { title: "Virtual Machines", color: "#0E7EA6", w: 920, h: 610 },
   create: { title: "Create a VM", color: "#178A5F", w: 460, h: 250 },
-  monitor: { title: "Servers", color: "#7A5AC8", w: 720, h: 460 },
+  monitor: { title: "Servers", color: "#7A5AC8", w: 900, h: 620 },
   storage: { title: "Storage", color: "#B9680A", w: 520, h: 420 },
   network: { title: "Network", color: "#2F7A7E", w: 460, h: 250 },
   backups: { title: "Backups", color: "#C43838", w: 460, h: 250 },
 };
 
-const S = { data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false };
+const S = { data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", ticks: 0 };
 const wins = {};
 
 /* Desktop */
@@ -44,7 +44,7 @@ function renderHealth() {
     <p class="sub">${up} of ${nodes.length} ${nodes.length === 1 ? "server" : "servers"} online. ${run} of ${vms.length} ${vms.length === 1 ? "VM" : "VMs"} running, and ${freeText} free.</p>
     <div class="rack">${nodes.map((n) => {
       const on = vms.filter((v) => v.node === n.name);
-      return `<button class="ru" data-open="monitor"><span>${esc(n.name)}</span>
+      return `<button class="ru" data-server="${esc(n.name)}"><span>${esc(n.name)}</span>
         <span class="leds">${on.map((v) => `<i class="${!v.running ? "off" : v.issues.length ? "w" : ""}"></i>`).join("")}</span>
         <small>${n.online ? `${n.cpuPct}% busy` : "Offline"}</small></button>`;
     }).join("")}</div>
@@ -109,6 +109,7 @@ function render(app) {
     renderList();
     renderDetail();
   }
+  if (app === "monitor") renderServers();
 }
 
 /* Virtual Machines */
@@ -176,12 +177,122 @@ const TAB = {
 
 /* Servers and Storage */
 function monView() {
-  if (!S.data) return `<p class="empty">Waiting for Proxmox.</p>`;
-  return `<div class="mon">${S.data.nodes.map((n) => {
-    const on = S.data.vms.filter((v) => v.node === n.name);
-    return `<article class="server"><header><span>${esc(n.name)}</span><small>${n.online ? `${n.cpuPct}% busy, ${n.memUsedGb} of ${n.memTotalGb} GB memory, ${on.filter((v) => v.running).length} running` : "Offline"}</small></header>
-    <div class="bays">${on.map((v) => `<button class="bay ${v.running ? "" : "stopped"} ${v.issues.length ? "warn" : ""}" data-vm="${v.id}"><i></i>${esc(v.name)}</button>`).join("")}<span class="spare"></span></div></article>`;
-  }).join("")}</div>`;
+  return `<div class="vms"><aside><div id="srvlist"></div></aside><div id="srvdetail"></div></div>`;
+}
+const signal = (url) => fetch(url).then(async (res) => {
+  const body = await res.json();
+  if (res.status === 401) {
+    showLogin("You've been signed out. Sign in again to continue.");
+    throw new Error("signed out");
+  }
+  if (!res.ok) throw new Error(body.error);
+  return body;
+});
+async function loadServer() {
+  const name = S.server;
+  if (!name) return;
+  try {
+    const body = await signal(`api/server?name=${encodeURIComponent(name)}`);
+    if (name !== S.server) return;
+    const changed = JSON.stringify(body) !== JSON.stringify(S.detail);
+    S.detail = body;
+    S.detailError = "";
+    if (changed) renderServerDetail();
+  } catch (err) {
+    S.detailError = err.message || "BossMox couldn't get this server's details.";
+    if (!S.detail) renderServerDetail();
+  }
+}
+function pickServer(name) {
+  if (name !== S.server) {
+    S.server = name;
+    S.detail = null;
+    S.detailError = "";
+  }
+  S.serverTab = "overview";
+  renderServers();
+  renderServerDetail();
+  loadServer();
+}
+function renderServers() {
+  const list = $("#srvlist");
+  if (!list) return;
+  if (!S.data) {
+    list.innerHTML = `<p class="empty">Waiting for Proxmox.</p>`;
+    return;
+  }
+  if (!S.server && S.data.nodes[0]) {
+    pickServer(S.data.nodes[0].name);
+    return;
+  }
+  list.innerHTML = S.data.nodes.map((n) => `<button class="row ${n.name === S.server ? "on" : ""}" data-server="${esc(n.name)}">
+    <span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? `${n.cpuPct}% busy, ${n.memPct}% memory` : "Offline"}</small></button>`).join("");
+  if (S.serverTab === "overview") renderServerDetail();
+}
+const noAccess = (what, perm) => `<p class="empty">Your Proxmox account can't see ${what}. It needs ${perm} on this server.</p>`;
+const SERVER_TAB = {
+  overview: (d, node) => {
+    const on = S.data?.vms.filter((v) => v.node === d.name) ?? [];
+    const a = d.summary;
+    return `
+    ${d.channel && !d.channel.ok ? `<div class="advice"><div><b>Updates can't download</b>${esc(d.channel.note)}</div></div>` : ""}
+    ${d.updates?.total ? `<div class="advice"><div><b>${d.updates.total} ${d.updates.total === 1 ? "update is" : "updates are"} waiting</b>${d.updates.rebootNeeded ? "This includes a new kernel, so the server will need a restart." : "No restart should be needed."}</div><button class="btn" data-servertab="updates">See updates</button></div>` : ""}
+    ${a ? `<div class="facts">
+      <div class="fact"><label>Processor</label><b>${node?.cpuPct ?? 0}% busy</b><div class="meter"><i style="width:${Math.min(node?.cpuPct ?? 0, 100)}%"></i></div></div>
+      <div class="fact"><label>Memory</label><b>${a.memUsedGb} of ${a.memTotalGb} GB</b><div class="meter"><i style="width:${a.memTotalGb ? (a.memUsedGb / a.memTotalGb) * 100 : 0}%"></i></div></div>
+      <div class="fact"><label>System disk</label><b>${a.diskUsedGb} of ${a.diskTotalGb} GB</b><div class="meter"><i style="width:${a.diskTotalGb ? (a.diskUsedGb / a.diskTotalGb) * 100 : 0}%"></i></div></div>
+    </div>
+    <dl class="plain">
+      <dt>Proxmox version</dt><dd>${esc(a.proxmoxVersion)}</dd>
+      <dt>Kernel</dt><dd>${esc(a.kernel)}</dd>
+      <dt>Running for</dt><dd>${esc(a.uptime)}</dd>
+      <dt>Processor</dt><dd>${esc(a.processor)}, ${a.cpus} threads</dd>
+      ${d.channel ? `<dt>Update channel</dt><dd>${esc(d.channel.name)}</dd>` : ""}
+    </dl>` : noAccess("this server's status", "Sys.Audit")}
+    <article class="server" style="margin-top:20px"><header><span>Running here</span><small>${on.filter((v) => v.running).length} of ${on.length}</small></header>
+      <div class="bays">${on.map((v) => `<button class="bay ${v.running ? "" : "stopped"} ${v.issues.length ? "warn" : ""}" data-vm="${v.id}"><i></i>${esc(v.name)}</button>`).join("")}<span class="spare"></span></div></article>`;
+  },
+  updates: (d) => {
+    if (!d.updates) return noAccess("waiting updates", "Sys.Modify");
+    const group = (title, items, open) => items.length ? `<details class="upgroup" ${open ? "open" : ""}><summary>${title} (${items.length})</summary>
+      ${items.map((u) => `<div class="snap"><div>${esc(u.name)}<small>${esc(u.title)}</small></div><code class="ver">${esc(u.from)} to ${esc(u.to)}</code></div>`).join("")}</details>` : "";
+    return `
+    ${d.channel ? `<p class="meta">Update channel: ${esc(d.channel.name)}. ${esc(d.channel.note)}</p>` : ""}
+    ${d.updates.total ? `<p style="margin-top:10px"><b>${d.updates.total} waiting.</b> ${d.updates.rebootNeeded ? "The new kernel means a restart afterward." : "No restart should be needed."}</p>
+      ${group("Kernel", d.updates.kernel, true)}${group("Proxmox", d.updates.proxmox, true)}${group("Everything else", d.updates.other, false)}
+      <p class="meta">Installing from BossMox comes next. This list is from the server's last check for updates.</p>` : `<p class="empty">This server is up to date as of its last check for updates.</p>`}`;
+  },
+  services: (d) => {
+    if (!d.services) return noAccess("services", "Sys.Audit");
+    const off = d.services.filter((v) => v.enabled && !v.running);
+    return `${off.length ? `<div class="advice"><div><b>${off.length} ${off.length === 1 ? "service should be running but isn't" : "services should be running but aren't"}</b>${off.map((v) => esc(v.name)).join(", ")}</div></div>` : ""}
+    ${d.services.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state"><span class="dot ${v.running ? "running" : v.enabled ? "warn" : ""}"></span>${v.running ? "Running" : v.enabled ? "Stopped" : "Off"}</span></div>`).join("")}`;
+  },
+  activity: (d) => {
+    if (!d.tasks) return noAccess("recent activity", "Sys.Audit");
+    if (!d.tasks.length) return `<p class="empty">No recent activity on this server.</p>`;
+    const words = { running: "Running", ok: "Finished", warning: "Finished with warnings", failed: "Failed" };
+    const dots = { running: "busy", ok: "running", warning: "warn", failed: "warn" };
+    return d.tasks.map((t) => `<div class="snap"><div>${esc(t.what)}${t.target ? ` on ${esc(t.target)}` : ""}<small>${esc(when(t.startedAt))}, by ${esc(t.who)}</small></div><span class="state"><span class="dot ${dots[t.result]}"></span>${words[t.result]}</span></div>`).join("");
+  },
+};
+function renderServerDetail() {
+  const box = $("#srvdetail");
+  if (!box) return;
+  if (!S.server) {
+    box.innerHTML = `<p class="empty">Pick a server to see its details.</p>`;
+    return;
+  }
+  const node = S.data?.nodes.find((n) => n.name === S.server);
+  const d = S.detail;
+  const body = d ? SERVER_TAB[S.serverTab](d, node) : S.detailError ? `<p class="empty">${esc(S.detailError)}</p>` : `<p class="empty">Loading this server's details.</p>`;
+  const top = box.scrollTop;
+  box.innerHTML = `
+    <div class="head"><div><h2>${esc(S.server)}</h2>
+      <div class="state"><span class="dot ${node?.online ? "running" : "warn"}"></span>${node?.online ? "Online" : "Offline"}${d?.summary ? `, running for ${esc(d.summary.uptime)}` : ""}</div></div></div>
+    <div class="tabs" role="tablist">${[["overview", "Overview"], ["updates", d?.updates?.total ? `Updates (${d.updates.total})` : "Updates"], ["services", "Services"], ["activity", "Activity"]].map(([k, l]) => `<button role="tab" aria-selected="${S.serverTab === k}" class="${S.serverTab === k ? "on" : ""}" data-servertab="${k}">${l}</button>`).join("")}</div>
+    <div class="tabpane">${body}</div>`;
+  box.scrollTop = top;
 }
 function storeView() {
   if (!S.data) return `<p class="empty">Waiting for Proxmox.</p>`;
@@ -209,6 +320,14 @@ document.addEventListener("click", (e) => {
   if (d.min) {
     wins[d.min].classList.add("hidden");
     return renderTasks();
+  }
+  if (d.server) {
+    openWin("monitor");
+    return pickServer(d.server);
+  }
+  if (d.servertab) {
+    S.serverTab = d.servertab;
+    return renderServerDetail();
   }
   if (d.vm) {
     S.sel = +d.vm;
@@ -279,6 +398,9 @@ async function showLogin(message) {
   polling = null;
   S.data = null;
   S.sel = null;
+  S.server = null;
+  S.detail = null;
+  S.detailError = "";
   Object.keys(wins).forEach((k) => {
     wins[k].remove();
     delete wins[k];
@@ -374,7 +496,8 @@ async function refresh() {
   renderHealth();
   renderList();
   if (S.tab !== "settings") renderDetail();
-  render("monitor");
+  renderServers();
+  if (wins.monitor && ++S.ticks % 3 === 0) loadServer();
   render("storage");
 }
 

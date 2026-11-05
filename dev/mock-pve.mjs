@@ -51,6 +51,31 @@ http.createServer((req, res) => {
     return;
   }
   if (!req.headers.cookie?.includes("PVEAuthCookie=MOCKTICKET")) return reply(res, null, 401);
+  const n = p.match(/^\/nodes\/([\w-]+)\/(status|apt\/update|apt\/repositories|subscription|services|tasks)/);
+  if (n) {
+    const replies = {
+      status: {
+        uptime: 793600, pveversion: "pve-manager/9.2.2/demo", "current-kernel": { release: "7.0.2-6-pve" },
+        cpuinfo: { model: "Intel Xeon Silver 4110", cpus: 32 }, memory: { used: 54 * G, total: 100 * G }, rootfs: { used: 12 * G, total: 96 * G },
+      },
+      "apt/update": [
+        { Package: "proxmox-kernel-7.0", Title: "Latest Proxmox kernel", OldVersion: "7.0.2-6", Version: "7.0.14-28", Origin: "Proxmox" },
+        { Package: "pve-manager", Title: "The Proxmox web interface and API", OldVersion: "9.2.2", Version: "9.2.26", Origin: "Proxmox" },
+        { Package: "curl", Title: "Command line tool for transferring data", OldVersion: "8.14.1-2", Version: "8.14.1-2+deb13u2", Origin: "Debian" },
+      ],
+      "apt/repositories": { files: [{ repositories: [{ Enabled: true, URIs: ["http://download.proxmox.com/debian/pve"], Components: ["pve-no-subscription"] }] }] },
+      subscription: { status: "notfound" },
+      services: [
+        { service: "pveproxy", desc: "PVE API Proxy Server", state: "running", "unit-state": "enabled" },
+        { service: "postfix", desc: "Postfix Mail Transport Agent", state: "dead", "unit-state": "enabled" },
+      ],
+      tasks: [
+        { upid: "a", type: "vzdump", id: "103", user: "root@pam", status: "OK", starttime: 1762380000, endtime: 1762380060 },
+        { upid: "b", type: "aptupdate", user: "root@pam", status: "unable to fetch", starttime: 1762370000, endtime: 1762370060 },
+      ],
+    };
+    return reply(res, replies[n[2]]);
+  }
   const m = p.match(/qemu\/(\d+)\/(config|snapshot)$/);
   let data;
   if (p === "/cluster/resources") data = resources;

@@ -7,6 +7,17 @@ import { AuthError, Sessions, type LoginOutcome, type Session } from "./auth.js"
 import { loadConfig } from "./config.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { PveClient, PveError } from "./pve.js";
+import {
+  buildServerDetail,
+  type RawRepositories,
+  type RawService,
+  type RawStatus,
+  type RawSubscription,
+  type RawTask,
+  type RawUpdate,
+  type Section,
+  type ServerDetail,
+} from "./server-detail.js";
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public");
 const STATIC: Record<string, [string, string]> = {
@@ -60,6 +71,28 @@ function overview(session: Session): Promise<Overview> {
   cache.set(session, { at: Date.now(), value });
   value.catch(() => cache.delete(session));
   return value;
+}
+
+async function section<T>(load: Promise<T>): Promise<Section<T>> {
+  try {
+    return { available: true, value: await load };
+  } catch (err) {
+    if (err instanceof PveError && err.status === 401) throw err;
+    return { available: false };
+  }
+}
+
+async function loadServerDetail(name: string, ticket: string): Promise<ServerDetail> {
+  const base = `/nodes/${encodeURIComponent(name)}`;
+  const [status, updates, repos, subscription, services, tasks] = await Promise.all([
+    section(pve.get<RawStatus>(`${base}/status`, ticket)),
+    section(pve.get<RawUpdate[]>(`${base}/apt/update`, ticket)),
+    section(pve.get<RawRepositories>(`${base}/apt/repositories`, ticket)),
+    section(pve.get<RawSubscription>(`${base}/subscription`, ticket)),
+    section(pve.get<RawService[]>(`${base}/services`, ticket)),
+    section(pve.get<RawTask[]>(`${base}/tasks?limit=25`, ticket)),
+  ]);
+  return buildServerDetail(name, status, updates, repos, subscription, services, tasks);
 }
 
 function send(res: http.ServerResponse, status: number, type: string, body: string | Buffer, extra: Record<string, string> = {}) {
@@ -161,11 +194,16 @@ const handler: http.RequestListener = async (req, res) => {
     if (route === "/api/login-info") {
       return json(res, 200, { realms: await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains") });
     }
-    if (route === "/api/overview") {
+    if (route === "/api/overview" || route === "/api/server") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
       try {
+        if (route === "/api/server") {
+          const name = new URL(req.url ?? "/", "http://local").searchParams.get("name") ?? "";
+          if (!/^[\w.-]{1,64}$/.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          return json(res, 200, await loadServerDetail(name, session.ticket));
+        }
         return json(res, 200, { ...(await overview(session)), username: session.username });
       } catch (err) {
         if (err instanceof PveError && err.status === 401) {

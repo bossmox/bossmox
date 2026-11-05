@@ -227,3 +227,11 @@ summary{cursor:pointer;font-weight:650}
 .signout{font-size:13px;font-weight:600;padding:4px 8px;margin-left:4px;border-radius:var(--r-s)}
 .signout:hover{background:var(--surface2)}
 @media (max-width:760px){.who{display:none}#login{position:absolute;min-height:100vh;padding-top:62px;inset:0}}
+
+/* Servers app */
+#srvlist{padding:10px 8px;overflow:auto}
+#srvdetail{overflow:auto;padding:24px 26px;min-width:0}
+.upgroup{margin-top:16px}
+.ver{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--muted);white-space:nowrap;margin-left:12px}
+.snap .state{margin-top:0;white-space:nowrap;font-size:14px}
+@media (max-width:760px){#srvdetail{padding:18px 16px}.ver{white-space:normal}}
