@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildServerDetail, friendlyUptime, groupUpdates, taskResult, updateChannel, type RawRepositories } from "../src/server-detail.js";
+import { buildServerDetail, friendlyUptime, groupUpdates, taskResult, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
 
 const repo = (uri: string, component: string, enabled = true): RawRepositories => ({
   files: [{ repositories: [{ Enabled: enabled, URIs: [uri], Components: [component] }] }],
@@ -29,9 +29,27 @@ test("the enterprise channel without a subscription is flagged", () => {
   assert.equal(updateChannel(repo(ENT, "pve-enterprise"), { status: "Active" }).ok, true);
 });
 
+test("having both channels on still counts as free without a subscription", () => {
+  const both: RawRepositories = { files: [{ repositories: [
+    { Enabled: true, URIs: [ENT], Components: ["pve-enterprise"] },
+    { Enabled: true, URIs: [PVE], Components: ["pve-no-subscription"] },
+  ] }] };
+  assert.equal(updateChannel(both, { status: "notfound" }).ok, true);
+});
+
+test("corosync being off is only normal on a standalone server", () => {
+  const no = { available: false } as const;
+  const svc: Section<RawService[]> = { available: true, value: [{ service: "corosync", state: "dead", "unit-state": "enabled" }] };
+  const standalone = buildServerDetail("n", no, no, no, no, svc, no, { available: true, value: [{ type: "node" }] });
+  const clustered = buildServerDetail("n", no, no, no, no, svc, no, { available: true, value: [{ type: "cluster" }, { type: "node" }] });
+  assert.equal(standalone.services?.[0]?.enabled, false);
+  assert.equal(clustered.services?.[0]?.enabled, true);
+});
+
 test("uptime reads naturally", () => {
   assert.equal(friendlyUptime(90061), "1 day, 1 hour");
   assert.equal(friendlyUptime(3720), "1 hour, 2 minutes");
+  assert.equal(friendlyUptime(60), "1 minute");
 });
 
 test("task results", () => {
@@ -43,7 +61,7 @@ test("task results", () => {
 
 test("a limited account gets empty sections instead of a failure", () => {
   const no = { available: false } as const;
-  const d = buildServerDetail("n1", { available: true, value: { pveversion: "pve-manager/9.2.2/abc", uptime: 60 } }, no, no, no, no, no);
+  const d = buildServerDetail("n1", { available: true, value: { pveversion: "pve-manager/9.2.2/abc", uptime: 60 } }, no, no, no, no, no, no);
   assert.equal(d.summary?.proxmoxVersion, "9.2.2");
   assert.equal(d.updates, null);
   assert.equal(d.channel, null);

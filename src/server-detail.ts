@@ -55,7 +55,8 @@ export function friendlyUptime(seconds = 0): string {
   const hours = Math.floor((seconds % 86400) / 3600);
   if (days > 0) return `${days} ${days === 1 ? "day" : "days"}, ${hours} ${hours === 1 ? "hour" : "hours"}`;
   const minutes = Math.floor((seconds % 3600) / 60);
-  return `${hours} ${hours === 1 ? "hour" : "hours"}, ${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  const minuteWords = `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  return hours > 0 ? `${hours} ${hours === 1 ? "hour" : "hours"}, ${minuteWords}` : minuteWords;
 }
 
 const KERNEL = /^(proxmox-kernel|pve-kernel|linux-image)/;
@@ -80,6 +81,9 @@ export function updateChannel(repos: RawRepositories, subscription?: RawSubscrip
     .filter((r) => r.Enabled && (r.URIs ?? []).some((u) => /proxmox\.com\/debian\/pve/.test(u)));
   const components = enabled.flatMap((r) => r.Components ?? []);
   const active = subscription?.status?.toLowerCase() === "active";
+  if (components.includes("pve-no-subscription") && !active) {
+    return { name: "Free (no subscription)", ok: true, note: "" };
+  }
   if (components.includes("pve-enterprise")) {
     return subscription && !active
       ? { name: "Enterprise", ok: false, note: "This channel needs a subscription, so updates can't download." }
@@ -133,8 +137,12 @@ export function buildServerDetail(
   subscription: Section<RawSubscription>,
   services: Section<RawService[]>,
   tasks: Section<RawTask[]>,
+  clusterStatus: Section<{ type?: string }[]>,
 ) {
   const s = status.available ? status.value : undefined;
+  // A standalone server never starts corosync, so that isn't a fault. Unknown means assume clustered.
+  const standalone = clusterStatus.available && !clusterStatus.value.some((c) => c.type === "cluster");
+  const expectedOff = (v: RawService) => standalone && (v.service ?? v.name) === "corosync";
   return {
     name,
     summary: s
@@ -155,7 +163,7 @@ export function buildServerDetail(
     services: services.available
       ? services.value
           .filter((v) => v["unit-state"] !== "not-found" && v["unit-state"] !== "masked")
-          .map((v) => ({ name: v.desc || v.name || v.service || "Unknown", running: v.state === "running", enabled: v["unit-state"] === "enabled" }))
+          .map((v) => ({ name: v.desc || v.name || v.service || "Unknown", running: v.state === "running", enabled: v["unit-state"] === "enabled" && !expectedOff(v) }))
           .sort((a, b) => a.name.localeCompare(b.name))
       : null,
     tasks: tasks.available

@@ -84,15 +84,16 @@ async function section<T>(load: Promise<T>): Promise<Section<T>> {
 
 async function loadServerDetail(name: string, ticket: string): Promise<ServerDetail> {
   const base = `/nodes/${encodeURIComponent(name)}`;
-  const [status, updates, repos, subscription, services, tasks] = await Promise.all([
+  const [status, updates, repos, subscription, services, tasks, clusterStatus] = await Promise.all([
     section(pve.get<RawStatus>(`${base}/status`, ticket)),
     section(pve.get<RawUpdate[]>(`${base}/apt/update`, ticket)),
     section(pve.get<RawRepositories>(`${base}/apt/repositories`, ticket)),
     section(pve.get<RawSubscription>(`${base}/subscription`, ticket)),
     section(pve.get<RawService[]>(`${base}/services`, ticket)),
     section(pve.get<RawTask[]>(`${base}/tasks?limit=25`, ticket)),
+    section(pve.get<{ type?: string }[]>("/cluster/status", ticket)),
   ]);
-  return buildServerDetail(name, status, updates, repos, subscription, services, tasks);
+  return buildServerDetail(name, status, updates, repos, subscription, services, tasks, clusterStatus);
 }
 
 function send(res: http.ServerResponse, status: number, type: string, body: string | Buffer, extra: Record<string, string> = {}) {
@@ -202,7 +203,9 @@ const handler: http.RequestListener = async (req, res) => {
         if (route === "/api/server") {
           const name = new URL(req.url ?? "/", "http://local").searchParams.get("name") ?? "";
           if (!/^[\w.-]{1,64}$/.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          return json(res, 200, await loadServerDetail(name, session.ticket));
+          const detail = await loadServerDetail(name, session.ticket);
+          const known = detail.summary || detail.updates || detail.services || detail.tasks;
+          return known ? json(res, 200, detail) : json(res, 404, { error: "BossMox can't find that server, or your account can't see it." });
         }
         return json(res, 200, { ...(await overview(session)), username: session.username });
       } catch (err) {
