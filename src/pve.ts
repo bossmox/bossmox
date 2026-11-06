@@ -61,7 +61,9 @@ export class PveClient {
       headers["Content-Type"] = "application/x-www-form-urlencoded";
       headers["Content-Length"] = String(Buffer.byteLength(body));
     }
-    const options: https.RequestOptions = { method, headers, timeout: 8000 };
+    // A change gets a connection of its own. On a reused one that has gone dead, nobody can tell whether Proxmox
+    // got the request, so it couldn't safely move to another node.
+    const options: https.RequestOptions = { method, headers, timeout: 8000, ...(method === "GET" ? {} : { agent: false }) };
     if (secure && this.config.pveCa) options.ca = this.config.pveCa;
     const tlsName = this.config.pveTlsName;
     if (secure && tlsName) {

@@ -57,6 +57,20 @@ test("a reset after connecting isn't marked that way", async () => {
   first.close();
 });
 
+test("a change never rides on a reused connection", async () => {
+  const ports = new Set<number>();
+  const first = await fake((req, res) => {
+    ports.add(req.socket.remotePort as number);
+    good(req, res);
+  });
+  const c = client(first.url);
+  await c.post("/x", who);
+  await c.post("/x", who);
+  await c.post("/x", who);
+  assert.equal(ports.size, 3);
+  first.close();
+});
+
 test("reads still fail over after a reset", async () => {
   const [first, second] = await Promise.all([fake(reset), fake(good)]);
   assert.equal(await client(first.url, second.url).get("/cluster/status"), "UPID:ok");

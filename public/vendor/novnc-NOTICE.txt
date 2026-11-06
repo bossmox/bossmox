@@ -3,3 +3,5 @@ novnc.js is noVNC 1.6.0 (@novnc/novnc, MPL-2.0; see novnc-LICENSE.txt), bundled 
 One change before bundling: lib/util/browser.js line 179, the optional H.264 decode check, is set to false.
 Its top-level await can't be bundled, and Proxmox's VNC doesn't use H.264.
 Source: https://github.com/novnc/noVNC/tree/v1.6.0
+Checked 2026-11-06: the npm package matched its published sha512, and rebuilding as above reproduces this file exactly.
+sha256 of novnc.js: 9d45e15b72d40cb1cbd9b09e112a96db5b183672b4cd5490774b9dbb94f12bf0

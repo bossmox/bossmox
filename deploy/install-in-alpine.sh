@@ -37,9 +37,9 @@ if [ ! -f /etc/bossmox/tls.key ]; then
   IFS=,
   for name in $PUBLIC_ADDRESS; do
     case "$name" in
-      *:*) entry="IP:${name%%:[0-9]*}" ;;
-      *[!0-9.]*) entry="DNS:$name" ;;
-      *) entry="IP:$name" ;;
+      *:*:*) entry="IP:$name" ;;
+      *[!0-9.:]*) entry="DNS:${name%%:*}" ;;
+      *) entry="IP:${name%%:*}" ;;
     esac
     SAN="${SAN:+$SAN,}$entry"
   done
