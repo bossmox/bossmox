@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildRebootPlan, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
+import { buildMovePlan, buildRebootPlan, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
 
 const repo = (uri: string, component: string, enabled = true): RawRepositories => ({
   files: [{ repositories: [{ Enabled: enabled, URIs: [uri], Components: [component] }] }],
@@ -69,6 +69,25 @@ test("a reboot plan lists running jobs and usable backup storage", () => {
   assert.deepEqual(plan.busy, ["Backup on 100"]);
   assert.deepEqual(plan.backupStorages, [{ name: "qcow", freeGb: 2 }]);
   assert.equal(buildRebootPlan({ available: false }, { available: false }).busyKnown, false);
+});
+
+test("a move plan only offers servers that can take the guest", () => {
+  const plan = buildMovePlan("qemu", "a", ["a", "b", "c"], { allowed_nodes: ["b"], not_allowed_nodes: { c: { unavailable_storages: ["fast"] } }, local_disks: [{}] }, true);
+  assert.deepEqual(plan.targets, ["b"]);
+  assert.deepEqual(plan.blocked, [{ name: "c", storages: ["fast"] }]);
+  assert.equal(plan.localDisks, true);
+  assert.equal(plan.interrupts, false);
+});
+
+test("an empty not-allowed entry doesn't block a move", () => {
+  const plan = buildMovePlan("qemu", "a", ["a", "b"], { allowed_nodes: ["b"], not_allowed_nodes: { b: {} } }, true);
+  assert.deepEqual(plan.targets, ["b"]);
+  assert.deepEqual(plan.blocked, []);
+});
+
+test("running containers are interrupted by a move", () => {
+  assert.equal(buildMovePlan("lxc", "a", ["a", "b"], {}, true).interrupts, true);
+  assert.deepEqual(buildMovePlan("lxc", "a", ["a", "b"], {}, false).targets, ["b"]);
 });
 
 test("task results", () => {

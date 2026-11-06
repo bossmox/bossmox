@@ -259,3 +259,5 @@ summary{cursor:pointer;font-weight:650}
 .restartname{margin:14px 0 0;display:block}
 .restartname span{display:block;font-weight:650;margin-bottom:5px}
 .restartname input{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface)}
+
+#mtarget{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface)}

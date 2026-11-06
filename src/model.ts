@@ -123,6 +123,7 @@ export function buildOverview(
         id,
         name,
         kind: r.type === "lxc" ? "Container" : "Virtual machine",
+        type: r.type === "lxc" ? "lxc" : "qemu",
         node: r.node ?? "",
         running: r.status === "running",
         cpuPct: Math.round((r.cpu ?? 0) * 100),

@@ -149,7 +149,8 @@ function renderDetail() {
   }
   box.innerHTML = `
     <div class="head"><div><h2>${esc(v.name)}</h2>
-      <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div></div>
+      <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
+      ${(S.data?.nodes.length ?? 0) > 1 ? `<div class="actions"><button class="btn" data-move="${v.id}">Move</button></div>` : ""}</div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["snapshots", "Snapshots"], ["settings", "Settings"]].map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${TAB[S.tab](v)}</div>`;
 }
@@ -483,6 +484,28 @@ async function watchRestart() {
   S.watching = false;
 }
 
+/* Moving a VM or container */
+async function startMove(id) {
+  const v = S.data?.vms.find((g) => g.id === id);
+  if (!v) return;
+  const fail = (m) => dialog(`<h3>Can't move ${esc(v.name)}</h3><p class="loginerr">${esc(m)}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
+  let plan;
+  try {
+    plan = await signal(`api/move-plan?server=${encodeURIComponent(v.node)}&guest=${v.id}&type=${v.type}`);
+  } catch (err) {
+    return fail(err.message);
+  }
+  if (plan.localResources) return fail("It uses hardware attached to this server, such as a USB device, so it has to stay here.");
+  if (!plan.targets.length) return fail(plan.blocked.length ? `No other server can take it. ${plan.blocked.map((b) => `${b.name} is missing ${b.storages.join(", ")}`).join(". ")}.` : "There's no other online server to move it to.");
+  S.move = { v };
+  const words = plan.interrupts
+    ? `${v.name} will shut down, move, and start again on the new server, so it will be offline for a short time.`
+    : v.running ? `${v.name} keeps running while it moves.` : `${v.name} is off, so it will just be moved.`;
+  dialog(`<h3>Move ${esc(v.name)}?</h3><p>${esc(words)} It's on ${esc(v.node)} now.${plan.localDisks ? " Its disks are copied too, which can take a while." : ""}</p>
+    <label class="field restartname"><span>Move to</span><select id="mtarget">${plan.targets.map((n) => `<option>${esc(n)}</option>`).join("")}</select></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-movego="1">Move ${esc(v.name)}</button></div>`);
+}
+
 function closeTerminal() {
   term?.socket?.close();
   term?.xterm?.dispose();
@@ -597,6 +620,13 @@ document.addEventListener("click", (e) => {
     return;
   }
   if (d.restartserver) return startRestart(d.restartserver);
+  if (d.move) return startMove(+d.move);
+  if (d.movego) {
+    const { v } = S.move;
+    const target = $("#mtarget").value;
+    S.move = null;
+    return runAction("move-guest", v.node, `Moving ${v.name} to ${target}`, { guest: String(v.id), type: v.type, target, confirm: String(v.id) }, () => refresh());
+  }
   if (d.restart) {
     t.disabled = true;
     return doRestart(d.restart);

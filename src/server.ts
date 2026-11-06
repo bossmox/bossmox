@@ -9,10 +9,12 @@ import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import {
+  buildMovePlan,
   buildRebootPlan,
   buildServerDetail,
   taskView,
   type RawBackupStorage,
+  type RawMovePrecondition,
   type RawRepositories,
   type RawService,
   type RawStatus,
@@ -122,6 +124,17 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     // The browser sends the name the person typed, so a stale or scripted click can't restart the wrong server.
     if (body.confirm !== name) throw new AuthError(400, "The typed name doesn't match the server.");
     return pve.post<null>(`/nodes/${encodeURIComponent(name)}/status`, who, { command: "reboot" });
+  },
+  "move-guest": (name, who, body) => {
+    const id = text(body.guest, 12);
+    const target = text(body.target, 64);
+    const type = body.type;
+    if (!/^\d+$/.test(id) || !NODE_NAME.test(target) || (type !== "qemu" && type !== "lxc")) throw new AuthError(400, "That move request isn't valid.");
+    if (body.confirm !== id) throw new AuthError(400, "The move wasn't confirmed.");
+    const form: Record<string, string> = type === "qemu"
+      ? { target, online: "1", "with-local-disks": "1" }
+      : { target, restart: "1" };
+    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${type}/${id}/migrate`, who, form);
   },
   "back-up-guests": (name, who, body) => {
     const vmid = text(body.guests, 256);
@@ -259,7 +272,7 @@ const handler: http.RequestListener = async (req, res) => {
     if (route === "/api/login-info") {
       return json(res, 200, { realms: await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains") });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -275,6 +288,19 @@ const handler: http.RequestListener = async (req, res) => {
             pve.get<{ n?: number; t?: string }[]>(`${base}/log?limit=1000`, session.ticket),
           ]);
           return json(res, 200, taskView(status, log));
+        }
+        if (route === "/api/move-plan") {
+          const name = params.get("server") ?? "";
+          const id = params.get("guest") ?? "";
+          const type = params.get("type");
+          if (!NODE_NAME.test(name) || !/^\d+$/.test(id) || (type !== "qemu" && type !== "lxc")) return json(res, 400, { error: "That move request isn't valid." });
+          const data = await overview(session);
+          const nodes = data.nodes.filter((n) => n.online).map((n) => n.name);
+          const raw = type === "qemu"
+            ? await pve.get<RawMovePrecondition>(`/nodes/${encodeURIComponent(name)}/qemu/${id}/migrate`, session.ticket)
+            : {};
+          const running = data.vms.find((v) => v.id === Number(id))?.running ?? false;
+          return json(res, 200, buildMovePlan(type, name, nodes, raw, running));
         }
         if (route === "/api/reboot-plan") {
           const name = params.get("server") ?? "";

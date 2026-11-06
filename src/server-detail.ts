@@ -161,6 +161,31 @@ export function buildRebootPlan(active: Section<RawTask[]>, storages: Section<Ra
   };
 }
 
+export interface RawMovePrecondition {
+  allowed_nodes?: string[];
+  not_allowed_nodes?: Record<string, { unavailable_storages?: string[] }>;
+  local_disks?: unknown[];
+  local_resources?: unknown[];
+  running?: number | boolean;
+}
+/** What a person needs to see before moving a VM. Containers restart to move; VMs move live. */
+export function buildMovePlan(type: "qemu" | "lxc", from: string, nodes: string[], raw: RawMovePrecondition, running: boolean) {
+  const others = nodes.filter((n) => n !== from);
+  // Proxmox can list a usable server here with an empty entry, so only a stated reason counts.
+  const blocked = Object.fromEntries(
+    Object.entries(raw.not_allowed_nodes ?? {}).filter(([, b]) => Object.keys(b).length > 0),
+  );
+  const targets = (raw.allowed_nodes ?? others).filter((n) => n !== from && !blocked[n]);
+  const local = (raw.local_resources ?? []).length > 0;
+  return {
+    targets,
+    blocked: Object.entries(blocked).map(([name, b]) => ({ name, storages: b.unavailable_storages ?? [] })),
+    localResources: local,
+    localDisks: (raw.local_disks ?? []).length > 0,
+    interrupts: running && type === "lxc",
+  };
+}
+
 export function buildServerDetail(
   name: string,
   status: Section<RawStatus>,
