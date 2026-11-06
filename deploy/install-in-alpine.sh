@@ -130,6 +130,8 @@ ADDR=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -
 } >> "$ISSUE"
 EOF
 chmod 755 /usr/local/sbin/bossmox-setup-code
+# Setup restarts the service without passing through here, so this clears the console message afterward.
+ln -sf /usr/local/sbin/bossmox-setup-code /etc/periodic/15min/bossmox-setup-code
 cat > /usr/local/sbin/bossmox-reset <<'EOF'
 #!/bin/sh
 # Starts setup again with a new code. Only someone with console access to this VM can run this.

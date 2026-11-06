@@ -263,6 +263,7 @@ export class Wizard {
     this.password = "";
     this.ticket = "";
     this.csrf = "";
-    if (existsSync(this.hashFile)) rmSync(this.hashFile);
+    rmSync(this.hashFile, { force: true });
+    rmSync(this.hashFile.replace(/\.hash$/, ".code"), { force: true });
   }
 }
