@@ -1274,8 +1274,9 @@ function showTerminal(server, id, title, help, guest = null) {
       recent = (recent + decoder.decode(bytes)).slice(-200);
       if (/(^|\n)starting shell\r?\n/.test(recent) && term) {
         term.done = true;
-        // Proxmox leaves a root shell open after the updater, and nobody asked for one. Ctrl+D ends it.
-        socket.send("0:1:\u0004");
+        // Proxmox leaves a root shell open after the updater, and nobody asked for one. Ctrl+D ends it,
+        // once bash has started: anything sent before then can be thrown away.
+        setTimeout(() => socket.readyState === 1 && socket.send("0:1:u0004"), 2500);
         $(".termhelp").textContent = savedReboot()?.rolling && savedReboot().restart ? `The updater has finished on ${server}. Check the output, then close this window and BossMox restarts ${server}.` : `The updater has finished on ${server}. Check the output, then close this window.`;
       }
     };
