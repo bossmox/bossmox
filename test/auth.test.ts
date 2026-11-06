@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { Terminals } from "../src/terminal.js";
 import { AuthError, Sessions, type LoginClient } from "../src/auth.js";
 import { PveError, type LoginResult } from "../src/pve.js";
 
@@ -84,4 +85,41 @@ test("signing out ends the session", async () => {
   const out = await s.login("a@pve", "pw", "1.1.1.1");
   s.end(out.id);
   assert.equal(await s.get(out.id), undefined);
+});
+
+test("consoles close when a session ends, whichever way it ended", async () => {
+  const ended: string[] = [];
+  const signIn = async (sessions: Sessions) => {
+    const out = await sessions.login("root@pam", "pw", "1.1.1.1");
+    assert.notEqual(out.kind, "code");
+    return (out as { id: string }).id;
+  };
+  let clock = 1000;
+  const client = { login: async () => ({ username: "root@pam", ticket: "t", csrf: "c", needsCode: false }) };
+  const sessions = new Sessions(client, () => clock);
+  sessions.onEnd = (s) => ended.push(s.username);
+  sessions.end(await signIn(sessions));
+  assert.equal(ended.length, 1, "signing out");
+  const second = await signIn(sessions);
+  clock += 13 * 60 * 60 * 1000;
+  assert.equal(await sessions.get(second), undefined);
+  assert.equal(ended.length, 2, "running out of time");
+  sessions.end("no such session");
+  assert.equal(ended.length, 2, "nothing to end");
+});
+
+test("a session's open consoles and unclaimed links all go when it ends", () => {
+  const terminals = new Terminals({ pveUrl: new URL("https://x"), pveCa: undefined, pveTlsName: undefined } as never);
+  const mine = { username: "a" } as never;
+  const theirs = { username: "b" } as never;
+  const closed: string[] = [];
+  terminals.track(mine, () => closed.push("mine 1"));
+  const gone = terminals.track(mine, () => closed.push("already closed"));
+  terminals.track(mine, () => closed.push("mine 2"));
+  terminals.track(theirs, () => closed.push("theirs"));
+  gone();
+  const link = terminals.prepare("node", mine, { port: 1, ticket: "t", user: "u", upid: "x" });
+  terminals.closeSession(mine);
+  assert.deepEqual(closed, ["mine 1", "mine 2"]);
+  assert.equal(terminals.claim(link, mine), undefined, "a link made before sign-out stops working");
 });

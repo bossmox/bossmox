@@ -36,7 +36,16 @@ export class Sessions {
   private readonly challenges = new Map<string, Challenge>();
   private readonly fails = new Map<string, { count: number; first: number }>();
 
+  /** Runs whenever a session ends, however it ended, so nothing keeps working on its authority. */
+  onEnd: (session: Session) => void = () => {};
+
   constructor(private readonly client: LoginClient, private readonly now: () => number = Date.now) {}
+
+  private drop(id: string) {
+    const s = this.sessions.get(id);
+    this.sessions.delete(id);
+    if (s) this.onEnd(s);
+  }
 
   private checkLimit(address: string) {
     const f = this.fails.get(address);
@@ -50,7 +59,7 @@ export class Sessions {
   }
   private sweep() {
     const t = this.now();
-    for (const [k, s] of this.sessions) if (s.expiresAt <= t) this.sessions.delete(k);
+    for (const [k, s] of this.sessions) if (s.expiresAt <= t) this.drop(k);
     for (const [k, c] of this.challenges) if (c.expiresAt <= t) this.challenges.delete(k);
   }
   private start(result: LoginResult): LoginOutcome {
@@ -100,7 +109,7 @@ export class Sessions {
     if (!s) return undefined;
     const t = this.now();
     if (s.expiresAt <= t) {
-      this.sessions.delete(id);
+      this.drop(id);
       return undefined;
     }
     if (t - s.renewedAt >= RENEW_MS) {
@@ -111,7 +120,7 @@ export class Sessions {
         s.csrf = renewed.csrf;
       } catch (err) {
         if (err instanceof PveError && err.status === 401) {
-          this.sessions.delete(id);
+          this.drop(id);
           return undefined;
         }
         s.renewedAt = t - RENEW_MS; // Proxmox is unreachable, so try again next time.
@@ -121,6 +130,6 @@ export class Sessions {
   }
 
   end(id: string | undefined) {
-    if (id) this.sessions.delete(id);
+    if (id) this.drop(id);
   }
 }

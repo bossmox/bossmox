@@ -63,6 +63,7 @@ const terminals = new Terminals({
   pveCa: config.pveCa,
   pveTlsName: config.pveTlsName,
 } as ConstructorParameters<typeof Terminals>[0]);
+sessions.onEnd = (session) => terminals.closeSession(session);
 const secureCookie = Boolean(config.tls) || config.behindProxy;
 const cache = new WeakMap<Session, { at: number; value: Promise<Overview> }>();
 

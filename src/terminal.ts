@@ -27,6 +27,7 @@ interface Pending extends TermProxy {
 /** Connects the browser's terminal to Proxmox. The browser never sees either Proxmox ticket. */
 export class Terminals {
   private readonly pending = new Map<string, Pending>();
+  private readonly live = new Map<Session, Set<() => void>>();
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
   constructor(private readonly config: Pick<Config, "pveCa" | "pveTlsName"> & { readonly pveUrl: URL }) {}
@@ -39,6 +40,24 @@ export class Terminals {
     const path = target.path ?? `/nodes/${encodeURIComponent(server)}`;
     this.pending.set(id, { ...proxy, server, session, expiresAt: now + TTL_MS, path, raw: target.raw === true });
     return id;
+  }
+
+  /** Registers an open console under its session, and returns the call that removes it. */
+  track(session: Session, close: () => void): () => void {
+    const open = this.live.get(session) ?? new Set();
+    open.add(close);
+    this.live.set(session, open);
+    return () => {
+      open.delete(close);
+      if (open.size === 0 && this.live.get(session) === open) this.live.delete(session);
+    };
+  }
+
+  /** Signing out has to cut every console at once: they're root shells, and otherwise they'd outlive the session. */
+  closeSession(session: Session) {
+    for (const [k, p] of this.pending) if (p.session === session) this.pending.delete(k);
+    for (const close of [...(this.live.get(session) ?? [])]) close();
+    this.live.delete(session);
   }
 
   claim(id: string, session: Session): Pending | undefined {
@@ -75,9 +94,11 @@ export class Terminals {
     let idle: NodeJS.Timeout;
     const closeBoth = () => {
       clearTimeout(idle);
+      untrack();
       browser.close();
       upstream.close();
     };
+    const untrack = this.track(term.session, closeBoth);
     const touch = () => {
       clearTimeout(idle);
       idle = setTimeout(closeBoth, IDLE_MS);
