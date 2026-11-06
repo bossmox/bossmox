@@ -9,6 +9,7 @@ import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
 import { containerForm, CreateError, installerLabel, vmForm, type CreateInput } from "./create.js";
+import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import {
   buildMovePlan,
@@ -162,6 +163,16 @@ async function loadRestorePlan(name: string, type: "qemu" | "lxc", ticket: strin
     pve.get<string | number>("/cluster/nextid", ticket),
   ]);
   return { nextId: Number(nextId), storages: storages.filter(usable).map((s) => s.storage) };
+}
+
+async function loadNetwork(name: string, ticket: string) {
+  const base = `/nodes/${encodeURIComponent(name)}`;
+  const [data, interfaces, dns] = await Promise.all([
+    loadOverview(ticket),
+    pve.get<RawInterface[]>(`${base}/network`, ticket),
+    pve.get<RawDns>(`${base}/dns`, ticket).catch(() => null),
+  ]);
+  return buildNetwork(name, interfaces, dns, data.vms);
 }
 
 async function loadCreatePlan(name: string, kind: "qemu" | "lxc", ticket: string) {
@@ -511,7 +522,7 @@ const handler: http.RequestListener = async (req, res) => {
     if (route === "/api/login-info") {
       return json(res, 200, { realms: await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains") });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -546,6 +557,11 @@ const handler: http.RequestListener = async (req, res) => {
         }
         if (route === "/api/rolling-plan") return json(res, 200, await loadRollingPlan(session.ticket));
         if (route === "/api/backups") return json(res, 200, await loadBackups(session.ticket));
+        if (route === "/api/network") {
+          const name = params.get("server") ?? "";
+          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          return json(res, 200, await loadNetwork(name, session.ticket));
+        }
         if (route === "/api/create-plan") {
           const name = params.get("server") ?? "";
           const kind = params.get("kind");

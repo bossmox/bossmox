@@ -133,6 +133,7 @@ export function buildOverview(
         diskGb: gb(r.maxdisk),
         os: OS_NAMES[String(config?.ostype ?? "")] ?? (config?.ostype ? String(config.ostype) : "Not set"),
         startsAtBoot: config?.onboot === 1,
+        bridges: [...new Set(Object.entries(config ?? {}).filter(([k]) => /^net\d+$/.test(k)).map(([, v]) => String(v).match(/bridge=([^,]+)/)?.[1]).filter((b): b is string => Boolean(b)))],
         configLoaded: config !== undefined,
         tech: {
           "Machine type": config?.machine ?? "i440fx (default)",

@@ -144,7 +144,7 @@ summary{cursor:pointer;font-weight:650}
 .choice b{display:block} .choice small{color:var(--muted)}
 .field{display:block;margin-bottom:15px}
 .field>span{display:block;font-weight:650;margin-bottom:5px}
-.field input{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface)}
+.field input,.field select{width:100%;min-width:0;padding:9px 12px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface);color:var(--ink);font:inherit}
 .grow{flex:1;min-height:14px}
 .navrow{display:flex;justify-content:space-between;margin-top:18px}
 .review dt{color:var(--muted)} .review dd{margin:0;font-weight:600}
@@ -199,7 +199,7 @@ summary{cursor:pointer;font-weight:650}
   .facts{grid-template-columns:repeat(2,minmax(0,1fr))}
   .choices{grid-template-columns:1fr}
   #tasks,#clock,#looks span{display:none} #brand{flex:1} #looks{margin:0}
-  .wiz{padding:18px 16px} #vmdetail{padding:18px 16px}
+  .wiz{padding:18px 16px} #vmdetail,#netdetail{padding:18px 16px}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
@@ -233,7 +233,13 @@ summary{cursor:pointer;font-weight:650}
 .rollbtn{width:calc(100% - 16px);margin:12px 8px 0}
 .bkbox{height:100%;overflow:auto;padding:14px 22px 22px}
 .bkhead{font-size:15px;margin:20px 0 6px}
-.createrow{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+#netlist{padding:10px 8px;overflow:auto}
+#netdetail{overflow:auto;padding:24px 26px;min-width:0}
+.netcard{border-top:1px solid var(--line);padding:14px 0}
+.netcard header{display:flex;gap:9px;align-items:center}
+.netcard header small{color:var(--muted)}
+.netcard .plain{margin-top:8px}
+.createrow{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;align-items:end}
 .createcheck{display:flex;gap:8px;align-items:center;margin:4px 0 14px}
 @media(max-width:560px){.createrow{grid-template-columns:1fr}}
 .bknow{justify-content:flex-end;margin:6px 0}
@@ -246,7 +252,7 @@ summary{cursor:pointer;font-weight:650}
 /* Dialogs and task log */
 #scrim{position:fixed;inset:0;background:rgba(8,28,36,.42);display:none;place-items:center;z-index:9500;padding:16px}
 #scrim.on{display:grid}
-#dialog{background:var(--surface);border-radius:var(--r);width:520px;max-width:100%;padding:22px 24px;box-shadow:var(--shadow);animation:open .14s ease-out}
+#dialog{background:var(--surface);border-radius:var(--r);width:min(520px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:auto;padding:22px 24px;box-shadow:var(--shadow);animation:open .14s ease-out}
 #dialog h3{font-size:20px;font-weight:800;letter-spacing:-.01em;margin-bottom:7px}
 #dialog p{color:var(--muted)}
 #dialog p.loginerr{color:var(--bad)}

@@ -14,7 +14,7 @@ const APPS = {
   create: { title: "Create a VM", color: "#178A5F", w: 560, h: 640 },
   monitor: { title: "Servers", color: "#7A5AC8", w: 900, h: 620 },
   storage: { title: "Storage", color: "#B9680A", w: 520, h: 420 },
-  network: { title: "Network", color: "#2F7A7E", w: 460, h: 250 },
+  network: { title: "Network", color: "#2F7A7E", w: 860, h: 580 },
   backups: { title: "Backups", color: "#C43838", w: 860, h: 610 },
   terminal: { title: "Install updates", color: "#20262A", w: 860, h: 560, noIcon: true },
 };
@@ -113,6 +113,7 @@ function render(app) {
   if (app === "monitor") renderServers();
   if (app === "backups") loadBackups();
   if (app === "create") startCreate();
+  if (app === "network") loadNetwork();
 }
 
 /* Virtual Machines */
@@ -787,6 +788,34 @@ function rollingNext(plan) {
   loadServer();
 }
 
+/* Network, read only for now: a wrong change here can cut off the server, so editing needs its own design. */
+async function loadNetwork() {
+  const list = $("#netlist");
+  if (!list) return;
+  const nodes = S.data?.nodes ?? [];
+  S.netServer ??= nodes.find((n) => n.online)?.name;
+  list.innerHTML = nodes.map((n) => `<button class="row ${n.name === S.netServer ? "on" : ""}" data-netserver="${esc(n.name)}"><span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? "Online" : "Offline"}</small></button>`).join("");
+  const box = $("#netdetail");
+  const asked = S.netServer;
+  if (!asked) {
+    box.innerHTML = `<p class="empty">Waiting for a server to come online.</p>`;
+    return;
+  }
+  try {
+    const n = await signal(`api/network?server=${encodeURIComponent(asked)}`);
+    if (asked !== S.netServer || !$("#netdetail")) return;
+    const fact = (label, value) => (value ? `<dt>${label}</dt><dd>${esc(value)}</dd>` : "");
+    const card = (i) => `<article class="netcard"><header><span class="dot ${i.active ? "running" : ""}"></span><b>${esc(i.name)}</b><small>${esc(i.kind)}${i.active ? "" : ", not connected"}</small></header>
+      ${i.note ? `<p class="meta">${esc(i.note)}</p>` : ""}
+      <dl class="plain">${fact("Address", i.address)}${fact("Gateway", i.gateway)}${fact("Uses", i.ports.join(", "))}${fact("Part of", i.partOf)}${i.kind === "Virtual switch" ? `<dt>Guests</dt><dd>${esc(i.guests.join(", ") || "None")}</dd>` : ""}</dl></article>`;
+    $("#netdetail").innerHTML = `<div class="head"><div><h2>${esc(n.server)}</h2><div class="state">${n.dnsServers.length ? `Looks up names with ${esc(n.dnsServers.join(", "))}` : "No name server set"}${n.searchDomain ? `, in ${esc(n.searchDomain)}` : ""}</div></div></div>
+      ${n.interfaces.map(card).join("") || `<p class="empty">This server didn't report any network connections.</p>`}
+      <p class="meta">BossMox shows the network but can't change it yet. A wrong change here can cut off the server, so that's coming with a safety net.</p>`;
+  } catch (err) {
+    if (err.message !== "signed out" && $("#netdetail")) $("#netdetail").innerHTML = `<p class="empty">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>`;
+  }
+}
+
 /* Creating and deleting VMs and containers */
 function startCreate() {
   const server = S.data?.nodes.find((n) => n.online)?.name;
@@ -1209,12 +1238,11 @@ async function openTerminal(server) {
   }
 }
 
-const soon = (t, line) => () => `<div class="soon"><h2>${t}</h2><p>${line}</p></div>`;
 const RENDER = {
   terminal: () => "",
   vms: vmsShell, monitor: monView, storage: storeView,
   create: () => `<div id="newbox" class="bkbox"></div>`,
-  network: soon("Network", "Not built yet."),
+  network: () => `<div class="vms"><aside><div id="netlist"></div></aside><div id="netdetail"></div></div>`,
   backups: () => `<div id="bkbox" class="bkbox"></div>`,
 };
 
@@ -1264,6 +1292,10 @@ document.addEventListener("click", (e) => {
     return guestDelete(+d.guestdeletego);
   }
   if (d.createnew) return createGuest();
+  if (d.netserver) {
+    S.netServer = d.netserver;
+    return loadNetwork();
+  }
   if (d.bktab) {
     S.bkTab = d.bktab;
     return drawBackups();
