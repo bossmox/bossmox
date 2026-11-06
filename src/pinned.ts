@@ -1,5 +1,4 @@
 import http from "node:http";
-import https from "node:https";
 import tls from "node:tls";
 
 const TIMEOUT_MS = 10000;
@@ -70,7 +69,8 @@ export async function call<T>(to: Pinned, method: "GET" | "POST", path: string, 
     headers["Content-Length"] = String(Buffer.byteLength(body));
   }
   return new Promise<T>((resolve, reject) => {
-    const req = https.request({ method, path: `/api2/json${path}`, headers, timeout: TIMEOUT_MS, createConnection: () => socket, agent: false }, (res: http.IncomingMessage) => {
+    // Plain http over the checked socket: an https request or an agent would open a connection of its own.
+    const req = http.request({ method, path: `/api2/json${path}`, headers, timeout: TIMEOUT_MS, createConnection: () => socket }, (res: http.IncomingMessage) => {
       const chunks: Buffer[] = [];
       res.on("data", (c: Buffer) => chunks.push(c));
       res.on("error", reject);
