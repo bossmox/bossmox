@@ -251,6 +251,13 @@ summary{cursor:pointer;font-weight:650}
 .rollbtn{width:calc(100% - 16px);margin:12px 8px 0}
 .bkbox{height:100%;overflow:auto;padding:14px 22px 22px}
 .bkhead{font-size:15px;margin:20px 0 6px}
+#loginform.setupbox{width:520px}
+.setupbox .field select{width:100%}
+.setuprow{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;flex-wrap:wrap}
+#loginform.setupbox .btn{width:auto;padding:9px 16px}
+.setuppair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.fingerprint{display:block;font-family:ui-monospace,Consolas,monospace;font-size:13px;line-height:1.5;word-break:break-all;background:var(--surface2);padding:10px 12px;border-radius:var(--r-s);margin-bottom:6px}
+@media(max-width:560px){.setuppair{grid-template-columns:1fr}}
 .linkbtn{background:none;border:0;padding:0;color:var(--accent);font:inherit;font-weight:650;cursor:pointer;text-decoration:underline}
 .vncwrap{display:flex;flex-direction:column;height:100%;background:#07161C}
 .vnctools{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 12px;background:var(--surface);color:var(--muted);flex-wrap:wrap}

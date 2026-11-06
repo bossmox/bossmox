@@ -9,7 +9,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "start": "node --env-file-if-exists=.env dist/src/server.js",
+    "start": "node --env-file-if-exists=.env dist/src/index.js",
     "test": "tsc && node --test \"dist/test/*.test.js\"",
     "mock": "node dev/mock-pve.mjs"
   },

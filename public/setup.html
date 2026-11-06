@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en" data-look="daylight">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set up BossMox</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="wall" aria-hidden="true">
+  <svg viewBox="0 0 1440 500" preserveAspectRatio="none">
+    <path fill="var(--h1)" d="M0 220 C180 130 340 150 520 215 S860 290 1060 170 1340 150 1440 200 V500 H0Z"/>
+    <path fill="var(--h2)" d="M0 330 C210 250 420 290 640 335 S1040 370 1440 260 V500 H0Z"/>
+    <path fill="var(--h3)" d="M0 425 C260 360 520 405 790 430 S1210 430 1440 375 V500 H0Z"/>
+  </svg>
+</div>
+<header id="bar"><div id="brand">BossMox</div></header>
+<section id="login">
+  <div id="loginform" class="setupbox">
+    <p class="meta" id="step" style="margin-top:0"></p>
+    <h1 id="title">Set up BossMox</h1>
+    <p class="sub" id="lead"></p>
+    <p class="loginerr" id="problem" hidden></p>
+    <div id="body"></div>
+  </div>
+</section>
+<script src="setup.js"></script>
+</body>
+</html>

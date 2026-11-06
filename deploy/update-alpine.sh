@@ -6,16 +6,16 @@ set -euo pipefail
 VM=$1
 CA=$2
 ADDRESS=$3
-PVE_URL=$4
+PVE_URL=${4:-}
 TLS_NAME=${5:-}
 
 npm test >/dev/null
 TMPFILE=$(mktemp -d)
 tar -czf "$TMPFILE/bossmox.tgz" dist/src public deploy package.json node_modules/ws
-cp "$CA" "$TMPFILE/pve-root-ca.pem"
+[ "$CA" = "-" ] || cp "$CA" "$TMPFILE/pve-root-ca.pem"
 # A private folder, because these run as root and /tmp is shared with the service account.
 STAGE=$(ssh -o BatchMode=yes "$VM" "mktemp -d")
 trap 'ssh -o BatchMode=yes "$VM" "rm -rf \"$STAGE\"" 2>/dev/null || true' EXIT
-scp -q "$TMPFILE/bossmox.tgz" "$TMPFILE/pve-root-ca.pem" deploy/install-in-alpine.sh "$VM:$STAGE/"
+scp -q "$TMPFILE"/* deploy/install-in-alpine.sh "$VM:$STAGE/"
 rm -rf "$TMPFILE"
 ssh -o BatchMode=yes "$VM" "doas sh '$STAGE/install-in-alpine.sh' '$ADDRESS' '$PVE_URL' '$TLS_NAME' && doas rc-service bossmox status"
