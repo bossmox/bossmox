@@ -635,7 +635,7 @@ async function watchRestart() {
  * returning (guests go home before the next server starts).
  */
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-const rollingTitle = (plan) => `Updating ${plan.server}, server ${plan.rolling.index + 1} of ${plan.rolling.servers.length}`;
+const rollingTitle = (plan) => `Updating ${plan.server}, node ${plan.rolling.index + 1} of ${plan.rolling.servers.length}`;
 const closeRow = `<div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`;
 const notTouched = (plan) => {
   const rest = plan.rolling.servers.slice(plan.rolling.index + 1);
