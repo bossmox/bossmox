@@ -20,6 +20,7 @@ const configs = {
   108: { ostype: "l26", scsihw: "virtio-scsi-single", scsi0: "x,size=60G", net0: "virtio=AA,bridge=vmbr0" },
 };
 
+let restartedAt = 0;
 const reply = (res, data, status = 200) => {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ data }));
@@ -60,11 +61,18 @@ http.createServer((req, res) => {
     if (p.includes("/log")) return reply(res, [{ n: 1, t: "Reading package lists" }, { n: 2, t: "TASK OK" }]);
     return reply(res, { status: "stopped", exitstatus: "OK" });
   }
+  if (req.method === "POST" && p.endsWith("/status")) {
+    req.resume();
+    restartedAt = Date.now();
+    return reply(res, null);
+  }
+  if (p.includes("/tasks?source=active")) return reply(res, []);
+  if (p.includes("/storage?content=backup")) return reply(res, [{ storage: "backups", avail: 900 * G, active: 1, enabled: 1 }]);
   const n = p.match(/^\/nodes\/([\w-]+)\/(status|apt\/update|apt\/repositories|subscription|services|tasks)/);
   if (n) {
     const replies = {
       status: {
-        uptime: 793600, pveversion: "pve-manager/9.2.2/demo", "current-kernel": { release: "7.0.2-6-pve" },
+        uptime: restartedAt ? Math.floor((Date.now() - restartedAt) / 1000) : 793600, pveversion: "pve-manager/9.2.2/demo", "current-kernel": { release: "7.0.2-6-pve" },
         cpuinfo: { model: "Intel Xeon Silver 4110", cpus: 32 }, memory: { used: 54 * G, total: 100 * G }, rootfs: { used: 12 * G, total: 96 * G },
       },
       "apt/update": [

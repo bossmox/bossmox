@@ -19,7 +19,7 @@ const APPS = {
   terminal: { title: "Install updates", color: "#20262A", w: 860, h: 560, noIcon: true },
 };
 
-const S = { data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", ticks: 0 };
+const S = { watching: false, data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", ticks: 0 };
 const wins = {};
 
 /* Desktop */
@@ -183,7 +183,7 @@ function monView() {
 const signal = (url) => fetch(url).then(async (res) => {
   const body = await res.json();
   if (res.status === 401) {
-    showLogin("You've been signed out. Sign in again to continue.");
+    showLogin(savedReboot() ? "BossMox restarted too. Sign in to finish checking the server." : "You've been signed out. Sign in again to continue.");
     throw new Error("signed out");
   }
   if (!res.ok) throw new Error(body.error);
@@ -291,7 +291,8 @@ function renderServerDetail() {
   const top = box.scrollTop;
   box.innerHTML = `
     <div class="head"><div><h2>${esc(S.server)}</h2>
-      <div class="state"><span class="dot ${node?.online ? "running" : "warn"}"></span>${node?.online ? "Online" : "Offline"}${d?.summary ? `, running for ${esc(d.summary.uptime)}` : ""}</div></div></div>
+      <div class="state"><span class="dot ${node?.online ? "running" : "warn"}"></span>${node?.online ? "Online" : "Offline"}${d?.summary ? `, running for ${esc(d.summary.uptime)}` : ""}</div></div>
+      <div class="actions"><button class="btn" data-restartserver="${esc(S.server)}">Restart</button></div></div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["updates", d?.updates?.total ? `Updates (${d.updates.total})` : "Updates"], ["services", "Services"], ["activity", "Activity"]].map(([k, l]) => `<button role="tab" aria-selected="${S.serverTab === k}" class="${S.serverTab === k ? "on" : ""}" data-servertab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${body}</div>`;
   box.scrollTop = top;
@@ -324,11 +325,12 @@ function drawTask(title, view, error) {
   const log = $("#dialog .tasklog");
   if (log) log.scrollTop = log.scrollHeight;
 }
-async function runAction(action, server, title) {
+async function runAction(action, server, title, extra = {}, after = null) {
   S.taskRunning = true;
+  S.afterTask = after;
   drawTask(title);
   try {
-    const res = await post(`api/action/${action}`, { server });
+    const res = await post(`api/action/${action}`, { server, ...extra });
     const body = await res.json();
     if (res.status === 401) {
       S.taskRunning = false;
@@ -353,6 +355,113 @@ async function runAction(action, server, title) {
 
 /* Update terminal */
 let term = null;
+/* Guided restart */
+const REBOOT_KEY = "bossmox-restart";
+let rebootMemory = null;
+function savedReboot() {
+  try {
+    const raw = localStorage.getItem(REBOOT_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch { /* fall back to memory */ }
+  return rebootMemory;
+}
+function saveReboot(value) {
+  rebootMemory = value;
+  try {
+    if (value) localStorage.setItem(REBOOT_KEY, JSON.stringify(value));
+    else localStorage.removeItem(REBOOT_KEY);
+  } catch { /* memory copy still works */ }
+}
+async function startRestart(server) {
+  let plan;
+  try {
+    plan = await signal(`api/reboot-plan?server=${encodeURIComponent(server)}`);
+  } catch (err) {
+    return dialog(`<h3>Couldn't prepare the restart</h3><p class="loginerr">${esc(err.message)}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
+  }
+  const guests = (S.data?.vms ?? []).filter((v) => v.node === server && v.running);
+  const blocked = plan.busy.length > 0;
+  S.restart = { server, guests };
+  dialog(`<h3>Restart ${esc(server)}?</h3>
+    <p>${guests.length ? "Everything below goes down until the server is back, usually a few minutes." : "Nothing is running on this server."} If BossMox runs on this server, it goes down too and this page will wait for it.</p>
+    ${blocked ? `<p class="loginerr" style="margin-top:12px">Wait for this to finish first: ${esc(plan.busy.join(", "))}.</p>` : ""}
+    ${plan.busyKnown ? "" : `<p class="loginerr" style="margin-top:12px">BossMox can't tell whether jobs are running on this server.</p>`}
+    ${guests.length ? `<div class="restartlist">${guests.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state">${v.startsAtBoot ? "Starts again by itself" : "Stays off until started"}</span></div>`).join("")}</div>` : ""}
+    ${guests.length && plan.backupStorages.length ? `<div class="restartbackup"><select id="rstore" aria-label="Backup storage">${plan.backupStorages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select><button class="btn" data-backup="${esc(server)}">Back up first</button></div>` : ""}
+    <label class="field restartname"><span>Type ${esc(server)} to confirm</span><input id="rname" autocomplete="off" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-restart="${esc(server)}" disabled>Restart ${esc(server)}</button></div>`);
+  $("#rname").focus();
+}
+async function doRestart(server) {
+  const guests = S.restart?.guests ?? [];
+  S.restart = null;
+  saveReboot({ server, startedAt: Date.now(), guests: guests.map((v) => ({ id: v.id, name: v.name, auto: v.startsAtBoot })) });
+  try {
+    const res = await post("api/action/restart-server", { server, confirm: server });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error);
+  } catch (err) {
+    saveReboot(null);
+    return dialog(`<h3>The restart didn't start</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
+  }
+  watchRestart();
+}
+function drawRestart(plan, state, title, note, done) {
+  const row = (name, ok, word) => `<div class="snap"><div>${esc(name)}</div><span class="state"><span class="dot ${ok === null ? "busy" : ok ? "running" : "warn"}"></span>${esc(word)}</span></div>`;
+  dialog(`<h3>${esc(title)}</h3><p>${esc(note)}</p><div class="restartlist">
+    ${row(plan.server, state.back ? true : null, state.back ? "Back" : state.down ? "Restarting" : "Going down")}
+    ${plan.guests.map((g) => state.running.has(g.id) ? row(g.name, true, "Running") : g.auto ? row(g.name, done ? false : null, done ? "Not running" : "Waiting") : row(g.name, false, "Off, needs starting")).join("")}
+    </div><div class="row-end"><button class="btn" data-restartclose="1">${done ? "Close" : "Stop watching"}</button></div>`);
+}
+async function watchRestart() {
+  const plan = savedReboot();
+  if (!plan || S.watching) return;
+  S.watching = true;
+  const deadline = plan.startedAt + 15 * 60 * 1000;
+  const state = { back: false, down: false, running: new Set() };
+  let backAt = 0;
+  for (;;) {
+    if (!savedReboot()) break;
+    try {
+      const d = await signal(`api/server?name=${encodeURIComponent(plan.server)}`);
+      const o = await signal("api/overview");
+      const up = d.summary?.uptimeSeconds;
+      const restarted = up !== undefined && up * 1000 < Date.now() - plan.startedAt + 5000;
+      state.back = restarted && o.nodes.some((n) => n.name === plan.server && n.online);
+      state.down ||= restarted;
+      state.running = new Set(o.vms.filter((v) => v.running).map((v) => v.id));
+      S.data = o;
+    } catch (err) {
+      if (err.message === "signed out") {
+        S.watching = false;
+        return;
+      }
+      state.down = true;
+      state.back = false;
+    }
+    const waiting = plan.guests.filter((g) => g.auto && !state.running.has(g.id));
+    if (state.back && !backAt) backAt = Date.now();
+    const allBack = state.back && waiting.length === 0;
+    const gaveUp = backAt && Date.now() - backAt > 5 * 60 * 1000;
+    if (allBack || gaveUp || Date.now() > deadline) {
+      const off = plan.guests.filter((g) => !g.auto && !state.running.has(g.id));
+      const title = allBack ? `${plan.server} is back` : state.back ? `${plan.server} is back, but something's missing` : `${plan.server} hasn't come back`;
+      const note = allBack
+        ? off.length ? "Everything set to start by itself is running. The items marked off need starting by hand." : "Everything is running again."
+        : state.back ? "These haven't started yet. Check them before relying on this server." : "It's been 15 minutes. Someone may need to look at the server itself.";
+      drawRestart(plan, state, title, note, true);
+      saveReboot(null);
+      S.watching = false;
+      renderHealth();
+      loadServer();
+      return;
+    }
+    drawRestart(plan, state, `Restarting ${plan.server}`, state.back ? "It's back. Waiting for everything to start." : "Keep this page open. This usually takes a few minutes.", false);
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  S.watching = false;
+}
+
 function closeTerminal() {
   term?.socket?.close();
   term?.xterm?.dispose();
@@ -458,10 +567,29 @@ document.addEventListener("click", (e) => {
   }
   if (d.dlg) {
     const run = d.dlg === "ok" ? S.pending : null;
+    const after = S.taskRunning ? null : S.afterTask;
     S.pending = null;
+    S.afterTask = null;
     closeDialog();
     if (run) run();
+    else if (after) after();
     return;
+  }
+  if (d.restartserver) return startRestart(d.restartserver);
+  if (d.restart) {
+    t.disabled = true;
+    return doRestart(d.restart);
+  }
+  if (d.restartclose) {
+    saveReboot(null);
+    S.watching = false;
+    return closeDialog();
+  }
+  if (d.backup) {
+    const server = d.backup;
+    const ids = (S.restart?.guests ?? []).map((v) => v.id).join(",");
+    const storage = $("#rstore").value;
+    return confirmAction(`Back up ${S.restart.guests.length} on ${server}?`, `This saves a copy to ${storage}. They stay running, though they may feel slower while it runs.`, `Back up to ${storage}`, () => runAction("back-up-guests", server, `Backing up ${server}`, { guests: ids, storage }, () => startRestart(server)));
   }
   if (d.check) {
     const server = d.check;
@@ -501,6 +629,9 @@ document.addEventListener("click", (e) => {
   if (d.look) setLook(d.look);
 });
 document.addEventListener("input", (e) => {
+  if (e.target.id === "rname") {
+    $("#rgo").disabled = e.target.value !== S.restart?.server;
+  }
   if (e.target.id === "vmq") {
     S.q = e.target.value;
     renderList();
@@ -552,6 +683,9 @@ async function showLogin(message) {
   term?.xterm?.dispose();
   term?.observer?.disconnect();
   term = null;
+  S.taskRunning = false;
+  S.watching = false;
+  $("#scrim").classList.remove("on");
   Object.keys(wins).forEach((k) => {
     wins[k].remove();
     delete wins[k];
@@ -567,6 +701,10 @@ async function showLogin(message) {
   $("#lcode").value = "";
   setStep(false);
   showError(message);
+  $("#lgo").disabled = true;
+  loadRealms(message);
+}
+async function loadRealms(message) {
   try {
     const res = await fetch("api/login-info");
     const body = await res.json();
@@ -574,8 +712,14 @@ async function showLogin(message) {
     const rank = (r) => (r.default ? 2 : r.realm === "pam" ? 1 : 0);
     const realms = [...body.realms].sort((a, b) => rank(b) - rank(a));
     $("#lrealm").innerHTML = realms.map((r) => `<option value="${esc(r.realm)}">${esc(r.comment || r.realm)}</option>`).join("");
-  } catch (err) {
-    showError(`BossMox can't reach Proxmox right now. ${err.message || ""}`);
+    $("#lgo").disabled = false;
+    showError(message);
+  } catch {
+    // Proxmox may be restarting, so keep trying while the sign-in screen is up.
+    showError("Waiting for Proxmox. Sign-in will be ready when it answers.");
+    setTimeout(() => {
+      if (!$("#login").hidden) loadRealms(message);
+    }, 3000);
   }
 }
 function showDesk() {
@@ -635,6 +779,7 @@ async function refresh() {
     $("#desk").hidden = false;
     $("#signout").hidden = false;
     polling ??= setInterval(refresh, 10000);
+    if (savedReboot() && !S.watching) watchRestart();
     if (S.sel === null && body.vms[0]) S.sel = body.vms[0].id;
     S.failed = false;
   } catch (err) {

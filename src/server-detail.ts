@@ -144,6 +144,23 @@ export function taskView(status: RawTaskStatus, log: { n?: number; t?: string }[
   };
 }
 
+export interface RawBackupStorage {
+  storage: string;
+  avail?: number;
+  active?: number;
+  enabled?: number;
+}
+/** What a person needs to see before restarting a server. Running jobs block the restart. */
+export function buildRebootPlan(active: Section<RawTask[]>, storages: Section<RawBackupStorage[]>) {
+  return {
+    busy: active.available ? active.value.map((t) => `${friendlyTask(t)}${t.id ? ` on ${t.id}` : ""}`) : [],
+    busyKnown: active.available,
+    backupStorages: storages.available
+      ? storages.value.filter((s) => s.active !== 0 && s.enabled !== 0).map((s) => ({ name: s.storage, freeGb: gb(s.avail) }))
+      : [],
+  };
+}
+
 export function buildServerDetail(
   name: string,
   status: Section<RawStatus>,
@@ -165,6 +182,7 @@ export function buildServerDetail(
           proxmoxVersion: s.pveversion?.split("/")[1] ?? "Unknown",
           kernel: s["current-kernel"]?.release ?? "Unknown",
           uptime: friendlyUptime(s.uptime),
+          uptimeSeconds: s.uptime ?? 0,
           processor: s.cpuinfo?.model ?? "Unknown",
           cpus: s.cpuinfo?.cpus ?? 0,
           memUsedGb: gb(s.memory?.used),

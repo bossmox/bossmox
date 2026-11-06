@@ -9,8 +9,10 @@ import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import {
+  buildRebootPlan,
   buildServerDetail,
   taskView,
+  type RawBackupStorage,
   type RawRepositories,
   type RawService,
   type RawStatus,
@@ -114,8 +116,19 @@ const NODE_NAME = /^[\w.-]{1,64}$/;
 const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w.@!-]+:$/;
 
 /** Everything BossMox can change on Proxmox is listed here. There is no general pass-through. */
-const ACTIONS: Record<string, (name: string, who: Identity) => Promise<string>> = {
+const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string, unknown>) => Promise<string | null>> = {
   "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
+  "restart-server": async (name, who, body) => {
+    // The browser sends the name the person typed, so a stale or scripted click can't restart the wrong server.
+    if (body.confirm !== name) throw new AuthError(400, "The typed name doesn't match the server.");
+    return pve.post<null>(`/nodes/${encodeURIComponent(name)}/status`, who, { command: "reboot" });
+  },
+  "back-up-guests": (name, who, body) => {
+    const vmid = text(body.guests, 256);
+    const storage = text(body.storage, 64);
+    if (!/^\d+(,\d+)*$/.test(vmid) || !/^[\w.-]+$/.test(storage)) throw new AuthError(400, "That backup request isn't valid.");
+    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/vzdump`, who, { vmid, storage, mode: "snapshot", compress: "zstd" });
+  },
 };
 
 async function openUpdateTerminal(res: http.ServerResponse, name: string, session: Session) {
@@ -140,10 +153,11 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
   }
   const run = ACTIONS[action];
   if (!run) return json(res, 404, { error: "BossMox doesn't have that action." });
-  const name = text((await readJson(req)).server, 64);
+  const body = await readJson(req);
+  const name = text(body.server, 64);
   if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
   try {
-    return json(res, 200, { task: await run(name, session) });
+    return json(res, 200, { task: await run(name, session, body) });
   } catch (err) {
     if (err instanceof PveError && err.status === 403) {
       return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
@@ -245,7 +259,7 @@ const handler: http.RequestListener = async (req, res) => {
     if (route === "/api/login-info") {
       return json(res, 200, { realms: await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains") });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -261,6 +275,16 @@ const handler: http.RequestListener = async (req, res) => {
             pve.get<{ n?: number; t?: string }[]>(`${base}/log?limit=1000`, session.ticket),
           ]);
           return json(res, 200, taskView(status, log));
+        }
+        if (route === "/api/reboot-plan") {
+          const name = params.get("server") ?? "";
+          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          const base = `/nodes/${encodeURIComponent(name)}`;
+          const [active, storages] = await Promise.all([
+            section(pve.get<RawTask[]>(`${base}/tasks?source=active`, session.ticket)),
+            section(pve.get<RawBackupStorage[]>(`${base}/storage?content=backup`, session.ticket)),
+          ]);
+          return json(res, 200, buildRebootPlan(active, storages));
         }
         if (route === "/api/server") {
           const name = params.get("name") ?? "";

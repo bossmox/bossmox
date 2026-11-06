@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
+import { buildRebootPlan, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
 
 const repo = (uri: string, component: string, enabled = true): RawRepositories => ({
   files: [{ repositories: [{ Enabled: enabled, URIs: [uri], Components: [component] }] }],
@@ -59,6 +59,16 @@ test("following a task reports running, success and failure", () => {
   assert.equal(failed.result, "failed");
   assert.equal(failed.message, "command failed");
   assert.deepEqual(failed.lines, ["E: boom"]);
+});
+
+test("a reboot plan lists running jobs and usable backup storage", () => {
+  const plan = buildRebootPlan(
+    { available: true, value: [{ upid: "x", type: "vzdump", id: "100" }] },
+    { available: true, value: [{ storage: "qcow", avail: 2 * 1024 ** 3, active: 1, enabled: 1 }, { storage: "off", active: 0 }] },
+  );
+  assert.deepEqual(plan.busy, ["Backup on 100"]);
+  assert.deepEqual(plan.backupStorages, [{ name: "qcow", freeGb: 2 }]);
+  assert.equal(buildRebootPlan({ available: false }, { available: false }).busyKnown, false);
 });
 
 test("task results", () => {
