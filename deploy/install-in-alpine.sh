@@ -99,12 +99,10 @@ start_pre() {
 EOF
 chmod 755 /etc/init.d/bossmox
 
-# The setup code proves control of this VM, so it's shown only here and kept on disk only as a hash.
+# The setup code proves control of this VM, so it's shown only on its console and BossMox keeps only a hash.
 mkdir -p /usr/local/sbin
 cat > /usr/local/sbin/bossmox-setup-code <<'EOF'
 #!/bin/sh
-ISSUE=/etc/issue
-sed -i '/^# BossMox setup/,/^# end BossMox setup/d' "$ISSUE"
 grep -q '^export PVE_URL=' /etc/bossmox/env && exit 0
 [ -f /var/lib/bossmox/settings.json ] && exit 0
 HASH=/var/lib/bossmox/setup.hash
@@ -113,27 +111,49 @@ if [ ! -f "$HASH" ] || [ ! -f "$CODE_FILE" ]; then
   RAW=$(openssl rand -hex 6 | tr 'a-f' 'A-F')
   printf '%s' "$RAW" | sha256sum | cut -d' ' -f1 > "$HASH"
   printf '%s' "$RAW" > "$CODE_FILE"
-  chown bossmox:bossmox "$HASH"
-  chown root:root "$CODE_FILE"
+  chown bossmox:bossmox "$HASH" "$CODE_FILE"
   chmod 640 "$HASH"
   chmod 600 "$CODE_FILE"
 fi
-RAW=$(cat "$CODE_FILE")
-ADDR=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -1)
-{
-  echo '# BossMox setup'
-  echo
-  echo "  To set up BossMox, open https://$ADDR"
-  echo "  Setup code: $(echo "$RAW" | sed 's/..../&-/g; s/-$//')"
-  echo
-  echo '# end BossMox setup'
-} >> "$ISSUE"
-# A login prompt only reads that file when it starts, so bring up a fresh one.
-pkill -f getty 2>/dev/null || true
 EOF
 chmod 755 /usr/local/sbin/bossmox-setup-code
-# Setup restarts the service without passing through here, so this clears the console message afterward.
-ln -sf /usr/local/sbin/bossmox-setup-code /etc/periodic/15min/bossmox-setup-code
+rm -f /etc/periodic/15min/bossmox-setup-code
+
+# What the VM's console shows, like a hypervisor's status screen. It takes the place of a login prompt on
+# the screen and the serial port, and redraws so it's there whenever someone attaches.
+cat > /usr/local/sbin/bossmox-console <<'EOF'
+#!/bin/sh
+trap '' INT QUIT TSTP
+while :; do
+  ADDR=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+  printf '\033[2J\033[H\n'
+  printf '  BossMox\n  Management app for Proxmox Virtual Environment\n\n\n'
+  if [ -z "$ADDR" ]; then
+    printf '  Waiting for a network address.\n'
+  elif [ -f /var/lib/bossmox/setup.hash ] && [ -f /var/lib/bossmox/setup.code ]; then
+    CODE=$(sed 's/..../&-/g; s/-$//' /var/lib/bossmox/setup.code)
+    printf '  This BossMox isn'"'"'t set up yet.\n\n'
+    printf '  Open:        https://%s\n' "$ADDR"
+    printf '  Setup code:  %s\n' "$CODE"
+  else
+    if rc-service bossmox status >/dev/null 2>&1; then STATE="Running"; else STATE="Not running"; fi
+    printf '  Manage at:   https://%s\n' "$ADDR"
+    printf '  BossMox:     %s\n' "$STATE"
+  fi
+  printf '\n\n  Press L to log in to this machine.\n'
+  KEY=""
+  read -r -s -n 1 -t 5 KEY 2>/dev/null || true
+  case "$KEY" in
+    l|L) printf '\033[2J\033[H'; /bin/login; ;;
+  esac
+done
+EOF
+chmod 755 /usr/local/sbin/bossmox-console
+sed -i '/^tty[0-9]*::/d; /^ttyS0::/d' /etc/inittab
+printf 'tty1::respawn:/usr/local/sbin/bossmox-console\nttyS0::respawn:/usr/local/sbin/bossmox-console\n' >> /etc/inittab
+sed -i '/^# BossMox setup/,/^# end BossMox setup/d' /etc/issue
+kill -HUP 1
+pkill -f getty 2>/dev/null || true
 cat > /usr/local/sbin/bossmox-reset <<'EOF'
 #!/bin/sh
 # Starts setup again with a new code. Only someone with console access to this VM can run this.

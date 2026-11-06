@@ -22,7 +22,7 @@ GOT=$(sha512sum "$WORK/img.qcow2" | awk '{print $1}')
 
 qm create "$VM" --name bossmox --cores 1 --cpuunits 50 --memory 256 --balloon 0 \
   --net0 "virtio,bridge=$BRIDGE" --scsihw virtio-scsi-single --ostype l26 --onboot 1 \
-  --serial0 socket --vga serial0 --description "BossMox: management app for Proxmox Virtual Environment"
+  --serial0 socket --description "BossMox: management app for Proxmox Virtual Environment"
 qm set "$VM" --scsi0 "$STORAGE:0,import-from=$WORK/img.qcow2,iothread=1" >/dev/null
 qm set "$VM" --ide2 "$STORAGE:cloudinit" --boot order=scsi0 >/dev/null
 qm resize "$VM" scsi0 1G >/dev/null
