@@ -18,7 +18,7 @@ STAGE=$(dirname "$0")
 
 apk update -q
 apk upgrade -q
-apk add -q nodejs openssl logrotate
+apk add -q nodejs openssl logrotate kbd
 
 # Alpine ignores Proxmox's shutdown request unless this is running, so the VM couldn't shut down cleanly.
 rc-update add acpid default >/dev/null
@@ -124,6 +124,8 @@ rm -f /etc/periodic/15min/bossmox-setup-code
 cat > /usr/local/sbin/bossmox-console <<'EOF'
 #!/bin/sh
 trap '' INT QUIT TSTP
+# Read from across a room or in a small window, so the screen gets a big font. The serial port has its own.
+[ "$(tty)" = /dev/tty1 ] && setfont /usr/share/consolefonts/solar24x32.psfu.gz 2>/dev/null
 while :; do
   ADDR=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
   printf '\033[2J\033[H\n'
