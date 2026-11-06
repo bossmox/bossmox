@@ -292,7 +292,7 @@ function renderServerDetail() {
   box.innerHTML = `
     <div class="head"><div><h2>${esc(S.server)}</h2>
       <div class="state"><span class="dot ${node?.online ? "running" : "warn"}"></span>${node?.online ? "Online" : "Offline"}${d?.summary ? `, running for ${esc(d.summary.uptime)}` : ""}</div></div>
-      <div class="actions"><button class="btn" data-restartserver="${esc(S.server)}">Restart</button></div></div>
+      <div class="actions"><button class="btn danger" data-restartserver="${esc(S.server)}">Restart</button></div></div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["updates", d?.updates?.total ? `Updates (${d.updates.total})` : "Updates"], ["services", "Services"], ["activity", "Activity"]].map(([k, l]) => `<button role="tab" aria-selected="${S.serverTab === k}" class="${S.serverTab === k ? "on" : ""}" data-servertab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${body}</div>`;
   box.scrollTop = top;
