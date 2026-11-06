@@ -4,7 +4,7 @@ Date: 2026-11-06. Status: accepted.
 
 ## Decision
 
-Update all servers works through a cluster one server at a time, oldest Proxmox version first. For each server, BossMox moves running guests off, opens the normal updater for a person to approve, restarts the server once nothing is left to install, moves the guests home, then checks the cluster before starting the next one. Any failure stops the run and leaves later servers untouched.
+Update all servers works through a cluster one server at a time, oldest Proxmox version first. For each server, BossMox opens the normal updater for a person to approve. If the updates include a kernel, it first moves running guests off, then restarts the server once nothing is left to install and moves the guests home. Without a kernel update, guests stay put and nothing restarts. It checks the cluster before each server. Any failure stops the run and leaves later servers untouched.
 
 The run is the guided restart with two extra phases, kept in the same saved plan, so it carries on after a page reload.
 

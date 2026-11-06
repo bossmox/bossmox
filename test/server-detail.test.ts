@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildMovePlan, buildRebootPlan, buildRollingPlan, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
+import { buildMovePlan, buildRebootPlan, buildRollingPlan, moveProblem, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
 
 const repo = (uri: string, component: string, enabled = true): RawRepositories => ({
   files: [{ repositories: [{ Enabled: enabled, URIs: [uri], Components: [component] }] }],
@@ -105,7 +105,7 @@ test("a limited account gets empty sections instead of a failure", () => {
   assert.equal(d.channel, null);
 });
 
-const rolling = (name: string, version: string, updates: number | null = 1, more = {}) => ({ name, online: true, version, updates, rebootNeeded: false, busy: [] as string[], ...more });
+const rolling = (name: string, version: string, updates: number | null = 1, more = {}) => ({ name, online: true, version, updates, rebootNeeded: false, busy: [] as string[], cantMove: [] as string[], ...more });
 const healthy = { available: true as const, value: true };
 const voteOn = { available: true as const, value: { State: "Connected" } };
 
@@ -134,4 +134,19 @@ test("two servers keep their majority only with a working tie-breaker", () => {
   assert.equal(buildRollingPlan(two, healthy, { available: false }).keepsMajority, false);
   assert.equal(buildRollingPlan(two, healthy, { available: true, value: { State: "Disconnected" } }).keepsMajority, false, "a dead tie-breaker casts no vote");
   assert.equal(buildRollingPlan([...two, rolling("c", "9")], healthy, { available: false }).keepsMajority, true);
+});
+
+test("a guest that can't move only blocks a server that's going to restart", () => {
+  const stuck = { cantMove: ["tiny-vm can't move."] };
+  assert.deepEqual(buildRollingPlan([rolling("a", "9", 1, stuck), rolling("b", "9")], healthy, voteOn).blocked, []);
+  assert.deepEqual(buildRollingPlan([rolling("a", "9", 1, { ...stuck, rebootNeeded: true }), rolling("b", "9")], healthy, voteOn).blocked, stuck.cantMove);
+  assert.deepEqual(buildRollingPlan([rolling("a", "9", 0, { ...stuck, rebootNeeded: true }), rolling("b", "9")], healthy, voteOn).blocked, [], "nothing to install means it won't restart");
+});
+
+test("a snapshot on local storage stops a live move, and says so", () => {
+  assert.match(moveProblem("vm", { local_disks: [{ volid: "local:300/a.qcow2" }] }, true) ?? "", /snapshot/);
+  assert.equal(moveProblem("vm", { local_disks: [{ volid: "local:300/a.qcow2" }] }, false), null);
+  assert.equal(moveProblem("vm", { local_disks: [] }, true), null, "shared storage moves fine");
+  assert.equal(moveProblem("vm", { local_disks: [{ volid: "local:iso/a.iso", cdrom: 1 }] }, true), null, "a disc isn't a disk");
+  assert.match(moveProblem("vm", { local_resources: ["usb0"] }, false) ?? "", /hardware/);
 });

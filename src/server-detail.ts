@@ -151,8 +151,9 @@ export interface RawBackupStorage {
   enabled?: number;
 }
 /** What a person needs to see before restarting a server. Running jobs block the restart. */
-export function buildRebootPlan(active: Section<RawTask[]>, storages: Section<RawBackupStorage[]>) {
+export function buildRebootPlan(active: Section<RawTask[]>, storages: Section<RawBackupStorage[]>, cantMove: string[] = []) {
   return {
+    cantMove,
     busy: active.available ? active.value.map((t) => `${friendlyTask(t)}${t.id ? ` on ${t.id}` : ""}`) : [],
     busyKnown: active.available,
     backupStorages: storages.available
@@ -193,6 +194,14 @@ export interface RollingInput {
   updates: number | null;
   rebootNeeded: boolean;
   busy: string[];
+  cantMove: string[];
+}
+/** Why a running VM can't move, in plain words, or null if nothing stands in its way. */
+export function moveProblem(name: string, raw: RawMovePrecondition, hasSnapshots: boolean): string | null {
+  if ((raw.local_resources ?? []).length > 0) return `${name} uses hardware attached to its server, so it can't move.`;
+  const disks = (raw.local_disks ?? []).filter((d) => (d as { cdrom?: number }).cdrom !== 1);
+  if (hasSnapshots && disks.length > 0) return `${name} has a snapshot on its server's own storage, so it can't move while running. Delete the snapshot or shut it down first.`;
+  return null;
 }
 const versionParts = (v: string | null) => (v ?? "").split(/[.-]/).map((p) => Number(p) || 0);
 function olderFirst(a: RollingInput, b: RollingInput): number {
@@ -217,6 +226,8 @@ export function buildRollingPlan(servers: RollingInput[], quorate: Section<boole
   const unknown = servers.filter((s) => s.online && s.updates === null).map((s) => s.name);
   if (unknown.length) blocked.push(`BossMox can't read the updates on: ${unknown.join(", ")}.`);
   for (const s of servers) if (s.busy.length) blocked.push(`${s.name} is busy. Wait for this to finish: ${s.busy.join(", ")}.`);
+  // Guests only have to move off a server that's going to restart.
+  for (const s of servers) if (s.rebootNeeded && (s.updates ?? 0) > 0) blocked.push(...s.cantMove);
   const tieVote = tieBreaker.available && tieBreaker.value.State === "Connected" ? 1 : 0;
   const votes = servers.length + tieVote;
   return {

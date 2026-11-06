@@ -16,6 +16,7 @@ import {
   buildRebootPlan,
   buildRollingPlan,
   groupUpdates,
+  moveProblem,
   buildServerDetail,
   taskView,
   type RawBackupStorage,
@@ -198,18 +199,29 @@ async function loadCreatePlan(name: string, kind: "qemu" | "lxc", ticket: string
   };
 }
 
+/** Plain reasons why running VMs on a server won't be able to move off it. */
+async function moveProblems(name: string, data: Overview, ticket: string): Promise<string[]> {
+  const vms = data.vms.filter((v) => v.node === name && v.running && v.type === "qemu");
+  const found = await Promise.all(vms.map(async (v) => {
+    const raw = await pve.get<RawMovePrecondition>(`/nodes/${encodeURIComponent(name)}/qemu/${v.id}/migrate`, ticket).catch(() => ({}));
+    return moveProblem(v.name, raw, v.snapshots.length > 0);
+  }));
+  return found.filter((p): p is string => p !== null);
+}
+
 async function loadRollingPlan(ticket: string) {
   const data = await loadOverview(ticket);
   const [cluster, tieBreaker, servers] = await Promise.all([
     section(pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", ticket)),
     section(pve.get<{ State?: string }>("/cluster/config/qdevice", ticket)),
     Promise.all(data.nodes.map(async (n): Promise<RollingInput> => {
-      if (!n.online) return { name: n.name, online: false, version: null, updates: null, rebootNeeded: false, busy: [] };
+      if (!n.online) return { name: n.name, online: false, version: null, updates: null, rebootNeeded: false, busy: [], cantMove: [] };
       const base = `/nodes/${encodeURIComponent(n.name)}`;
-      const [status, updates, active] = await Promise.all([
+      const [status, updates, active, cantMove] = await Promise.all([
         section(pve.get<RawStatus>(`${base}/status`, ticket)),
         section(pve.get<RawUpdate[]>(`${base}/apt/update`, ticket)),
         section(pve.get<RawTask[]>(`${base}/tasks?source=active`, ticket)),
+        moveProblems(n.name, data, ticket),
       ]);
       const list = updates.available ? groupUpdates(updates.value) : null;
       return {
@@ -219,6 +231,7 @@ async function loadRollingPlan(ticket: string) {
         updates: list ? list.total : null,
         rebootNeeded: list?.rebootNeeded ?? false,
         busy: buildRebootPlan(active, { available: false }).busy,
+        cantMove,
       };
     })),
   ]);
@@ -635,11 +648,12 @@ const handler: http.RequestListener = async (req, res) => {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
           const base = `/nodes/${encodeURIComponent(name)}`;
-          const [active, storages] = await Promise.all([
+          const [active, storages, cantMove] = await Promise.all([
             section(pve.get<RawTask[]>(`${base}/tasks?source=active`, session.ticket)),
             section(pve.get<RawBackupStorage[]>(`${base}/storage?content=backup`, session.ticket)),
+            overview(session).then((data) => moveProblems(name, data, session.ticket)),
           ]);
-          return json(res, 200, buildRebootPlan(active, storages));
+          return json(res, 200, buildRebootPlan(active, storages, cantMove));
         }
         if (route === "/api/server") {
           const name = params.get("name") ?? "";

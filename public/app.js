@@ -454,6 +454,7 @@ async function startRestart(server) {
     <p id="rwords">${guests.length ? (canMove ? MOVE_WORDS : STOP_WORDS) : "Nothing is running on this server."}</p>
     ${blocked ? `<p class="loginerr" style="margin-top:12px">Wait for this to finish first: ${esc(plan.busy.join(", "))}.</p>` : ""}
     ${plan.busyKnown ? "" : `<p class="loginerr" style="margin-top:12px">BossMox can't tell whether jobs are running on this server.</p>`}
+    ${canMove ? plan.cantMove.map((m) => `<p class="loginerr" style="margin-top:12px">${esc(m)}</p>`).join("") : ""}
     ${guests.length ? `<div class="restartlist">${guests.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state">${v.startsAtBoot ? "Starts again by itself" : "Stays off until started"}</span></div>`).join("")}</div>` : ""}
     ${canMove ? `<label class="field restartname"><span>Before restarting</span><select id="rmove"><option value="">Shut them down, don't move them</option>${others.map((n) => `<option value="${esc(n)}" selected>Move everything to ${esc(n)}</option>`).join("")}</select></label>` : ""}
     ${guests.length && plan.backupStorages.length ? `<div class="restartbackup"><select id="rstore" aria-label="Backup storage">${plan.backupStorages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select><button class="btn" data-backup="${esc(server)}">Back up first</button></div>` : ""}
@@ -655,11 +656,17 @@ async function startRolling() {
   if (plan.blocked.length) return dialog(`<h3>Not ready to update</h3>${plan.blocked.map((b) => `<p class="loginerr">${esc(b)}</p>`).join("")}${closeRow}`);
   if (!plan.servers.length) return dialog(`<h3>Every server is up to date</h3><p>Nothing is waiting to install.</p>${closeRow}`);
   S.rollingPlan = plan;
+  const restarts = plan.servers.filter((v) => v.rebootNeeded).length;
+  const how = !restarts
+    ? "BossMox opens the updater on one server at a time, in this order, for you to approve. Nothing here needs a restart, so everything stays where it is and keeps running."
+    : restarts === plan.servers.length
+      ? "BossMox updates one server at a time, in this order. It moves everything off, opens the updater for you to approve, restarts the server, then moves everything back."
+      : "BossMox updates one server at a time, in this order, and opens the updater for you to approve. A server that needs a restart has everything moved off first and moved back after. The others just update.";
   dialog(`<h3>Update ${plan.servers.length === 1 ? esc(plan.servers[0].name) : `all ${plan.servers.length} servers`}?</h3>
-    <p>BossMox updates one server at a time, in this order. It moves everything off, opens the updater for you to approve, restarts the server, then moves everything back. If any step fails, it stops there.</p>
-    <div class="restartlist">${plan.servers.map((v) => `<div class="snap"><div>${esc(v.name)}<small>Version ${esc(v.version ?? "unknown")}</small></div><span class="state">${v.updates} ${v.updates === 1 ? "update" : "updates"}</span></div>`).join("")}</div>
-    ${plan.keepsMajority ? "" : `<div class="advice" style="margin-top:12px"><div><b>This cluster has only ${plan.votes} votes</b>Everything keeps running, but nothing can be started, stopped or changed while a server restarts.</div></div>`}
-    <label class="field restartname"><span>Type reboot to confirm</span><input id="rname" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <p>${how} If any step fails, it stops there.</p>
+    <div class="restartlist">${plan.servers.map((v) => `<div class="snap"><div>${esc(v.name)}<small>Version ${esc(v.version ?? "unknown")}</small></div><span class="state">${v.updates} ${v.updates === 1 ? "update" : "updates"}, ${v.rebootNeeded ? "restarts" : "no restart"}</span></div>`).join("")}</div>
+    ${plan.keepsMajority || !restarts ? "" : `<div class="advice" style="margin-top:12px"><div><b>This cluster has only ${plan.votes} votes</b>Everything keeps running, but nothing can be started, stopped or changed while a server restarts.</div></div>`}
+    <label class="field restartname"><span>Type confirm to start</span><input id="rname" data-word="confirm" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-rollinggo="1" disabled>Start updating</button></div>`);
   $("#rname").focus();
 }
@@ -684,8 +691,12 @@ async function rollingStep(rolling) {
     return rollingStop(plan, `${server} wasn't updated`, err.message || "BossMox lost contact with Proxmox.");
   }
   if (check.blocked.length) return rollingStop(plan, `${server} wasn't updated`, check.blocked.join(" "));
-  if (!check.servers.some((v) => v.name === server)) return rollingNext(plan);
-  const guests = S.data.vms.filter((v) => v.node === server && v.running);
+  const entry = check.servers.find((v) => v.name === server);
+  if (!entry) return rollingNext(plan);
+  plan.restart = entry.rebootNeeded;
+  if (plan.restart) rolling.restarted = (rolling.restarted ?? 0) + 1;
+  // Only a restart takes guests down, so without one they stay where they are.
+  const guests = plan.restart ? S.data.vms.filter((v) => v.node === server && v.running) : [];
   plan.guests = guests.map((v) => ({ id: v.id, name: v.name, auto: v.startsAtBoot }));
   if (guests.length) {
     const others = S.data.nodes.filter((n) => n.online && n.name !== server).map((n) => n.name);
@@ -714,7 +725,7 @@ function rollingInstall(plan, problem = "") {
   S.watching = true;
   dialog(`<h3>${esc(rollingTitle(plan))}</h3>
     ${problem ? `<p class="loginerr">${esc(problem)}</p>` : ""}
-    <p>${plan.guests.length ? `Everything has moved to ${esc(plan.target)}.` : "Nothing is running on this server."} Open the updater, check the list, then type Y and press Enter. When it finishes, close its window and BossMox restarts ${esc(plan.server)}.</p>
+    <p>${plan.guests.length ? `Everything has moved to ${esc(plan.target)}. ` : ""}Open the updater, check the list, then type Y and press Enter. When it finishes, close its window${plan.restart ? ` and BossMox restarts ${esc(plan.server)}` : ""}.</p>
     <div class="row-end"><button class="btn" data-rollingstop="1">Stop here</button><button class="btn primary" data-rollinginstall="1">Open the updater</button></div>`);
 }
 async function rollingAfterInstall(plan) {
@@ -726,7 +737,8 @@ async function rollingAfterInstall(plan) {
     if (err.message === "signed out") return;
   }
   if (left === undefined) return rollingInstall(plan, `BossMox couldn't confirm the updates installed on ${plan.server}, so it hasn't restarted it.`);
-  if (left > 0) return rollingInstall(plan, `${left} ${left === 1 ? "update is" : "updates are"} still waiting on ${plan.server}, so it hasn't been restarted.`);
+  if (left > 0) return rollingInstall(plan, `${left} ${left === 1 ? "update is" : "updates are"} still waiting on ${plan.server}${plan.restart ? ", so it hasn't been restarted" : ""}.`);
+  if (!plan.restart) return rollingNext(plan);
   try {
     await sendRestart(plan);
   } catch (err) {
@@ -784,7 +796,8 @@ function rollingNext(plan) {
   if (rolling.index < rolling.servers.length) return rollingStep(rolling);
   saveReboot(null);
   S.watching = false;
-  dialog(`<h3>${rolling.servers.length === 1 ? `${esc(plan.server)} is updated` : `All ${rolling.servers.length} servers are updated`}</h3><p>Each one restarted, and everything that moved is back where it started.</p>${closeRow}`);
+  const done = !rolling.restarted ? "Nothing needed a restart, so everything kept running." : rolling.restarted === rolling.servers.length ? "Each one restarted, and everything that moved is back where it started." : "The ones that needed it restarted, and everything that moved is back where it started.";
+  dialog(`<h3>${rolling.servers.length === 1 ? `${esc(plan.server)} is updated` : `All ${rolling.servers.length} servers are updated`}</h3><p>${done}</p>${closeRow}`);
   renderHealth();
   loadServer();
 }
@@ -1226,7 +1239,7 @@ function showTerminal(server, id, title, help, isConsole) {
       recent = (recent + decoder.decode(bytes)).slice(-200);
       if (recent.includes("starting shell") && term) {
         term.done = true;
-        $(".termhelp").textContent = savedReboot()?.rolling ? `The updater has finished on ${server}. Check the output, then close this window and BossMox restarts ${server}.` : `The updater has finished on ${server}. Check the output, then close this window.`;
+        $(".termhelp").textContent = savedReboot()?.rolling && savedReboot().restart ? `The updater has finished on ${server}. Check the output, then close this window and BossMox restarts ${server}.` : `The updater has finished on ${server}. Check the output, then close this window.`;
       }
     };
     socket.onclose = () => {
