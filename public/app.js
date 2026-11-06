@@ -237,6 +237,10 @@ const SERVER_TAB = {
     const on = S.data?.vms.filter((v) => v.node === d.name) ?? [];
     const a = d.summary;
     return `
+    ${(() => {
+      const m = movedGuests(d.name);
+      return m ? `<div class="advice"><div><b>${m.guests.length} moved to ${esc(m.target)} for a restart</b>${esc(m.guests.map((g) => g.name).join(", "))}</div><button class="btn" data-moveback="${esc(d.name)}">Move everything back</button></div>` : "";
+    })()}
     ${d.channel && !d.channel.ok ? `<div class="advice"><div><b>Updates can't download</b>${esc(d.channel.note)}</div></div>` : ""}
     ${d.updates?.total ? `<div class="advice"><div><b>${d.updates.total} ${d.updates.total === 1 ? "update is" : "updates are"} waiting</b>${d.updates.rebootNeeded ? "This includes a new kernel, so the server will need a restart." : "No restart should be needed."}</div><button class="btn" data-servertab="updates">See updates</button></div>` : ""}
     ${a ? `<div class="facts">
@@ -375,6 +379,50 @@ function saveReboot(value) {
 }
 const MOVE_WORDS = "Everything below moves to the server you pick. If anything can't move, the restart is cancelled. If BossMox is one of them, it reconnects after the move and you'll sign in again.";
 const STOP_WORDS = "Proxmox shuts down everything below first, waits for it all to stop, then restarts the server. This usually takes a few minutes. If BossMox runs on this server, it goes down too and this page will wait for it.";
+/* Guests moved off for a restart, remembered in this browser so they can be sent home. */
+const MOVED_KEY = "bossmox-moved";
+let movedMemory = {};
+function allMoved() {
+  try {
+    return JSON.parse(localStorage.getItem(MOVED_KEY) ?? "{}");
+  } catch {
+    return movedMemory;
+  }
+}
+function saveMoved(value) {
+  movedMemory = value;
+  try {
+    localStorage.setItem(MOVED_KEY, JSON.stringify(value));
+  } catch { /* memory copy still works */ }
+}
+function setMoved(server, entry) {
+  const all = allMoved();
+  if (entry) all[server] = entry;
+  else delete all[server];
+  saveMoved(all);
+}
+/** Only guests still sitting on the server they were moved to can go back. */
+function movedGuests(server) {
+  const entry = allMoved()[server];
+  if (!entry || !S.data) return null;
+  const here = new Map(S.data.vms.map((v) => [v.id, v]));
+  const guests = entry.guests.filter((g) => here.get(g.id)?.node === entry.target);
+  return guests.length ? { target: entry.target, guests } : null;
+}
+function askMoveBack(server) {
+  const m = movedGuests(server);
+  if (!m) return;
+  const names = m.guests.map((g) => g.name).join(", ");
+  confirmAction(`Move ${m.guests.length} back to ${server}?`, `${names} will move from ${m.target} back to ${server}.`, `Move back to ${server}`, () => {
+    const ids = m.guests.map((g) => g.id).join(",");
+    runAction("move-all", m.target, `Moving back to ${server}`, { target: server, guests: ids }, async () => {
+      await refresh();
+      if (!movedGuests(server)) setMoved(server, null);
+      renderServerDetail();
+    });
+  });
+}
+
 async function startRestart(server) {
   let plan;
   try {
@@ -385,6 +433,7 @@ async function startRestart(server) {
   const guests = (S.data?.vms ?? []).filter((v) => v.node === server && v.running);
   const blocked = plan.busy.length > 0;
   const others = (S.data?.nodes ?? []).filter((n) => n.online && n.name !== server).map((n) => n.name);
+  if (allMoved()[server] && !movedGuests(server)) setMoved(server, null);
   const canMove = guests.length > 0 && others.length > 0;
   S.restart = { server, guests };
   dialog(`<h3>Restart ${esc(server)}?</h3>
@@ -456,7 +505,7 @@ function drawRestart(plan, state, title, note, done) {
   dialog(`<h3>${esc(title)}</h3><p>${esc(note || STAGE_NOTE[stage])}</p><div class="restartlist">
     ${row(plan.server, state.back ? true : done ? false : null, serverWord)}
     ${plan.guests.map(guestRow).join("")}
-    </div><div class="row-end"><button class="btn" data-restartclose="1">${done ? "Close" : "Stop watching"}</button></div>`);
+    </div><div class="row-end"><button class="btn" data-restartclose="1">${done ? "Close" : "Stop watching"}</button>${done && plan.target && state.back ? `<button class="btn primary" data-moveback="${esc(plan.server)}">Move everything back</button>` : ""}</div>`);
 }
 async function watchRestart() {
   const plan = savedReboot();
@@ -513,6 +562,7 @@ async function watchRestart() {
       const note = allBack
         ? plan.target ? `Everything is running. The moved items stay on ${plan.target}. Use Move to bring them back.` : off.length ? "Everything set to start by itself is running. The items marked off need starting by hand." : "Everything is running again."
         : state.back ? "These haven't started yet. Check them before relying on this server." : "It's been 15 minutes. Someone may need to look at the server itself.";
+      if (plan.target) setMoved(plan.server, { target: plan.target, guests: plan.guests.map((g) => ({ id: g.id, name: g.name })) });
       drawRestart(plan, state, title, note, true);
       saveReboot(null);
       S.watching = false;
@@ -662,6 +712,10 @@ document.addEventListener("click", (e) => {
     return;
   }
   if (d.restartserver) return startRestart(d.restartserver);
+  if (d.moveback) {
+    closeDialog();
+    return askMoveBack(d.moveback);
+  }
   if (d.move) return startMove(+d.move);
   if (d.movego) {
     const { v } = S.move;
