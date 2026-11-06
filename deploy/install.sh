@@ -157,8 +157,9 @@ qm set "$VMID" --ciuser alpine --ipconfig0 "ip=${ADDRESS:-dhcp}${GATEWAY:+,gw=$G
 qm start "$VMID" >/dev/null
 
 echo "Starting it. The first boot installs what BossMox needs, which takes a few minutes."
+# The agent doesn't answer until partway through the first boot, and that's not a failure.
 guest_file() {
-  qm guest exec "$VMID" --timeout 10 -- cat "$1" 2>/dev/null \
+  { qm guest exec "$VMID" --timeout 10 -- cat "$1" 2>/dev/null || true; } \
     | python3 -c 'import json,sys
 try: print(json.load(sys.stdin).get("out-data","").strip())
 except Exception: pass'
@@ -168,8 +169,10 @@ for _ in $(seq 1 120); do
   sleep 5
   CODE=$(guest_file /var/lib/bossmox/setup.code)
   if [ -n "$CODE" ]; then
-    ADDR=$(qm guest cmd "$VMID" network-get-interfaces 2>/dev/null | python3 -c 'import json,sys
-for i in json.load(sys.stdin):
+    ADDR=$({ qm guest cmd "$VMID" network-get-interfaces 2>/dev/null || true; } | python3 -c 'import json,sys
+try: found = json.load(sys.stdin)
+except Exception: found = []
+for i in found:
     if i.get("name") == "lo": continue
     for a in i.get("ip-addresses", []):
         if a.get("ip-address-type") == "ipv4":
