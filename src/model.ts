@@ -164,7 +164,7 @@ export function buildOverview(
     })
     .map((r) => ({
       name: r.storage ?? "unknown",
-      node: r.shared ? "All servers" : (r.node ?? ""),
+      node: r.shared ? "All nodes" : (r.node ?? ""),
       online: r.status === "available",
       usedGb: gb(r.disk),
       totalGb: gb(r.maxdisk),
@@ -184,6 +184,23 @@ export function buildOverview(
       issues.push({ kind: "storage-full", title: `${s.name} is ${s.usedPct}% full`, detail: `${s.freeGb} GB left on ${s.node}.` });
     }
   }
-  return { updatedAt: now.toISOString(), nodes, vms, storage, issues };
+  const online = nodes.filter((n) => n.online);
+  const coreCount = online.reduce((sum, n) => sum + n.cores, 0);
+  const memUsedGb = online.reduce((sum, n) => sum + n.memUsedGb, 0);
+  const memTotalGb = online.reduce((sum, n) => sum + n.memTotalGb, 0);
+  const diskUsedGb = storage.filter((s) => s.online).reduce((sum, s) => sum + s.usedGb, 0);
+  const diskTotalGb = storage.filter((s) => s.online).reduce((sum, s) => sum + s.totalGb, 0);
+  const cluster = {
+    // A busy small node shouldn't count the same as a busy big one.
+    cpuPct: coreCount ? Math.round(online.reduce((sum, n) => sum + n.cpuPct * n.cores, 0) / coreCount) : 0,
+    cores: coreCount,
+    memPct: pct(memUsedGb, memTotalGb),
+    memUsedGb: Math.round(memUsedGb * 10) / 10,
+    memTotalGb: Math.round(memTotalGb * 10) / 10,
+    diskPct: pct(diskUsedGb, diskTotalGb),
+    diskUsedGb: Math.round(diskUsedGb * 10) / 10,
+    diskTotalGb: Math.round(diskTotalGb * 10) / 10,
+  };
+  return { updatedAt: now.toISOString(), nodes, vms, storage, issues, cluster };
 }
 export type Overview = ReturnType<typeof buildOverview>;

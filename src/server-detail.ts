@@ -119,8 +119,39 @@ const TASKS: Record<string, string> = {
   srvstop: "Stop service",
   vncshell: "Shell session",
   termproxy: "Shell session",
+  vzmigrate: "Move container",
+  vzreboot: "Restart container",
+  vzsnapshot: "Take snapshot",
+  vzrollback: "Roll back snapshot",
+  vzdelsnapshot: "Delete snapshot",
+  qmdelsnapshot: "Delete snapshot",
+  qmrestore: "Restore VM",
+  vzrestore: "Restore container",
+  migrateall: "Move everything",
+  download: "Download",
 };
-export const friendlyTask = (t: RawTask) => TASKS[t.type ?? ""] ?? t.type ?? "Task";
+export const friendlyTask = (t: RawTask) => (Object.hasOwn(TASKS, t.type ?? "") ? TASKS[t.type as string] : t.type) ?? "Task";
+
+const QUIET_TASKS = new Set(["vncproxy", "vncshell", "termproxy", "spiceproxy"]);
+/** What the whole cluster is doing: running work first, then the most recent. Console sessions would drown it out. */
+export function buildTaskFeed(tasks: (RawTask & { node?: string })[], guests: { id: number; name: string }[], limit = 6) {
+  const names = new Map(guests.map((g) => [String(g.id), g.name]));
+  const shown = tasks.filter((t) => !QUIET_TASKS.has(t.type ?? "")).map((t) => ({
+    upid: t.upid,
+    node: t.node ?? "",
+    what: friendlyTask(t),
+    target: names.get(t.id ?? "") ?? t.id ?? "",
+    who: t.user ?? "",
+    startedAt: t.starttime ?? null,
+    endedAt: t.endtime ?? null,
+    result: taskResult(t),
+  }));
+  const newest = (a: { startedAt: number | null }, b: { startedAt: number | null }) => (b.startedAt ?? 0) - (a.startedAt ?? 0);
+  const running = shown.filter((t) => t.result === "running").sort(newest);
+  const finished = shown.filter((t) => t.result !== "running").sort(newest);
+  return { running: running.length, items: [...running, ...finished].slice(0, Math.max(limit, running.length)) };
+}
+export type TaskFeed = ReturnType<typeof buildTaskFeed>;
 
 export function taskResult(t: RawTask): "running" | "ok" | "warning" | "failed" {
   if (!t.status && !t.endtime) return "running";

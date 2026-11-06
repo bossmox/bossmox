@@ -60,3 +60,22 @@ test("refuses to serve a network without HTTPS", () => {
   assert.equal(loadConfig({ ...base, BOSSMOX_ALLOW_HTTP: "1" }).allowHttp, true);
   assert.equal(loadConfig({ PVE_URL: "https://192.0.2.1:8006" }).host, "127.0.0.1");
 });
+
+test("cluster usage weighs nodes by size and skips offline ones", () => {
+  const view = buildOverview([
+    { type: "node", node: "big", status: "online", cpu: 0.1, maxcpu: 30, mem: 8 * 1024 ** 3, maxmem: 32 * 1024 ** 3 },
+    { type: "node", node: "small", status: "online", cpu: 1, maxcpu: 2, mem: 4 * 1024 ** 3, maxmem: 8 * 1024 ** 3 },
+    { type: "node", node: "gone", status: "offline", cpu: 0, maxcpu: 64, mem: 0, maxmem: 512 * 1024 ** 3 },
+  ], new Map(), []);
+  assert.equal(view.cluster.cores, 32);
+  assert.equal(view.cluster.cpuPct, 16);
+  assert.equal(view.cluster.memUsedGb, 12);
+  assert.equal(view.cluster.memTotalGb, 40);
+  assert.equal(view.cluster.memPct, 30);
+});
+
+test("shared storage counts once in cluster usage", () => {
+  const nas = { type: "storage", storage: "nas", shared: 1, status: "available", disk: 10 * 1024 ** 3, maxdisk: 100 * 1024 ** 3 };
+  const view = buildOverview([{ ...nas, node: "a" }, { ...nas, node: "b" }], new Map(), []);
+  assert.equal(view.cluster.diskTotalGb, 100);
+});

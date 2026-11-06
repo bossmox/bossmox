@@ -28,7 +28,49 @@ $("#icons").innerHTML = Object.entries(APPS).filter(([, a]) => !a.noIcon).map(([
   <button class="icon" data-open="${k}"><span class="tile" style="background:${a.color}"><svg viewBox="0 0 32 32">${GLYPHS[k]}</svg></span>${a.title}</button>`).join("");
 
 const count = (n) => ["No things", "One thing", "Two things", "Three things"][n] ?? `${n} things`;
+function overallBars(c, nodeCount) {
+  const size = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} TB` : `${Math.round(n * 10) / 10} GB`);
+  const bar = (label, value, pct) => `<div><span>${label}<small>${value}</small></span><div class="meter"><i style="width:${Math.min(pct, 100)}%"></i></div></div>`;
+  return `<div class="overall" aria-label="${nodeCount === 1 ? "This node" : "Whole cluster"}">
+    ${bar(nodeCount === 1 ? "Processor" : "Cluster processor", `${c.cpuPct}% of ${c.cores} cores`, c.cpuPct)}
+    ${bar(nodeCount === 1 ? "Memory" : "Cluster memory", `${size(c.memUsedGb)} of ${size(c.memTotalGb)}`, c.memPct)}
+    ${bar(nodeCount === 1 ? "Storage" : "Cluster storage", `${size(c.diskUsedGb)} of ${size(c.diskTotalGb)}`, c.diskPct)}
+  </div>`;
+}
+function ago(t) {
+  const s = Math.max(0, Math.round(Date.now() / 1000 - (t ?? 0)));
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} hr ago`;
+  return when(t);
+}
+function renderTaskFeed() {
+  const box = $("#taskfeed");
+  const feed = S.data?.tasks;
+  box.hidden = !feed;
+  if (!feed) return;
+  const dot = { running: "busy", ok: "running", warning: "warn", failed: "warn" };
+  const word = { running: "Running", ok: "Finished", warning: "Finished with warnings", failed: "Failed" };
+  const row = (t) => `<button class="taskrow ${t.result === "failed" ? "bad" : ""}" data-taskview="${esc(t.upid)}" data-tasknode="${esc(t.node)}"><span class="dot ${dot[t.result]}"></span><span><b>${esc(t.what)}${t.target ? `: ${esc(t.target)}` : ""}</b><small>${word[t.result]} on ${esc(t.node)}, ${esc(ago(t.result === "running" ? t.startedAt : t.endedAt ?? t.startedAt))}</small></span></button>`;
+  box.innerHTML = `<h2>Tasks</h2><p class="sub">${feed.running ? `${feed.running} running now` : "Nothing running now"}</p>
+    ${feed.items.length ? `<div class="taskrows">${feed.items.map(row).join("")}</div>` : `<p class="meta">Nothing has run recently.</p>`}`;
+}
+async function viewTask(node, upid) {
+  const title = S.data?.tasks.items.find((t) => t.upid === upid);
+  const heading = title ? `${title.what}${title.target ? `: ${title.target}` : ""}` : "Task";
+  try {
+    const view = await signal(`api/task?server=${encodeURIComponent(node)}&task=${encodeURIComponent(upid)}`);
+    const words = !view.finished ? "Still running." : { ok: "Finished.", warning: "Finished with warnings.", failed: `It failed. ${view.message}` }[view.result];
+    dialog(`<h3>${esc(heading)}</h3><p class="${view.result === "failed" ? "loginerr" : ""}">${esc(words)}</p>
+      ${view.lines?.length ? `<pre class="tasklog">${esc(view.lines.join("\n"))}</pre>` : ""}${closeRow}`);
+    const log = $("#dialog .tasklog");
+    if (log) log.scrollTop = log.scrollHeight;
+  } catch (err) {
+    if (err.message !== "signed out") dialog(`<h3>${esc(heading)}</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+}
 function renderHealth() {
+  renderTaskFeed();
   const h = $("#health");
   if (!S.data) {
     h.innerHTML = S.failed
@@ -44,6 +86,7 @@ function renderHealth() {
   h.innerHTML = `
     <h1>${issues.length ? `${count(issues.length)} worth a look` : "Everything looks good"}</h1>
     <p class="sub">${up} of ${nodes.length} ${nodes.length === 1 ? "node" : "nodes"} online. ${run} of ${vms.length} ${vms.length === 1 ? "VM" : "VMs"} running, and ${freeText} free.</p>
+    ${overallBars(S.data.cluster, nodes.length)}
     <div class="rack">${nodes.map((n) => {
       const on = vms.filter((v) => v.node === n.name);
       return `<button class="ru" data-server="${esc(n.name)}"><span>${esc(n.name)}</span>
@@ -1531,6 +1574,7 @@ document.addEventListener("click", (e) => {
   if (d.guestsave) return saveGuestEdit();
   if (d.discadd) return askDisc();
   if (d.discgo) return downloadDisc();
+  if (d.taskview) return viewTask(d.tasknode, d.taskview);
   if (d.netserver) {
     S.netServer = d.netserver;
     return loadNetwork();

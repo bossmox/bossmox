@@ -15,6 +15,7 @@ import {
   buildMovePlan,
   buildRebootPlan,
   buildRollingPlan,
+  buildTaskFeed,
   groupUpdates,
   moveProblem,
   buildServerDetail,
@@ -29,6 +30,7 @@ import {
   type RawTaskStatus,
   type RawUpdate,
   type RollingInput,
+  type TaskFeed,
   type Section,
   type ServerDetail,
 } from "./server-detail.js";
@@ -72,7 +74,8 @@ setInterval(() => void sessions.tick().catch((err: Error) => console.error("Sess
 const secureCookie = Boolean(config.tls) || config.behindProxy;
 // The __Host- prefix stops a sibling site or another port from setting this cookie over the real one.
 const COOKIE = secureCookie ? "__Host-bossmox_session" : "bossmox_session";
-const cache = new WeakMap<Session, { at: number; value: Promise<Overview> }>();
+type Loaded = Overview & { tasks: TaskFeed };
+const cache = new WeakMap<Session, { at: number; value: Promise<Loaded> }>();
 
 async function fetchGuest(r: RawResource, ticket: string): Promise<[number, Guest]> {
   const base = `/nodes/${encodeURIComponent(r.node ?? "")}/${r.type}/${r.vmid}`;
@@ -86,18 +89,20 @@ async function fetchGuest(r: RawResource, ticket: string): Promise<[number, Gues
   return [r.vmid ?? 0, guest];
 }
 
-async function loadOverview(ticket: string): Promise<Overview> {
+async function loadOverview(ticket: string): Promise<Loaded> {
   const resources = await pve.get<RawResource[]>("/cluster/resources", ticket);
   const guests = resources.filter((r) => (r.type === "qemu" || r.type === "lxc") && !r.template && r.status !== "unknown");
-  const [details, notBackedUp] = await Promise.all([
+  const [details, notBackedUp, tasks] = await Promise.all([
     Promise.all(guests.map((g) => fetchGuest(g, ticket))),
     // Limited accounts can't read this report, and that shouldn't blank the whole screen.
     pve.get<{ vmid: number }[]>("/cluster/backup-info/not-backed-up", ticket).catch(() => []),
+    pve.get<(RawTask & { node?: string })[]>("/cluster/tasks", ticket).catch(() => []),
   ]);
-  return buildOverview(resources, new Map(details), notBackedUp);
+  const view = buildOverview(resources, new Map(details), notBackedUp);
+  return { ...view, tasks: buildTaskFeed(tasks, view.vms) };
 }
 
-function overview(session: Session): Promise<Overview> {
+function overview(session: Session): Promise<Loaded> {
   const hit = cache.get(session);
   if (hit && Date.now() - hit.at <= CACHE_MS) return hit.value;
   const value = loadOverview(session.ticket);

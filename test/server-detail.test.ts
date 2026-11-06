@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildMovePlan, buildRebootPlan, buildRollingPlan, moveProblem, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
+import { buildMovePlan, buildRebootPlan, buildRollingPlan, buildTaskFeed, moveProblem, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
 
 const repo = (uri: string, component: string, enabled = true): RawRepositories => ({
   files: [{ repositories: [{ Enabled: enabled, URIs: [uri], Components: [component] }] }],
@@ -149,4 +149,37 @@ test("a snapshot on local storage stops a live move, and says so", () => {
   assert.equal(moveProblem("vm", { local_disks: [] }, true), null, "shared storage moves fine");
   assert.equal(moveProblem("vm", { local_disks: [{ volid: "local:iso/a.iso", cdrom: 1 }] }, true), null, "a disc isn't a disk");
   assert.match(moveProblem("vm", { local_resources: ["usb0"] }, false) ?? "", /hardware/);
+});
+
+const task = (upid: string, type: string, starttime: number, more = {}) => ({ upid, type, starttime, status: "OK", endtime: starttime + 5, node: "a", ...more });
+
+test("the task feed puts running work first, then the newest", () => {
+  const feed = buildTaskFeed([
+    task("old", "aptupdate", 100),
+    task("new", "vzdump", 300),
+    task("live", "qmigrate", 200, { status: undefined, endtime: undefined }),
+  ], []);
+  assert.deepEqual(feed.items.map((t) => t.upid), ["live", "new", "old"]);
+  assert.equal(feed.running, 1);
+});
+
+test("the task feed leaves out console sessions and names guests", () => {
+  const feed = buildTaskFeed([
+    task("a", "vncproxy", 300, { id: "300" }),
+    task("b", "vncshell", 290),
+    task("c", "qmstart", 200, { id: "300" }),
+    task("d", "qmstart", 100, { id: "999" }),
+  ], [{ id: 300, name: "tiny-vm" }]);
+  assert.deepEqual(feed.items.map((t) => t.target), ["tiny-vm", "999"], "a deleted guest keeps its number");
+  assert.equal(feed.items[0]?.what, "Start VM");
+});
+
+test("the task feed shows every running task, however many", () => {
+  const live = Array.from({ length: 9 }, (_, i) => task(`r${i}`, "vzdump", i, { status: undefined, endtime: undefined }));
+  assert.equal(buildTaskFeed([...live, task("x", "aptupdate", 50)], []).items.length, 9);
+  assert.equal(buildTaskFeed(Array.from({ length: 20 }, (_, i) => task(`f${i}`, "vzdump", i)), []).items.length, 6);
+});
+
+test("a failed task shows as failed", () => {
+  assert.equal(buildTaskFeed([task("x", "qmshutdown", 1, { status: "got timeout" })], []).items[0]?.result, "failed");
 });
