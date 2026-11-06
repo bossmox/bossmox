@@ -275,8 +275,10 @@ const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w
 const POWER = new Set(["start", "shutdown", "reboot", "stop"]);
 const MAX_UPLOAD = 200 * 1024 ** 3;
 const FULL_LOG = 20000;
-const ESC_WINDOW_MS = 8000;
-const ESC_GAP_MS = 1200;
+const UEFI_WINDOW_MS = 8000;
+const UEFI_GAP_MS = 1200;
+const BIOS_SETTLE_MS = 8000;
+const BIOS_ESC_AFTER_MS = 1500;
 const UPLOAD_NAME = /^[\w.-]{1,200}\.(iso|img)$/i;
 
 /** Turns a hardware rule into a plain 400, and reads the guest's settings the rule needs. */
@@ -410,29 +412,48 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     }
   },
   /**
-   * Proxmox has no "stop at the boot menu" setting, so this starts the VM and presses Esc while the logo is up.
-   * It keeps pressing for a few seconds, because how long the logo takes to appear varies.
+   * Proxmox has no "stop at the boot menu" setting, so this presses the key at the right moment. BIOS opens its
+   * menu on Esc and also closes it on Esc, so it gets exactly one press. The moment is only dependable after a
+   * reset, so a shut-down VM is started and then reset. UEFI ignores repeats of F2, so it's pressed throughout.
    */
   "guest-boot-menu": async (name, who, body) => {
     const { path } = guestPath(name, { ...body, type: "qemu" });
-    // A running VM gets a hard reset, because a soft restart depends on the system inside and can take minutes.
-    const current = await pve.get<{ status?: string }>(`${path}/status/current`, who.ticket);
-    const task = await pve.post<string | null>(`${path}/status/${current.status === "running" ? "reset" : "start"}`, who);
-    const taskPath = `/nodes/${encodeURIComponent(name)}/tasks/${encodeURIComponent(task ?? "")}/status`;
-    for (let i = 0; task && i < 60; i++) {
-      const status = await pve.get<RawTaskStatus>(taskPath, who.ticket);
-      if (status.status === "stopped") {
-        if (status.exitstatus !== "OK") throw new AuthError(400, status.exitstatus ?? "It wouldn't start.");
-        break;
+    const [current, config] = await Promise.all([pve.get<{ status?: string }>(`${path}/status/current`, who.ticket), pve.get<RawConfig>(`${path}/config`, who.ticket)]);
+    const uefi = config.bios === "ovmf";
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const reset = () => pve.post<string | null>(`${path}/status/reset`, who);
+    if (current.status === "running") await reset();
+    else {
+      const task = await pve.post<string>(`${path}/status/start`, who);
+      const taskPath = `/nodes/${encodeURIComponent(name)}/tasks/${encodeURIComponent(task)}/status`;
+      for (let i = 0; i < 60; i++) {
+        const status = await pve.get<RawTaskStatus>(taskPath, who.ticket);
+        if (status.status === "stopped") {
+          if (status.exitstatus !== "OK") throw new AuthError(400, status.exitstatus ?? "It wouldn't start.");
+          break;
+        }
+        await wait(250);
       }
-      await new Promise((r) => setTimeout(r, 250));
+      // Proxmox doesn't answer for a VM that's only just started, so it gets a few seconds before the reset.
+      await wait(BIOS_SETTLE_MS);
+      for (let i = 0; ; i++) {
+        const done = await reset().then(() => true, () => false);
+        if (done) break;
+        if (i === 12) throw new AuthError(400, "It started, but wouldn't restart to the boot menu.");
+        await wait(1000);
+      }
     }
-    // A VM still starting can refuse a key, which only means pressing again.
-    const until = Date.now() + ESC_WINDOW_MS;
-    while (Date.now() < until) {
-      await pve.put<null>(`${path}/sendkey`, who, { key: "esc" }).catch(() => null);
-      await new Promise((r) => setTimeout(r, ESC_GAP_MS));
+    if (uefi) {
+      // A VM still starting can refuse a key, which only means pressing again.
+      const until = Date.now() + UEFI_WINDOW_MS;
+      while (Date.now() < until) {
+        await pve.put<null>(`${path}/sendkey`, who, { key: "f2" }).catch(() => null);
+        await wait(UEFI_GAP_MS);
+      }
+      return null;
     }
+    await wait(BIOS_ESC_AFTER_MS);
+    await pve.put<null>(`${path}/sendkey`, who, { key: "esc" });
     return null;
   },
   "guest-disc": async (name, who, body) => {

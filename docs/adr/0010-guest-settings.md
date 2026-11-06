@@ -17,7 +17,16 @@ Date: 2026-11-06. Status: accepted.
 
 ## Boot menu button
 
-Proxmox has no "force BIOS setup on next boot" setting. **Force BIOS** is on the console bar, and on a shut-down VM's own page. It presses Esc about once every 1.2 seconds for 8 seconds after starting the VM. A running VM gets a hard reset first, after asking, because a soft restart depends on the system inside and can take minutes. The console stays open throughout. Faster presses failed: a VM still starting refuses keys, so refused presses are ignored and it just keeps pressing. Results on nested test VMs: from a shut-down start, BIOS 5 of 5 and UEFI 3 of 4; from a reset at the console, BIOS 3 of 3 and UEFI 3 of 3. A miss does no harm, the VM just boots normally. UEFI lands on the boot menu, where EFI Firmware Setup is one of the choices.
+Proxmox has no "force BIOS setup on next boot" setting, so BossMox presses the key itself. **Force BIOS** is on the console bar for running VMs, and **Boot menu** is on a shut-down VM's page, greyed out while it runs.
+
+- A running VM gets a hard reset, after asking, because a soft restart depends on the system inside.
+- A shut-down VM is started, given 8 seconds, then reset. Proxmox doesn't answer reliably for a VM that's only just started, and key timing is only dependable after a reset.
+- BIOS opens its menu on Esc and also closes it on Esc, so it gets exactly one press, 1.5 seconds after the reset. One press landed anywhere from 0.5 to 3 seconds after a reset.
+- UEFI ignores repeats of F2, so F2 is pressed about every 1.2 seconds for 8 seconds.
+
+The first version pressed Esc repeatedly. It passed on test VMs with nothing bootable, then failed for Rocky 4 out of 4 times on a VM with a real system, because the next Esc closed the menu and it carried on from disk. Test boot behaviour on something that can actually boot.
+
+Results through the app on bootable test VMs: running BIOS 5 of 5, running UEFI 5 of 5, shut-down BIOS 5 of 5, shut-down UEFI 5 of 5. A shut-down VM takes about 10 seconds on BIOS and 18 on UEFI to reach the menu.
 
 ## Not offered
 
