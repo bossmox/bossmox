@@ -19,7 +19,7 @@ People sign in with their Proxmox username, password and authenticator code. Bos
 - Ten failed attempts from one address in 5 minutes locks that address out.
 - POST requests need a custom header and a matching Origin, which blocks cross-site requests.
 - A network address needs HTTPS. Plain HTTP needs an explicit setting.
-- This version stays read-only for everyone: the client's only POST is the sign-in request.
+- This was read-only when written. ADR 0003 covers the named actions added since.
 
 ## Known limits
 

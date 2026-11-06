@@ -14,7 +14,7 @@ BossMox ships as one Docker container: a small Node and TypeScript server plus a
 
 ## Choices inside this
 
-- **Runtime dependencies: none.** Node's built-in modules cover this version. TypeScript and `@types/node` are pinned development tools.
+- **Runtime dependencies: none at the time.** `ws` was added later for the terminal, the only one. Node's built-in modules cover this version. TypeScript and `@types/node` are pinned development tools.
 - **Certificates:** Proxmox's CA is verified through `PVE_CA_FILE`. There is deliberately no option to skip verification. `PVE_TLS_NAME` handles the common case of a certificate listing an old address: the chain is still verified, and the certificate must match that named address.
 - **Read-only by construction:** the client has only a `get` method, and the token has only the `PVEAuditor` role.
 - **Host header check:** only named hosts are served, so a malicious website can't reach a localhost copy through DNS rebinding.

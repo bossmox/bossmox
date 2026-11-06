@@ -13,6 +13,8 @@ npm test >/dev/null
 TMPFILE=$(mktemp -d)
 tar -czf "$TMPFILE/bossmox.tgz" dist/src public deploy package.json node_modules/ws
 cp "$CA" "$TMPFILE/pve-root-ca.pem"
-scp -q "$TMPFILE/bossmox.tgz" "$TMPFILE/pve-root-ca.pem" deploy/install-in-alpine.sh "$VM:/tmp/"
+# A private folder, because these run as root and /tmp is shared with the service account.
+STAGE=$(ssh -o BatchMode=yes "$VM" "mktemp -d")
+scp -q "$TMPFILE/bossmox.tgz" "$TMPFILE/pve-root-ca.pem" deploy/install-in-alpine.sh "$VM:$STAGE/"
 rm -rf "$TMPFILE"
-ssh -o BatchMode=yes "$VM" "doas sh /tmp/install-in-alpine.sh $ADDRESS $PVE_URL $TLS_NAME && rm -f /tmp/install-in-alpine.sh && doas rc-service bossmox status"
+ssh -o BatchMode=yes "$VM" "doas sh '$STAGE/install-in-alpine.sh' '$ADDRESS' '$PVE_URL' '$TLS_NAME' && rm -rf '$STAGE' && doas rc-service bossmox status"

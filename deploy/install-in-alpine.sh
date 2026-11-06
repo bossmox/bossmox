@@ -1,11 +1,12 @@
 #!/bin/sh
-# Run as root inside an Alpine Linux VM. Expects /tmp/bossmox.tgz and /tmp/pve-root-ca.pem.
+# Run as root inside an Alpine Linux VM. Expects bossmox.tgz and pve-root-ca.pem next to this script.
 # Usage: install-in-alpine.sh <address people use> <proxmox url[,url]> [certificate name]
 set -eu
 
 PUBLIC_ADDRESS=$1
 PVE_URL=$2
 PVE_TLS_NAME=${3:-}
+STAGE=$(dirname "$0")
 
 apk update -q
 apk upgrade -q
@@ -19,9 +20,9 @@ if id bossmox >/dev/null 2>&1 && [ "$(id -gn bossmox)" != bossmox ]; then deluse
 grep -q "^bossmox:" /etc/group || addgroup -S bossmox
 id bossmox >/dev/null 2>&1 || adduser -S -D -H -h /opt/bossmox -s /sbin/nologin -G bossmox bossmox
 mkdir -p /opt/bossmox /etc/bossmox
-tar --no-same-owner -xzf /tmp/bossmox.tgz -C /opt/bossmox
+tar --no-same-owner -xzf "$STAGE/bossmox.tgz" -C /opt/bossmox
 chown -R root:root /opt/bossmox
-install -m 644 /tmp/pve-root-ca.pem /etc/bossmox/pve-root-ca.pem
+install -m 644 "$STAGE/pve-root-ca.pem" /etc/bossmox/pve-root-ca.pem
 
 if [ ! -f /etc/bossmox/tls.key ]; then
   case "$PUBLIC_ADDRESS" in
@@ -39,10 +40,10 @@ cat > /etc/bossmox/env <<EOF
 export NODE_ENV=production
 export HOST=0.0.0.0
 export PORT=443
-export PVE_URL=$PVE_URL
+export PVE_URL='$PVE_URL'
 export PVE_CA_FILE=/etc/bossmox/pve-root-ca.pem
-export PVE_TLS_NAME=$PVE_TLS_NAME
-export BOSSMOX_ALLOWED_HOSTS=$PUBLIC_ADDRESS
+export PVE_TLS_NAME='$PVE_TLS_NAME'
+export BOSSMOX_ALLOWED_HOSTS='$PUBLIC_ADDRESS'
 export TLS_CERT_FILE=/etc/bossmox/tls.crt
 export TLS_KEY_FILE=/etc/bossmox/tls.key
 EOF
@@ -60,6 +61,8 @@ capabilities="^cap_net_bind_service"
 output_log=/var/log/bossmox.log
 error_log=/var/log/bossmox.log
 respawn_delay=3
+# A core dump would hold live Proxmox tickets.
+rc_ulimit="-c 0"
 
 depend() {
   need net
@@ -73,4 +76,4 @@ EOF
 chmod 755 /etc/init.d/bossmox
 rc-update add bossmox default >/dev/null 2>&1 || true
 rc-service bossmox restart >/dev/null 2>&1 || rc-service bossmox start
-rm -f /tmp/bossmox.tgz /tmp/pve-root-ca.pem
+rm -f "$STAGE/bossmox.tgz" "$STAGE/pve-root-ca.pem"

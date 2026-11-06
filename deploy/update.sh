@@ -10,13 +10,14 @@ PVE_URL=$4
 TLS_NAME=${5:-}
 
 npm test >/dev/null
-tar -czf /tmp/bossmox.tgz dist/src public deploy package.json node_modules/ws
-scp -q /tmp/bossmox.tgz deploy/install-in-lxc.sh "$HOST:/tmp/"
-rm -f /tmp/bossmox.tgz
+TMPFILE=$(mktemp -d)
+tar -czf "$TMPFILE/bossmox.tgz" dist/src public deploy package.json node_modules/ws
+scp -q "$TMPFILE/bossmox.tgz" deploy/install-in-lxc.sh "$HOST:/tmp/"
+rm -rf "$TMPFILE"
 ssh -o BatchMode=yes "$HOST" "pct push $CT /tmp/bossmox.tgz /tmp/bossmox.tgz \
   && pct push $CT /etc/pve/pve-root-ca.pem /tmp/pve-root-ca.pem \
   && pct push $CT /tmp/install-in-lxc.sh /tmp/install-in-lxc.sh \
   && rm /tmp/bossmox.tgz /tmp/install-in-lxc.sh \
-  && pct exec $CT -- bash /tmp/install-in-lxc.sh $ADDRESS $PVE_URL $TLS_NAME \
+  && pct exec $CT -- bash /tmp/install-in-lxc.sh '$ADDRESS' '$PVE_URL' '$TLS_NAME' \
   && pct exec $CT -- rm /tmp/install-in-lxc.sh \
   && pct exec $CT -- systemctl is-active bossmox"

@@ -1272,8 +1272,10 @@ function showTerminal(server, id, title, help, guest = null) {
       if (term?.done || isConsole) return;
       // Proxmox prints this when the updater finishes, then leaves a root shell open.
       recent = (recent + decoder.decode(bytes)).slice(-200);
-      if (recent.includes("starting shell") && term) {
+      if (/(^|\n)starting shell\r?\n/.test(recent) && term) {
         term.done = true;
+        // Proxmox leaves a root shell open after the updater, and nobody asked for one. Ctrl+D ends it.
+        socket.send("0:1:\u0004");
         $(".termhelp").textContent = savedReboot()?.rolling && savedReboot().restart ? `The updater has finished on ${server}. Check the output, then close this window and BossMox restarts ${server}.` : `The updater has finished on ${server}. Check the output, then close this window.`;
       }
     };

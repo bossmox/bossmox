@@ -34,7 +34,7 @@ pct create "$CTID" "local:vztmpl/$TEMPLATE" \
   --unprivileged 1 \
   --features nesting=1 \
   --cores 1 --cpuunits 50 \
-  --memory 512 --swap 256 \
+  --memory 512 --swap 0 \
   --rootfs "$STORAGE:4" \
   --net0 "name=eth0,bridge=$BRIDGE,ip=$ADDRESS,gw=$GATEWAY" \
   --nameserver "$NAMESERVER" \

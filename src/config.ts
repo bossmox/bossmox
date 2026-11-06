@@ -14,6 +14,7 @@ export interface Config {
   /** Proxies whose X-Forwarded-For can be believed. Nobody else's is. */
   trustedProxies: Set<string>;
   consoleIdleMs: number;
+  tlsConfigured: boolean;
 }
 
 const plainAddress = (a: string) => a.trim().toLowerCase().replace(/^::ffff:/, "");
@@ -67,6 +68,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     allowedHosts: new Set(["localhost", "127.0.0.1", ...extra]),
     behindProxy: env.BOSSMOX_BEHIND_HTTPS_PROXY === "1",
     allowHttp: env.BOSSMOX_ALLOW_HTTP === "1",
+    tlsConfigured: Boolean(env.TLS_CERT_FILE && env.TLS_KEY_FILE),
     consoleIdleMs: Math.max(1, Number(env.BOSSMOX_CONSOLE_IDLE_MINUTES) || 30) * 60 * 1000,
     trustedProxies: new Set((env.BOSSMOX_TRUSTED_PROXY ?? "").split(",").map(plainAddress).filter(Boolean)),
   };

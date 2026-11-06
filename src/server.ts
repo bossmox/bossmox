@@ -42,10 +42,13 @@ const STATIC: Record<string, [string, string]> = {
   "/vendor/addon-fit.js": ["vendor/addon-fit.js", "text/javascript; charset=utf-8"],
   "/vendor/xterm.css": ["vendor/xterm.css", "text/css; charset=utf-8"],
   "/vendor/novnc.js": ["vendor/novnc.js", "text/javascript; charset=utf-8"],
+  "/vendor/figtree.woff2": ["vendor/figtree.woff2", "font/woff2"],
+  "/vendor/manrope.woff2": ["vendor/manrope.woff2", "font/woff2"],
+  "/vendor/ibm-plex-sans.woff2": ["vendor/ibm-plex-sans.woff2", "font/woff2"],
 };
 const HEADERS = {
   "Content-Security-Policy":
-    "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
 };
@@ -247,7 +250,7 @@ async function loadRollingPlan(ticket: string) {
 }
 
 function send(res: http.ServerResponse, status: number, type: string, body: string | Buffer, extra: Record<string, string> = {}) {
-  res.writeHead(status, { ...HEADERS, "Content-Type": type, "Cache-Control": "no-store", ...extra });
+  res.writeHead(status, { ...HEADERS, ...(secureCookie ? { "Strict-Transport-Security": "max-age=31536000" } : {}), "Content-Type": type, "Cache-Control": "no-store", ...extra });
   res.end(body);
 }
 const json = (res: http.ServerResponse, status: number, value: unknown, extra?: Record<string, string>) =>
@@ -461,7 +464,9 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
   if (!session) return json(res, 401, { error: "Sign in to continue." });
   if (action === "guest-console") {
     try {
-      return await openConsole(res, await readJson(req), session);
+      const body = await readJson(req);
+      audit("console", session.username, addressOf(req), `node=${text(body.server, 64)} guest=${text(body.guest, 12)}`);
+      return await openConsole(res, body, session);
     } catch (err) {
       if (err instanceof PveError && err.status === 403) return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
       if (err instanceof PveError && err.status !== 401 && err.reason) return json(res, 400, { error: `Proxmox refused: ${err.reason}` });
@@ -472,6 +477,7 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
     const name = text((await readJson(req)).server, 64);
     if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
     try {
+      audit(action === "install-updates" ? "updater" : "console", session.username, addressOf(req), `node=${name}`);
       return await openNodeTerminal(res, name, session, action === "install-updates" ? { cmd: "upgrade" } : {});
     } catch (err) {
       if (err instanceof PveError && err.status === 403) {
@@ -486,7 +492,9 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
   const name = text(body.server, 64);
   if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
   try {
-    return json(res, 200, { task: await run(name, session, body) });
+    const task = await run(name, session, body);
+    audit(action, session.username, addressOf(req), `node=${name}${text(body.guest, 12) ? ` guest=${text(body.guest, 12)}` : ""}`);
+    return json(res, 200, { task });
   } catch (err) {
     if (err instanceof PveError && err.status === 403) {
       return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
@@ -544,15 +552,24 @@ function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
 }
 const text = (v: unknown, max: number) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : "");
 
-function finishLogin(res: http.ServerResponse, out: LoginOutcome) {
+/** Who did what, for anyone looking into an incident. Names and addresses only, never tickets, passwords or request bodies. */
+function audit(event: string, who: string, address: string, detail = "") {
+  console.log(`audit ${new Date().toISOString()} ${event} user=${who} from=${address}${detail ? ` ${detail}` : ""}`);
+}
+function addressOf(req: http.IncomingMessage): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  return clientAddress(req.socket.remoteAddress, Array.isArray(forwarded) ? forwarded.join(",") : forwarded, config.trustedProxies);
+}
+
+function finishLogin(res: http.ServerResponse, out: LoginOutcome, address: string) {
   if (out.kind === "code") return json(res, 200, { needsCode: true, challenge: out.id });
+  audit("sign-in", out.username, address);
   return json(res, 200, { username: out.username }, setCookie(out.id, 12 * 60 * 60));
 }
 
 async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, route: string) {
   if (!sameSite(req)) return json(res, 403, { error: "This request didn't come from BossMox." });
-  const forwarded = req.headers["x-forwarded-for"];
-  const address = clientAddress(req.socket.remoteAddress, Array.isArray(forwarded) ? forwarded.join(",") : forwarded, config.trustedProxies);
+  const address = addressOf(req);
   if (route === "/api/login") {
     const body = await readJson(req);
     const user = text(body.username, 128);
@@ -560,16 +577,27 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
     const password = text(body.password, 512);
     if (!user || !realm || !password) return json(res, 400, { error: "Enter your username and password." });
     if (!/^[\w.@+-]+$/.test(user) || !/^[\w.-]+$/.test(realm)) return json(res, 401, { error: "Wrong username or password." });
-    return finishLogin(res, await sessions.login(`${user}@${realm}`, password, address));
+    try {
+      return finishLogin(res, await sessions.login(`${user}@${realm}`, password, address), address);
+    } catch (err) {
+      if (err instanceof AuthError) audit("sign-in-refused", `${user}@${realm}`, address, `status=${err.status}`);
+      throw err;
+    }
   }
   if (route === "/api/login/code") {
     const body = await readJson(req);
     const code = text(body.code, 32).replace(/\s/g, "");
     const challenge = text(body.challenge, 128);
     if (!/^\d{6,8}$/.test(code) || !challenge) return json(res, 400, { error: "Enter the code from your authenticator app." });
-    return finishLogin(res, await sessions.submitCode(challenge, code, address));
+    try {
+      return finishLogin(res, await sessions.submitCode(challenge, code, address), address);
+    } catch (err) {
+      if (err instanceof AuthError) audit("code-refused", "unknown", address, `status=${err.status}`);
+      throw err;
+    }
   }
   if (route === "/api/logout") {
+    audit("sign-out", (await sessions.get(cookieId(req)))?.username ?? "unknown", address);
     sessions.end(cookieId(req));
     return json(res, 200, { ok: true }, setCookie("", 0));
   }
@@ -686,7 +714,10 @@ const handler: http.RequestListener = async (req, res) => {
   }
 };
 
+const serving = config.tls ? "https" : "http";
 const server = config.tls ? https.createServer(config.tls, handler) : http.createServer(handler);
+// The server has its own copy now, so the key doesn't need to stay around in ordinary memory.
+delete config.tls;
 
 server.on("upgrade", async (req, socket, head) => {
   // Without this, a client dropping the connection during the checks below could take the whole process down.
@@ -708,9 +739,12 @@ server.on("upgrade", async (req, socket, head) => {
     refuse();
   }
 });
+if (config.allowHttp && !config.behindProxy && !config.tlsConfigured && config.host !== "127.0.0.1") {
+  console.warn("WARNING: BOSSMOX_ALLOW_HTTP is on and BossMox is listening beyond this machine. Unless only this machine can reach the port, passwords travel in the clear.");
+}
 if (config.behindProxy && config.trustedProxies.size === 0) {
   console.warn("BOSSMOX_BEHIND_HTTPS_PROXY is on but BOSSMOX_TRUSTED_PROXY isn't set, so every visitor looks like one address and a few failed sign-ins lock everyone out.");
 }
 server.listen(config.port, config.host, () => {
-  console.log(`BossMox is running at ${config.tls ? "https" : "http"}://${config.host}:${config.port}`);
+  console.log(`BossMox is running at ${serving}://${config.host}:${config.port}`);
 });

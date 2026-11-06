@@ -30,6 +30,12 @@ On a Proxmox cluster, the smallest setup is the Alpine VM in `deploy/`: 256 MB o
 
 Running BossMox outside the cluster is the most robust choice, because it keeps working when a node restarts.
 
+**Treat wherever BossMox runs like a node.** Every admin's password passes through it at sign-in, so anyone who controls that VM or container could capture them. If it runs on the cluster, give only full admins any rights on it, including console, power, backup and cloud-init rights. Running it off-cluster avoids this.
+
+The first time you visit a self-signed address, your browser warns you. Compare the fingerprint it shows with the one on the server: `openssl x509 -noout -fingerprint -sha256 -in /etc/bossmox/tls.crt`. Clicking through without checking could hand your password to someone in the middle.
+
+Behind a reverse proxy, pass the original `Host` header through, set `BOSSMOX_TRUSTED_PROXY` to the proxy's address, and add the public name to `BOSSMOX_ALLOWED_HOSTS`. The proxy must add the real client address to `X-Forwarded-For`.
+
 To use it from other machines, it needs HTTPS because passwords pass through it. Set `TLS_CERT_FILE` and `TLS_KEY_FILE`, or put it behind an HTTPS proxy and set `BOSSMOX_BEHIND_HTTPS_PROXY=1`. List the host names you use in `BOSSMOX_ALLOWED_HOSTS`. BossMox refuses to start on a network address without one of those, or `BOSSMOX_ALLOW_HTTP=1`, which is only for a port published to `127.0.0.1` as above.
 
 To try it without Proxmox, run `npm run mock`, and set `PVE_URL=http://127.0.0.1:8079`. Sign in as `demo` with the password `demo`.
