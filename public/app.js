@@ -383,7 +383,7 @@ async function startRestart(server) {
   const blocked = plan.busy.length > 0;
   S.restart = { server, guests };
   dialog(`<h3>Restart ${esc(server)}?</h3>
-    <p>${guests.length ? "Everything below goes down until the server is back, usually a few minutes." : "Nothing is running on this server."} If BossMox runs on this server, it goes down too and this page will wait for it.</p>
+    <p>${guests.length ? "Proxmox shuts down everything below first, waits for it all to stop, then restarts the server. This usually takes a few minutes." : "Nothing is running on this server."} If BossMox runs on this server, it goes down too and this page will wait for it.</p>
     ${blocked ? `<p class="loginerr" style="margin-top:12px">Wait for this to finish first: ${esc(plan.busy.join(", "))}.</p>` : ""}
     ${plan.busyKnown ? "" : `<p class="loginerr" style="margin-top:12px">BossMox can't tell whether jobs are running on this server.</p>`}
     ${guests.length ? `<div class="restartlist">${guests.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state">${v.startsAtBoot ? "Starts again by itself" : "Stays off until started"}</span></div>`).join("")}</div>` : ""}
@@ -406,11 +406,31 @@ async function doRestart(server) {
   }
   watchRestart();
 }
+function restartStage(plan, state) {
+  if (state.back) return "starting";
+  if (state.lost || state.down) return "rebooting";
+  return plan.guests.some((g) => state.running.has(g.id)) ? "stopping" : "rebooting";
+}
+const STAGE_NOTE = {
+  stopping: "Shutting down what's running. Proxmox waits for all of it to stop before it restarts the server.",
+  rebooting: "BossMox can't reach the server right now. That's expected: Proxmox finishes stopping everything, restarts, then starts things back up. Keep this page open.",
+  starting: "The server is back. Waiting for everything to start.",
+};
 function drawRestart(plan, state, title, note, done) {
+  const stage = restartStage(plan, state);
   const row = (name, ok, word) => `<div class="snap"><div>${esc(name)}</div><span class="state"><span class="dot ${ok === null ? "busy" : ok ? "running" : "warn"}"></span>${esc(word)}</span></div>`;
-  dialog(`<h3>${esc(title)}</h3><p>${esc(note)}</p><div class="restartlist">
-    ${row(plan.server, state.back ? true : null, state.back ? "Back" : state.down ? "Restarting" : "Going down")}
-    ${plan.guests.map((g) => state.running.has(g.id) ? row(g.name, true, "Running") : g.auto ? row(g.name, done ? false : null, done ? "Not running" : "Waiting") : row(g.name, false, "Off, needs starting")).join("")}
+  const serverWord = { stopping: "Waiting for VMs to stop", rebooting: "Restarting", starting: "Back" }[stage];
+  const guestRow = (g) => {
+    const on = state.running.has(g.id);
+    if (stage === "stopping") return on ? row(g.name, null, "Shutting down") : row(g.name, true, "Stopped");
+    if (stage === "rebooting") return row(g.name, null, "Shutting down or waiting");
+    if (on) return row(g.name, true, "Running");
+    if (!g.auto) return row(g.name, false, "Off, needs starting");
+    return done ? row(g.name, false, "Not running") : row(g.name, null, "Starting");
+  };
+  dialog(`<h3>${esc(title)}</h3><p>${esc(note || STAGE_NOTE[stage])}</p><div class="restartlist">
+    ${row(plan.server, state.back ? true : null, serverWord)}
+    ${plan.guests.map(guestRow).join("")}
     </div><div class="row-end"><button class="btn" data-restartclose="1">${done ? "Close" : "Stop watching"}</button></div>`);
 }
 async function watchRestart() {
@@ -418,7 +438,7 @@ async function watchRestart() {
   if (!plan || S.watching) return;
   S.watching = true;
   const deadline = plan.startedAt + 15 * 60 * 1000;
-  const state = { back: false, down: false, running: new Set() };
+  const state = { back: false, down: false, lost: false, running: new Set(plan.guests.map((g) => g.id)) };
   let backAt = 0;
   for (;;) {
     if (!savedReboot()) break;
@@ -430,13 +450,14 @@ async function watchRestart() {
       state.back = restarted && o.nodes.some((n) => n.name === plan.server && n.online);
       state.down ||= restarted;
       state.running = new Set(o.vms.filter((v) => v.running).map((v) => v.id));
+      state.lost = false;
       S.data = o;
     } catch (err) {
       if (err.message === "signed out") {
         S.watching = false;
         return;
       }
-      state.down = true;
+      state.lost = true;
       state.back = false;
     }
     const waiting = plan.guests.filter((g) => g.auto && !state.running.has(g.id));
@@ -456,7 +477,7 @@ async function watchRestart() {
       loadServer();
       return;
     }
-    drawRestart(plan, state, `Restarting ${plan.server}`, state.back ? "It's back. Waiting for everything to start." : "Keep this page open. This usually takes a few minutes.", false);
+    drawRestart(plan, state, `Restarting ${plan.server}`, "", false);
     await new Promise((r) => setTimeout(r, 3000));
   }
   S.watching = false;
