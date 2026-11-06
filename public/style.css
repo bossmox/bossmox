@@ -52,7 +52,8 @@ h1,h2,h3,p{margin:0}
 [data-look="workbench"] .tile{box-shadow:0 2px 0 rgba(32,38,42,.4)}
 
 /* Health widget, the focal thing on the desktop */
-#side{width:360px;max-width:100%;max-height:100%;overflow:auto;display:grid;gap:14px;align-content:start;flex:none}
+#side{width:360px;max-width:100%;max-height:100%;overflow:auto;scrollbar-width:thin;display:grid;gap:14px;align-content:start;flex:none}
+@media(min-width:1180px){#side{width:auto;grid-template-columns:320px 360px;align-items:start}#taskfeed{order:-1}}
 #taskfeed[hidden]{display:none}
 #taskfeed{background:var(--pane);backdrop-filter:blur(var(--blur));border:1px solid var(--line);border-radius:var(--r);padding:16px 20px 18px;box-shadow:var(--shadow)}
 #taskfeed h2{font-size:18px;font-weight:800;letter-spacing:-.01em}
