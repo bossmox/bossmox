@@ -147,7 +147,7 @@ while :; do
   printf '\033[H'
   printf "$BAND"; printf '%*s\n' "$COLS" ''
   printf "$BAND"; printf '%-*s\n' "$COLS" '  BossMox'
-  printf "$BAND"; printf '%-*s\n' "$COLS" '  Management app for Proxmox VE'
+  printf "$BAND"; printf '%-*s\n' "$COLS" '  Management app for Proxmox Virtual Environment'
   printf "$BAND"; printf '%*s\n' "$COLS" ''
   printf "$PLAIN$EOL\n$EOL\n"
   if [ -z "$ADDR" ]; then
