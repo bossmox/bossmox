@@ -15,6 +15,7 @@ const APPS = {
   monitor: { title: "Nodes", color: "#7A5AC8", w: 900, h: 620 },
   storage: { title: "Storage", color: "#B9680A", w: 520, h: 420 },
   network: { title: "Network", color: "#2F7A7E", w: 860, h: 580 },
+  tasklog: { title: "All tasks", color: "#3C6E9E", w: 860, h: 610, noIcon: true },
   backups: { title: "Backups", color: "#C43838", w: 860, h: 610 },
   terminal: { title: "Install updates", color: "#20262A", w: 860, h: 560, noIcon: true },
   console: { title: "Console", color: "#20262A", w: 980, h: 680, noIcon: true },
@@ -53,16 +54,76 @@ function renderTaskFeed() {
   const word = { running: "Running", ok: "Finished", warning: "Finished with warnings", failed: "Failed" };
   const row = (t) => `<button class="taskrow ${t.result === "failed" ? "bad" : ""}" data-taskview="${esc(t.upid)}" data-tasknode="${esc(t.node)}"><span class="dot ${dot[t.result]}"></span><span><b>${esc(t.what)}${t.target ? `: ${esc(t.target)}` : ""}</b><small>${word[t.result]} on ${esc(t.node)}, ${esc(ago(t.result === "running" ? t.startedAt : t.endedAt ?? t.startedAt))}</small></span></button>`;
   box.innerHTML = `<h2>Tasks</h2><p class="sub">${feed.running ? `${feed.running} running now` : "Nothing running now"}</p>
-    ${feed.items.length ? `<div class="taskrows">${feed.items.map(row).join("")}</div>` : `<p class="meta">Nothing has run recently.</p>`}`;
+    ${feed.items.length ? `<div class="taskrows">${feed.items.map(row).join("")}</div>` : `<p class="meta">Nothing has run recently.</p>`}
+    <p class="seeall"><button class="linkbtn" data-tasklog="all">See all tasks</button></p>`;
+}
+/* Every task on every node. The list arrives whole, so choosing a node or typing in the search box is instant. */
+const taskRow = (t) => {
+  const dot = { running: "busy", ok: "running", warning: "warn", failed: "warn" };
+  const word = { running: "Running", ok: "Finished", warning: "Finished with warnings", failed: "Failed" };
+  return `<button class="taskrow ${t.result === "failed" ? "bad" : ""}" data-taskview="${esc(t.upid)}" data-tasknode="${esc(t.node)}"><span class="dot ${dot[t.result]}"></span><span><b>${esc(t.what)}${t.target ? `: ${esc(t.target)}` : ""}</b><small>${esc(word[t.result])} on ${esc(t.node)}, ${esc(when(t.startedAt))}${t.who ? `, by ${esc(t.who)}` : ""}</small></span></button>`;
+};
+function drawTaskLog() {
+  const list = $("#tlnodes");
+  const rows = $("#tlrows");
+  if (!list || !rows) return;
+  const nodes = S.data?.nodes ?? [];
+  const on = S.tlNode ?? "all";
+  const log = S.taskLog;
+  const count = (name) => {
+    if (!log) return "";
+    const n = log.items.filter((t) => name === "all" || t.node === name).length;
+    return `<small>${n}${log.more ? "+" : ""} ${n === 1 ? "task" : "tasks"}</small>`;
+  };
+  const dotFor = (n) => `<span class="dot ${n.online ? "running" : "warn"}"></span>`;
+  list.innerHTML = [`<button class="row ${on === "all" ? "on" : ""}" data-tlnode="all"><span></span><b>All nodes</b>${count("all")}</button>`,
+    ...nodes.map((n) => `<button class="row ${n.name === on ? "on" : ""}" data-tlnode="${esc(n.name)}">${dotFor(n)}<b>${esc(n.name)}</b>${count(n.name)}</button>`)].join("");
+  if (!log) {
+    rows.innerHTML = `<p class="empty">${esc(S.taskLogError || "Looking for tasks on every node.")}</p>`;
+    return;
+  }
+  const q = (S.tlQ ?? "").toLowerCase();
+  const shown = log.items.filter((t) => (on === "all" || t.node === on)
+    && (S.tlShow !== "problems" || t.result === "failed" || t.result === "warning")
+    && `${t.what} ${t.target} ${t.who}`.toLowerCase().includes(q));
+  const paged = shown.slice(0, S.tlRows ?? 200);
+  const missing = log.unreachable.filter((n) => on === "all" || n === on);
+  rows.innerHTML = `${missing.length ? `<p class="meta">Couldn't reach ${esc(missing.join(", "))}, so its tasks aren't here.</p>` : ""}
+    ${paged.map(taskRow).join("") || `<p class="empty">No tasks match.</p>`}
+    ${shown.length > paged.length || log.more ? `<p class="seeall"><button class="linkbtn" data-tlmore="1">Show more</button></p>` : ""}`;
+}
+async function loadTaskLog() {
+  const run = S.loadRun;
+  try {
+    const log = await signal(`api/tasks?limit=${S.tlLimit ?? 200}`);
+    if (run !== S.loadRun) return;
+    const changed = JSON.stringify(log) !== JSON.stringify(S.taskLog);
+    S.taskLog = log;
+    S.taskLogError = "";
+    if (changed) drawTaskLog();
+  } catch (err) {
+    if (err.message === "signed out" || run !== S.loadRun) return;
+    S.taskLogError = err.message || "BossMox lost contact with Proxmox.";
+    if (!S.taskLog) drawTaskLog();
+  }
+}
+function moreTasks() {
+  S.tlRows = (S.tlRows ?? 200) + 200;
+  const log = S.taskLog;
+  if (log?.more && S.tlRows > (S.tlLimit ?? 200)) {
+    S.tlLimit = Math.min((S.tlLimit ?? 200) * 2, 2000);
+    return loadTaskLog();
+  }
+  drawTaskLog();
 }
 async function viewTask(node, upid) {
-  const title = S.data?.tasks.items.find((t) => t.upid === upid);
+  const title = S.data?.tasks.items.find((t) => t.upid === upid) ?? S.taskLog?.items.find((t) => t.upid === upid);
   const heading = title ? `${title.what}${title.target ? `: ${title.target}` : ""}` : "Task";
   try {
-    const view = await signal(`api/task?server=${encodeURIComponent(node)}&task=${encodeURIComponent(upid)}`);
+    const view = await signal(`api/task?full=1&server=${encodeURIComponent(node)}&task=${encodeURIComponent(upid)}`);
     const words = !view.finished ? "Still running." : { ok: "Finished.", warning: "Finished with warnings.", failed: `It failed. ${view.message}` }[view.result];
     dialog(`<h3>${esc(heading)}</h3><p class="${view.result === "failed" ? "loginerr" : ""}">${esc(words)}</p>
-      ${view.lines?.length ? `<pre class="tasklog">${esc(view.lines.join("\n"))}</pre>` : ""}${closeRow}`);
+      ${view.lines?.length ? `<pre class="tasklog whole">${esc(view.lines.join("\n"))}</pre>` : ""}${closeRow}`);
     const log = $("#dialog .tasklog");
     if (log) log.scrollTop = log.scrollHeight;
   } catch (err) {
@@ -188,7 +249,15 @@ function render(app) {
     renderDetail();
   }
   if (app === "monitor") renderServers();
-  if (app === "backups") loadBackups();
+  if (app === "backups") {
+    drawBackups();
+    loadBackups();
+  }
+  if (app === "tasklog") {
+    $("#tlshow").value = S.tlShow ?? "all";
+    drawTaskLog();
+    loadTaskLog();
+  }
   if (app === "create") startCreate();
   if (app === "network") loadNetwork();
 }
@@ -316,6 +385,7 @@ async function loadAhead() {
   const run = S.loadRun;
   const first = !S.loadedAhead;
   S.loadedAhead = true;
+  S.aheadRuns = (S.aheadRuns ?? 0) + 1;
   try {
     if (first || wins.monitor) {
       for (const n of S.data.nodes.filter((x) => x.online)) {
@@ -333,6 +403,9 @@ async function loadAhead() {
         if (changed && n.name === S.netServer && $("#netdetail")) drawNetwork(net);
       }
     }
+    if (first || wins.tasklog) await loadTaskLog();
+    // Backups mean asking every storage on every node, so this one runs a third as often.
+    if (first || (wins.backups && S.aheadRuns % 3 === 0)) await loadBackups();
     if (first || wins.vms) {
       for (const v of S.data?.vms ?? []) {
         if (run !== S.loadRun) return;
@@ -419,7 +492,7 @@ const SERVER_TAB = {
     if (!d.tasks.length) return `<p class="empty">No recent activity on this node.</p>`;
     const words = { running: "Running", ok: "Finished", warning: "Finished with warnings", failed: "Failed" };
     const dots = { running: "busy", ok: "running", warning: "warn", failed: "warn" };
-    return d.tasks.map((t) => `<div class="snap"><div>${esc(t.what)}${t.target ? ` on ${esc(t.target)}` : ""}<small>${esc(when(t.startedAt))}, by ${esc(t.who)}</small></div><span class="state"><span class="dot ${dots[t.result]}"></span>${words[t.result]}</span></div>`).join("");
+    return `<p class="seeall" style="margin:0 0 8px"><button class="linkbtn" data-tasklog="${esc(S.server)}">See all tasks on this node</button></p>` + d.tasks.map((t) => `<button class="snap tasksnap" data-taskview="${esc(t.upid)}" data-tasknode="${esc(S.server)}"><div>${esc(t.what)}${t.target ? ` on ${esc(t.target)}` : ""}<small>${esc(when(t.startedAt))}, by ${esc(t.who)}</small></div><span class="state"><span class="dot ${dots[t.result]}"></span>${words[t.result]}</span></button>`).join("");
   },
 };
 function renderServerDetail() {
@@ -1313,14 +1386,19 @@ function guestDelete(id) {
 
 /* Backups */
 async function loadBackups() {
+  const run = S.loadRun;
   try {
-    S.backups = await signal("api/backups");
+    const list = await signal("api/backups");
+    if (run !== S.loadRun) return;
+    const changed = JSON.stringify(list) !== JSON.stringify(S.backups) || S.backupsError;
+    S.backups = list;
     S.backupsError = "";
+    if (changed) drawBackups();
   } catch (err) {
-    if (err.message === "signed out") return;
+    if (err.message === "signed out" || run !== S.loadRun) return;
     S.backupsError = err.message || "BossMox lost contact with Proxmox.";
+    drawBackups();
   }
-  drawBackups();
 }
 const findBackup = (volid) => S.backups?.groups.flatMap((g) => g.backups.map((b) => ({ ...b, group: g }))).find((b) => b.volid === volid);
 function backupsPane() {
@@ -1822,6 +1900,7 @@ const RENDER = {
   console: () => `<div class="vncwrap"><div class="vnctools"><span id="vncstate">Connecting.</span><div class="actions conacts"></div></div><div id="vncbox"></div></div>`,
   vms: vmsShell, monitor: monView, storage: storeView,
   create: () => `<div id="newbox" class="bkbox"></div>`,
+  tasklog: () => `<div class="vms"><aside><div id="tlnodes"></div></aside><div id="tlbox"><div class="tltools"><input class="search" id="tlq" type="search" placeholder="Find a task" aria-label="Find a task" value="${esc(S.tlQ ?? "")}"><select id="tlshow" aria-label="Which tasks"><option value="all">All tasks</option><option value="problems">Problems only</option></select></div><div id="tlrows"></div></div></div>`,
   network: () => `<div class="vms"><aside><div id="netlist"></div></aside><div id="netdetail"></div></div>`,
   backups: () => `<div id="bkbox" class="bkbox"></div>`,
 };
@@ -1904,6 +1983,16 @@ document.addEventListener("click", (e) => {
   if (d.discadd) return askDisc();
   if (d.discgo) return downloadDisc();
   if (d.taskview) return viewTask(d.tasknode, d.taskview);
+  if (d.tasklog) {
+    S.tlNode = d.tasklog;
+    openWin("tasklog");
+    return drawTaskLog();
+  }
+  if (d.tlnode) {
+    S.tlNode = d.tlnode;
+    return drawTaskLog();
+  }
+  if (d.tlmore) return moreTasks();
   if (d.netserver) {
     S.netServer = d.netserver;
     return loadNetwork();
@@ -2040,11 +2129,19 @@ document.addEventListener("click", (e) => {
   }
 });
 document.addEventListener("change", (e) => {
+  if (e.target.id === "tlshow") {
+    S.tlShow = e.target.value;
+    drawTaskLog();
+  }
   if (e.target.id === "ckind" || e.target.id === "cserver") loadCreate($("#cserver").value, $("#ckind").value);
 });
 document.addEventListener("input", (e) => {
   if (e.target.id === "rname") {
     $("#rgo").disabled = e.target.value.trim().toLowerCase() !== (e.target.dataset.word ?? "reboot");
+  }
+  if (e.target.id === "tlq") {
+    S.tlQ = e.target.value;
+    drawTaskLog();
   }
   if (e.target.id === "vmq") {
     S.q = e.target.value;
@@ -2097,6 +2194,9 @@ async function showLogin(message) {
   S.detailError = "";
   S.details = {};
   S.nets = {};
+  S.backups = null;
+  S.backupsError = "";
+  S.taskLog = null;
   S.addresses = {};
   S.snapSupport = {};
   S.loadRun += 1;

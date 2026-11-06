@@ -116,6 +116,8 @@ const TASKS: Record<string, string> = {
   srvrestart: "Restart service",
   srvstart: "Start service",
   srvstop: "Stop service",
+  vncproxy: "Console",
+  spiceproxy: "Console",
   vncshell: "Shell session",
   termproxy: "Shell session",
   clustercreate: "Create cluster",
@@ -143,6 +145,23 @@ export const friendlyTask = (t: RawTask) => (Object.hasOwn(TASKS, t.type ?? "") 
 
 const QUIET_TASKS = new Set(["vncproxy", "vncshell", "termproxy", "spiceproxy"]);
 /** What the whole cluster is doing: running work first, then the most recent. Console sessions would drown it out. */
+export function buildTaskLog(perNode: { node: string; tasks: RawTask[] }[], unreachable: string[], guests: { id: number; name: string }[], limit: number) {
+  const names = new Map(guests.map((g) => [String(g.id), g.name]));
+  const items = perNode
+    .flatMap(({ node, tasks }) => tasks.map((t) => ({
+      upid: t.upid,
+      node,
+      what: friendlyTask(t),
+      target: names.get(t.id ?? "") ?? t.id ?? "",
+      who: t.user ?? "",
+      startedAt: t.starttime ?? null,
+      endedAt: t.endtime ?? null,
+      result: taskResult(t),
+    })))
+    .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
+  return { items, more: perNode.some((p) => p.tasks.length >= limit), unreachable };
+}
+
 export function buildTaskFeed(tasks: (RawTask & { node?: string })[], guests: { id: number; name: string }[], limit = 6) {
   const names = new Map(guests.map((g) => [String(g.id), g.name]));
   const shown = tasks.filter((t) => !QUIET_TASKS.has(t.type ?? "")).map((t) => ({
@@ -173,14 +192,14 @@ export interface RawTaskStatus {
   status?: string;
   exitstatus?: string;
 }
-export function taskView(status: RawTaskStatus, log: { n?: number; t?: string }[]) {
+export function taskView(status: RawTaskStatus, log: { n?: number; t?: string }[], max = 200) {
   const finished = status.status === "stopped";
   const exit = status.exitstatus ?? "";
   return {
     finished,
     result: !finished ? "running" : exit === "OK" ? "ok" : exit.startsWith("WARNINGS") ? "warning" : "failed",
     message: finished && exit !== "OK" ? exit : "",
-    lines: log.map((l) => l.t ?? "").filter((l) => l !== "no content").slice(-200),
+    lines: log.map((l) => l.t ?? "").filter((l) => l !== "no content").slice(-max),
   };
 }
 
@@ -318,7 +337,7 @@ export function buildServerDetail(
           .sort((a, b) => a.name.localeCompare(b.name))
       : null,
     tasks: tasks.available
-      ? tasks.value.map((t) => ({ what: friendlyTask(t), target: t.id ?? "", who: t.user ?? "", startedAt: t.starttime ?? null, result: taskResult(t) }))
+      ? tasks.value.map((t) => ({ upid: t.upid, what: friendlyTask(t), target: t.id ?? "", who: t.user ?? "", startedAt: t.starttime ?? null, result: taskResult(t) }))
       : null,
   };
 }

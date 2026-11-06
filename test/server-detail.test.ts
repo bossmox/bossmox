@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildMovePlan, buildRebootPlan, buildRollingPlan, buildTaskFeed, moveProblem, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
+import { buildMovePlan, buildRebootPlan, buildRollingPlan, buildTaskFeed, buildTaskLog, moveProblem, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
 
 const repo = (uri: string, component: string, enabled = true): RawRepositories => ({
   files: [{ repositories: [{ Enabled: enabled, URIs: [uri], Components: [component] }] }],
@@ -54,6 +54,9 @@ test("uptime reads naturally", () => {
 
 test("following a task reports running, success and failure", () => {
   assert.equal(taskView({ status: "running" }, []).finished, false);
+  const long = Array.from({ length: 500 }, (_, i) => ({ t: `line ${i}` }));
+  assert.equal(taskView({ status: "running" }, long).lines.length, 200, "following a task keeps just the end");
+  assert.equal(taskView({ status: "running" }, long, 20000).lines.length, 500, "reading one keeps it all");
   assert.equal(taskView({ status: "stopped", exitstatus: "OK" }, [{ t: "done" }]).result, "ok");
   const failed = taskView({ status: "stopped", exitstatus: "command failed" }, [{ t: "no content" }, { t: "E: boom" }]);
   assert.equal(failed.result, "failed");
@@ -187,4 +190,16 @@ test("a failed task shows as failed", () => {
 test("an open console doesn't count as a node being busy", () => {
   const plan = buildRebootPlan({ available: true, value: [{ upid: "a", type: "vncproxy", id: "300" }, { upid: "b", type: "termproxy" }, { upid: "c", type: "vzdump", id: "200" }] }, { available: false });
   assert.deepEqual(plan.busy, ["Backup on 200"]);
+});
+
+test("the full task list merges every node, newest first, and says what it couldn't reach", () => {
+  const log = buildTaskLog([
+    { node: "a", tasks: [{ upid: "1", type: "qmstart", id: "100", user: "root@pam", starttime: 10, endtime: 11, status: "OK" }, { upid: "2", type: "vncproxy", id: "100", starttime: 5, endtime: 6, status: "OK" }] },
+    { node: "b", tasks: [{ upid: "3", type: "qmstop", id: "7", starttime: 20, endtime: 21, status: "boom" }] },
+  ], ["c"], [{ id: 100, name: "web" }], 2);
+  assert.deepEqual(log.items.map((t) => [t.upid, t.node]), [["3", "b"], ["1", "a"], ["2", "a"]], "console sessions stay in the full list");
+  assert.equal(log.items[1]?.target, "web");
+  assert.equal(log.items[0]?.result, "failed");
+  assert.equal(log.more, true, "a node hit the limit, so there may be more");
+  assert.deepEqual(log.unreachable, ["c"]);
 });

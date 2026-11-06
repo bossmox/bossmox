@@ -64,6 +64,16 @@ h1,h2,h3,p{margin:0}
 .taskrow small{display:block;color:var(--muted);font-size:12.5px}
 .taskrow.bad b{color:var(--bad)}
 .taskrow b{font-weight:600}
+.tasksnap{cursor:pointer;width:100%;text-align:left;background:none}
+.tasksnap:hover{background:var(--surface2)}
+.seeall{margin-top:8px;font-size:13.5px}
+#tlbox{overflow:auto;padding:20px 26px;min-width:0}
+#tlnodes{padding:10px 8px;overflow:auto}
+.tltools{display:flex;gap:8px;margin-bottom:12px}
+.tltools .search{flex:1;min-width:0}
+.tltools select{padding:6px 8px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface);color:var(--ink);font:inherit}
+#tlrows .taskrow{margin:0}
+.tasklog.whole{max-height:58vh}
 .overall{display:grid;gap:9px;margin-top:14px}
 .overall div>span{display:flex;justify-content:space-between;gap:10px;font-size:13.5px;margin-bottom:3px}
 .overall small{color:var(--muted);font-size:13px}
@@ -222,7 +232,7 @@ summary{cursor:pointer;font-weight:650}
   .facts{grid-template-columns:repeat(2,minmax(0,1fr))}
   .choices{grid-template-columns:1fr}
   #tasks,#clock,#looks span{display:none} #brand{flex:1} #looks{margin:0}
-  .wiz{padding:18px 16px} #vmdetail,#netdetail{padding:18px 16px}
+  .wiz{padding:18px 16px} #vmdetail,#netdetail,#tlbox{padding:18px 16px}
 }
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 

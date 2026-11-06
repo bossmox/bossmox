@@ -16,7 +16,7 @@ import {
   buildMovePlan,
   buildRebootPlan,
   buildRollingPlan,
-  buildTaskFeed,
+  buildTaskFeed, buildTaskLog,
   groupUpdates,
   moveProblem,
   buildServerDetail,
@@ -272,6 +272,7 @@ const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w
 
 const POWER = new Set(["start", "shutdown", "reboot", "stop"]);
 const MAX_UPLOAD = 200 * 1024 ** 3;
+const FULL_LOG = 20000;
 const UPLOAD_NAME = /^[\w.-]{1,200}\.(iso|img)$/i;
 
 /** Turns a hardware rule into a plain 400, and reads the guest's settings the rule needs. */
@@ -723,7 +724,7 @@ const handler: http.RequestListener = async (req, res) => {
       }
       return json(res, 200, { realms });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -734,11 +735,13 @@ const handler: http.RequestListener = async (req, res) => {
           const upid = params.get("task") ?? "";
           if (!NODE_NAME.test(name) || !UPID.test(upid)) return json(res, 400, { error: "That task isn't valid." });
           const base = `/nodes/${encodeURIComponent(name)}/tasks/${encodeURIComponent(upid)}`;
+          // The whole log is only for someone reading it. Following a running task needs just the end.
+          const lines = params.get("full") === "1" ? FULL_LOG : 1000;
           const [status, log] = await Promise.all([
             pve.get<RawTaskStatus>(`${base}/status`, session.ticket),
-            pve.get<{ n?: number; t?: string }[]>(`${base}/log?limit=1000`, session.ticket),
+            pve.get<{ n?: number; t?: string }[]>(`${base}/log?limit=${lines}`, session.ticket),
           ]);
-          const view = taskView(status, log);
+          const view = taskView(status, log, lines === FULL_LOG ? FULL_LOG : 200);
           // What the task changed should show right away, not after the cache runs out.
           if (view.finished) cache.delete(session);
           return json(res, 200, view);
@@ -758,6 +761,19 @@ const handler: http.RequestListener = async (req, res) => {
         }
         if (route === "/api/rolling-plan") return json(res, 200, await loadRollingPlan(session.ticket));
         if (route === "/api/backups") return json(res, 200, await loadBackups(session.ticket));
+        if (route === "/api/tasks") {
+          const asked = Number(params.get("limit"));
+          const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, 2000) : 200;
+          const data = await overview(session);
+          const online = data.nodes.filter((n) => n.online).map((n) => n.name);
+          const lists = await Promise.allSettled(online.map((n) => pve.get<RawTask[]>(`/nodes/${encodeURIComponent(n)}/tasks?source=all&limit=${limit}`, session.ticket)));
+          const perNode = online.flatMap((node, i) => {
+            const r = lists[i];
+            return r?.status === "fulfilled" ? [{ node, tasks: r.value }] : [];
+          });
+          const unreachable = online.filter((_, i) => lists[i]?.status !== "fulfilled").concat(data.nodes.filter((n) => !n.online).map((n) => n.name));
+          return json(res, 200, buildTaskLog(perNode, unreachable, data.vms, limit));
+        }
         if (route === "/api/templates") {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
