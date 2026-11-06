@@ -7,6 +7,8 @@ import type { Session } from "./auth.js";
 
 const TTL_MS = 30 * 1000;
 const IDLE_MS = 30 * 60 * 1000;
+const CONNECT_MS = 10 * 1000;
+const MAX_QUEUED = 256;
 
 export interface TermProxy {
   port: number;
@@ -78,6 +80,7 @@ export class Terminals {
     url.searchParams.set("vncticket", term.ticket);
     const tlsName = this.config.pveTlsName;
     const upstream = new WebSocket(url, "binary", {
+      handshakeTimeout: CONNECT_MS,
       headers: { Cookie: `PVEAuthCookie=${encodeURIComponent(term.session.ticket)}` },
       ...(this.config.pveCa ? { ca: this.config.pveCa } : {}),
       ...(tlsName ? { checkServerIdentity: (_h: string, cert: tls.PeerCertificate) => tls.checkServerIdentity(tlsName, cert) } : {}),
@@ -116,8 +119,10 @@ export class Terminals {
     });
     browser.on("message", (data: RawData) => {
       touch();
-      if (!ready) queue.push(data);
-      else if (upstream.readyState === WebSocket.OPEN) forward(data);
+      if (!ready) {
+        if (queue.length >= MAX_QUEUED) closeBoth();
+        else queue.push(data);
+      } else if (upstream.readyState === WebSocket.OPEN) forward(data);
     });
     upstream.on("close", closeBoth);
     upstream.on("error", (err) => {

@@ -261,7 +261,7 @@ export function buildServerDetail(
           uptime: friendlyUptime(s.uptime),
           uptimeSeconds: s.uptime ?? 0,
           processor: s.cpuinfo?.model ?? "Unknown",
-          cpus: s.cpuinfo?.cpus ?? 0,
+          cpus: Number(s.cpuinfo?.cpus ?? 0),
           memUsedGb: gb(s.memory?.used),
           memTotalGb: gb(s.memory?.total),
           diskUsedGb: gb(s.rootfs?.used),

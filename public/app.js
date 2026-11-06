@@ -67,9 +67,10 @@ function openWin(app) {
   el.setAttribute("aria-label", a.title);
   const vw = innerWidth, vh = innerHeight, w = Math.min(a.w, vw - 40), h = Math.min(a.h, vh - 90);
   el.style.cssText = `width:${w}px;height:${h}px;left:${Math.max(20, (vw - w) / 2 - 120 + n * 30)}px;top:${Math.max(58, (vh - h) / 2 - 10 + n * 26)}px`;
-  el.innerHTML = `<div class="tbar"><span>${a.title}</span>
-    <button class="wbtn" data-min="${app}" aria-label="Minimize ${a.title}"><svg viewBox="0 0 16 16"><path d="M3 12h10"/></svg></button>
-    <button class="wbtn" data-close="${app}" aria-label="Close ${a.title}"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>
+  const title = esc(a.title);
+  el.innerHTML = `<div class="tbar"><span>${title}</span>
+    <button class="wbtn" data-min="${app}" aria-label="Minimize ${title}"><svg viewBox="0 0 16 16"><path d="M3 12h10"/></svg></button>
+    <button class="wbtn" data-close="${app}" aria-label="Close ${title}"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>
     <div class="wbody"></div>`;
   $("#windows").append(el);
   wins[app] = el;
@@ -84,7 +85,7 @@ function focusWin(app) {
 }
 function renderTasks(active) {
   const top = active || Object.keys(wins).filter((k) => !wins[k].classList.contains("hidden")).sort((a, b) => wins[b].style.zIndex - wins[a].style.zIndex)[0];
-  $("#tasks").innerHTML = Object.keys(wins).map((k) => `<button class="task ${k === top ? "on" : ""}" data-open="${k}">${APPS[k].title}</button>`).join("");
+  $("#tasks").innerHTML = Object.keys(wins).map((k) => `<button class="task ${k === top ? "on" : ""}" data-open="${k}">${esc(APPS[k].title)}</button>`).join("");
 }
 function drag(el, handle) {
   handle.addEventListener("pointerdown", (e) => {
@@ -393,7 +394,12 @@ function savedReboot() {
   } catch { /* fall back to memory */ }
   return rebootMemory;
 }
+const PLAN_MAX_MS = 2 * 60 * 60 * 1000;
 function saveReboot(value) {
+  if (value) {
+    value.user ??= S.who;
+    value.createdAt ??= Date.now();
+  }
   rebootMemory = value;
   try {
     if (value) localStorage.setItem(REBOOT_KEY, JSON.stringify(value));
@@ -402,6 +408,18 @@ function saveReboot(value) {
 }
 const MOVE_WORDS = "Everything below moves to the node you pick. If anything can't move, the restart is cancelled. If BossMox is one of them, it reconnects after the move and you'll sign in again.";
 const STOP_WORDS = "Proxmox shuts down everything below first, waits for it all to stop, then restarts the node. This usually takes a few minutes. If BossMox runs on this node, it goes down too and this page will wait for it.";
+/**
+ * A saved plan can restart a node with no further prompt, so it only ever resumes for the person who started it,
+ * and only soon after. Returns true if there's one to carry on with.
+ */
+function planStillOurs() {
+  const plan = savedReboot();
+  if (!plan) return false;
+  if (plan.user === S.who && Date.now() - (plan.createdAt ?? 0) < PLAN_MAX_MS) return true;
+  saveReboot(null);
+  dialog(`<h3>An unfinished restart was dropped</h3><p>BossMox found a restart of ${esc(plan.server)} left over in this browser, ${plan.user === S.who ? "and it's too old to carry on with" : "started by someone else"}. Nothing was restarted. Check that node in Nodes before relying on it.</p>${closeRow}`);
+  return false;
+}
 /* Guests moved off for a restart, remembered in this browser so they can be sent home. */
 const MOVED_KEY = "bossmox-moved";
 let movedMemory = {};
@@ -420,14 +438,14 @@ function saveMoved(value) {
 }
 function setMoved(server, entry) {
   const all = allMoved();
-  if (entry) all[server] = entry;
+  if (entry) all[server] = { ...entry, user: S.who };
   else delete all[server];
   saveMoved(all);
 }
 /** Only guests still sitting on the server they were moved to can go back. */
 function movedGuests(server) {
   const entry = allMoved()[server];
-  if (!entry || !S.data) return null;
+  if (!entry || !S.data || (entry.user && entry.user !== S.who)) return null;
   const here = new Map(S.data.vms.map((v) => [v.id, v]));
   const guests = entry.guests.filter((g) => here.get(g.id)?.node === entry.target);
   return guests.length ? { target: entry.target, guests } : null;
@@ -1685,6 +1703,7 @@ async function showLogin(message) {
   S.watching = false;
   $("#scrim").classList.remove("on");
   S.watching = false;
+  closeVnc();
   Object.keys(wins).forEach((k) => {
     wins[k].remove();
     delete wins[k];
@@ -1757,6 +1776,7 @@ $("#loginform").addEventListener("submit", async (e) => {
   }
 });
 $("#signout").addEventListener("click", async () => {
+  saveReboot(null);
   try { await post("api/logout", {}); } finally { showLogin(); }
 });
 
@@ -1772,13 +1792,14 @@ async function refresh() {
     }
     if (!res.ok) throw new Error(body.error);
     S.data = body;
+    S.who = body.username;
     $("#who").textContent = body.username;
     $("#who").hidden = false;
     $("#login").hidden = true;
     $("#desk").hidden = false;
     $("#signout").hidden = false;
     polling ??= setInterval(refresh, 10000);
-    if (savedReboot() && !S.watching) watchRestart();
+    if (!S.watching && planStillOurs()) watchRestart();
     if (S.sel === null && body.vms[0]) S.sel = body.vms[0].id;
     S.failed = false;
   } catch (err) {

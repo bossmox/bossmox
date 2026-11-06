@@ -106,7 +106,7 @@ export function buildOverview(
   const vms = resources
     .filter((r) => (r.type === "qemu" || r.type === "lxc") && !r.template)
     .map((r) => {
-      const id = r.vmid ?? 0;
+      const id = Number(r.vmid ?? 0);
       const name = r.name ?? `VM ${id}`;
       const guest = guests.get(id);
       const config = guest?.config;
@@ -127,7 +127,7 @@ export function buildOverview(
         node: r.node ?? "",
         running: r.status === "running",
         cpuPct: Math.round((r.cpu ?? 0) * 100),
-        cores: r.maxcpu ?? 0,
+        cores: Number(r.maxcpu ?? 0),
         memUsedGb: gb(r.mem),
         memTotalGb: gb(r.maxmem),
         diskGb: gb(r.maxdisk),

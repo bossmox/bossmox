@@ -70,7 +70,7 @@ export function buildBackups(sources: BackupSource[], guests: GuestName[], jobs:
     groups: list.sort((a, b) => a.name.localeCompare(b.name)),
     unscheduled: guests.filter((g) => unprotected.has(g.id)).map((g) => g.name),
     schedules: jobs.map((j) => {
-      const keep = typeof j["prune-backups"] === "string" ? Number(j["prune-backups"].match(/keep-last=(\d+)/)?.[1]) : j["prune-backups"]?.["keep-last"];
+      const keep = typeof j["prune-backups"] === "string" ? Number(j["prune-backups"].match(/keep-last=(\d+)/)?.[1]) : Number(j["prune-backups"]?.["keep-last"]);
       return {
         id: j.id ?? "",
         when: describeSchedule(j.schedule),

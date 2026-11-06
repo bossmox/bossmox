@@ -123,3 +123,20 @@ test("a session's open consoles and unclaimed links all go when it ends", () => 
   assert.deepEqual(closed, ["mine 1", "mine 2"]);
   assert.equal(terminals.claim(link, mine), undefined, "a link made before sign-out stops working");
 });
+
+test("signing out during a ticket renewal still ends the session", async () => {
+  let clock = 1000;
+  let release = (_: LoginResult) => {};
+  let renewals = 0;
+  const sessions = new Sessions(client(async () => {
+    renewals += 1;
+    if (renewals === 1) return ok();
+    return new Promise<LoginResult>((resolve) => { release = resolve; });
+  }), () => clock);
+  const out = await sessions.login("a", "b", "1.1.1.1");
+  clock += 2 * HOUR;
+  const pending = sessions.get(out.id);
+  sessions.end(out.id);
+  release(ok("T2"));
+  assert.equal(await pending, undefined);
+});

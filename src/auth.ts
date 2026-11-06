@@ -125,6 +125,8 @@ export class Sessions {
         }
         s.renewedAt = t - RENEW_MS; // Proxmox is unreachable, so try again next time.
       }
+      // Signing out can land while that was waiting. An ended session must stay ended.
+      if (!this.sessions.has(id)) return undefined;
     }
     return s;
   }

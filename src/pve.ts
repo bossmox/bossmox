@@ -29,8 +29,9 @@ export class PveClient {
   }
 
   /**
-   * Tries each Proxmox address until one answers. Only a failed connection moves to the next
-   * address, because then the request never reached Proxmox and can't have run twice.
+   * Tries each Proxmox address until one answers. Changes only move on when the connection never
+   * opened. A reset can arrive after Proxmox got the request, and a reboot mustn't run twice.
+   * Reads, and signing in, are safe to repeat.
    */
   private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, ticket?: string, body?: string, csrf?: string): Promise<T> {
     const urls = this.config.pveUrls;
@@ -42,7 +43,8 @@ export class PveClient {
         return out;
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code ?? "";
-        const unreachable = ["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ECONNRESET"].includes(code) || (method === "GET" && err instanceof Error && !(err instanceof PveError));
+        const repeatable = method === "GET" || path === "/access/ticket";
+        const unreachable = ["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"].includes(code) || (repeatable && err instanceof Error && !(err instanceof PveError));
         if (!unreachable || i >= urls.length - 1) throw err;
       }
     }

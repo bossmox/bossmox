@@ -195,7 +195,7 @@ async function loadCreatePlan(name: string, kind: "qemu" | "lxc", ticket: string
     installers: files.flat().map((f) => ({ volid: f.volid, label: installerLabel(f.volid) })),
     mediaStorages: media.filter(usable).map((s) => s.storage),
     bridges: bridges.map((b) => b.iface),
-    cores: status.cpuinfo?.cpus ?? 0,
+    cores: Number(status.cpuinfo?.cpus ?? 0),
     memoryGb: Math.floor((status.memory?.total ?? 0) / 1024 ** 3),
   };
 }
@@ -687,6 +687,8 @@ const handler: http.RequestListener = async (req, res) => {
 const server = config.tls ? https.createServer(config.tls, handler) : http.createServer(handler);
 
 server.on("upgrade", async (req, socket, head) => {
+  // Without this, a client dropping the connection during the checks below could take the whole process down.
+  socket.on("error", () => socket.destroy());
   const refuse = () => {
     socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
     socket.destroy();
