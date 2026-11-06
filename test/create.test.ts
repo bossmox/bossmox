@@ -81,6 +81,13 @@ test("a cloud-init drive is never replaced with a disc", () => {
   assert.throws(() => settingsForm("qemu", edit({ disc: "local:iso/a.iso" }), { ide2: "local:410/vm-410-cloudinit.qcow2,media=cdrom" }), /setup disk/);
 });
 
+test("a data disk on the disc drive's slot is never rewritten", () => {
+  assert.throws(() => settingsForm("qemu", edit({ disc: "" }), { ide2: "local:100/vm-100-disk-1.raw,size=32G" }), /has a disk/);
+  assert.throws(() => settingsForm("qemu", edit({ disc: "local:iso/a.iso" }), { ide2: "local:100/vm-100-disk-1.raw,size=32G" }), /has a disk/);
+  assert.equal(settingsForm("qemu", edit(), { ide2: "local:100/vm-100-disk-1.raw,size=32G" }).ide2, undefined, "other settings still save");
+  assert.equal(settingsForm("qemu", edit({ disc: "" }), { ide2: "none,media=cdrom" }).ide2, "none,media=cdrom");
+});
+
 test("disc downloads must be a plain .iso from the web", () => {
   assert.deepEqual(discDownload("https://example.com/a/alpine-3.iso"), { url: "https://example.com/a/alpine-3.iso", filename: "alpine-3.iso" });
   assert.throws(() => discDownload("file:///etc/passwd.iso"), /https/);

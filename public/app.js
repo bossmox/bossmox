@@ -438,6 +438,12 @@ function savedReboot() {
   return rebootMemory;
 }
 const PLAN_MAX_MS = 2 * 60 * 60 * 1000;
+const MOVED_MAX_MS = 3 * 24 * 60 * 60 * 1000;
+/** Whether a run should carry on. Checked after every wait: signing out or stopping can happen during one. */
+function alive(plan) {
+  const now = savedReboot();
+  return Boolean(now) && now.createdAt === plan.createdAt && now.user === S.who;
+}
 function saveReboot(value) {
   if (value) {
     value.user ??= S.who;
@@ -481,14 +487,14 @@ function saveMoved(value) {
 }
 function setMoved(server, entry) {
   const all = allMoved();
-  if (entry) all[server] = { ...entry, user: S.who };
+  if (entry) all[server] = { ...entry, user: S.who, createdAt: Date.now() };
   else delete all[server];
   saveMoved(all);
 }
 /** Only guests still sitting on the server they were moved to can go back. */
 function movedGuests(server) {
   const entry = allMoved()[server];
-  if (!entry || !S.data || (entry.user && entry.user !== S.who)) return null;
+  if (!entry || !S.data || entry.user !== S.who || Date.now() - (entry.createdAt ?? 0) > MOVED_MAX_MS) return null;
   const here = new Map(S.data.vms.map((v) => [v.id, v]));
   const guests = entry.guests.filter((g) => here.get(g.id)?.node === entry.target);
   return guests.length ? { target: entry.target, guests } : null;
@@ -517,7 +523,7 @@ async function startRestart(server) {
   const guests = (S.data?.vms ?? []).filter((v) => v.node === server && v.running);
   const blocked = plan.busy.length > 0;
   const others = (S.data?.nodes ?? []).filter((n) => n.online && n.name !== server).map((n) => n.name);
-  if (allMoved()[server] && !movedGuests(server)) setMoved(server, null);
+  if (allMoved()[server]?.user === S.who && !movedGuests(server)) setMoved(server, null);
   const canMove = guests.length > 0 && others.length > 0;
   S.restart = { server, guests };
   dialog(`<h3>Restart ${esc(server)}?</h3>
@@ -602,7 +608,7 @@ async function watchRestart() {
   const state = { back: false, down: false, lost: false, running: new Set(plan.guests.map((g) => g.id)), where: new Map() };
   let backAt = 0;
   for (;;) {
-    if (!savedReboot()) break;
+    if (!alive(plan)) break;
     try {
       const o = await signal("api/overview");
       const d = await signal(`api/server?name=${encodeURIComponent(plan.server)}`).catch((err) => {
@@ -620,6 +626,7 @@ async function watchRestart() {
       if (plan.phase === "moving") {
         const left = plan.guests.filter((g) => state.where.get(g.id) !== plan.target);
         const task = plan.task ? await signal(`api/task?server=${encodeURIComponent(plan.server)}&task=${encodeURIComponent(plan.task)}`).catch(() => null) : null;
+        if (!alive(plan)) break;
         if (left.length === 0 && plan.rolling) {
           plan.phase = "installing";
           saveReboot(plan);
@@ -627,6 +634,7 @@ async function watchRestart() {
         }
         if (left.length === 0) {
           await sendRestart(plan);
+          if (!alive(plan)) break;
           plan.phase = "restarting";
           plan.startedAt = Date.now();
           saveReboot(plan);
@@ -751,10 +759,11 @@ async function rollingStep(rolling) {
     // A server that just came back can look busy or absent for a moment.
     for (const until = Date.now() + 3 * 60 * 1000; ; await wait(5000)) {
       check = await signal("api/rolling-plan");
-      if (!savedReboot()) return;
+      if (!alive(plan)) return;
       if (!check.blocked.length || Date.now() > until) break;
     }
     S.data = await signal("api/overview");
+    if (!alive(plan)) return;
   } catch (err) {
     S.watching = false;
     if (err.message === "signed out") return;
@@ -778,6 +787,7 @@ async function rollingStep(rolling) {
       const res = await post("api/action/move-all", { server, target: plan.target, guests: guests.map((v) => v.id).join(",") });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error);
+      if (!alive(plan)) return;
       plan.task = body.task;
       plan.startedAt = Date.now();
       saveReboot(plan);
@@ -806,6 +816,7 @@ async function rollingAfterInstall(plan) {
   } catch (err) {
     if (err.message === "signed out") return;
   }
+  if (!alive(plan)) return;
   if (left === undefined) return rollingInstall(plan, `BossMox couldn't confirm the updates installed on ${plan.server}, so it hasn't restarted it.`);
   if (left > 0) return rollingInstall(plan, `${left} ${left === 1 ? "update is" : "updates are"} still waiting on ${plan.server}${plan.restart ? ", so it hasn't been restarted" : ""}.`);
   if (!plan.restart) return rollingNext(plan);
@@ -814,6 +825,7 @@ async function rollingAfterInstall(plan) {
   } catch (err) {
     return rollingStop(plan, `${plan.server} wasn't restarted`, err.message || "BossMox lost contact with Proxmox.");
   }
+  if (!alive(plan)) return;
   plan.phase = "restarting";
   plan.startedAt = Date.now();
   saveReboot(plan);
@@ -830,8 +842,10 @@ async function rollingReturn(plan) {
   const started = Date.now();
   let finishedAt = 0;
   for (;;) {
+    if (!alive(plan)) return;
     try {
       const o = await signal("api/overview");
+      if (!alive(plan)) return;
       S.data = o;
       const where = new Map(o.vms.map((v) => [v.id, v.node]));
       const left = plan.guests.filter((g) => where.get(g.id) !== plan.server);
@@ -841,6 +855,7 @@ async function rollingReturn(plan) {
         const res = await post("api/action/move-all", { server: plan.target, target: plan.server, guests: left.map((g) => g.id).join(",") });
         const body = await res.json();
         if (!res.ok) throw new Error(body.error);
+        if (!alive(plan)) return;
         plan.returnTask = body.task;
         saveReboot(plan);
       } else {
@@ -862,6 +877,7 @@ async function rollingReturn(plan) {
   }
 }
 function rollingNext(plan) {
+  if (!alive(plan)) return;
   const rolling = { ...plan.rolling, index: plan.rolling.index + 1 };
   if (rolling.index < rolling.servers.length) return rollingStep(rolling);
   saveReboot(null);
@@ -1255,6 +1271,7 @@ async function startMove(id) {
 }
 
 function closeTerminal() {
+  const updater = term?.guest === null;
   term?.socket?.close();
   term?.xterm?.dispose();
   term?.observer?.disconnect();
@@ -1266,11 +1283,12 @@ function closeTerminal() {
   renderTasks();
   loadServer();
   const plan = savedReboot();
-  if (plan?.rolling && plan.phase === "installing") rollingAfterInstall(plan);
+  if (updater && plan?.rolling && plan.phase === "installing") rollingAfterInstall(plan);
 }
 async function openTerminal(server) {
-  if (term) return openWin("terminal");
+  if (term && term.guest === null) return openWin("terminal");
   try {
+    if (term) throw new Error("Close the open console first, then open the updater.");
     const res = await post("api/action/install-updates", { server });
     const body = await res.json();
     if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
@@ -1317,9 +1335,6 @@ function showTerminal(server, id, title, help, guest = null) {
       recent = (recent + decoder.decode(bytes)).slice(-200);
       if (/(^|\n)starting shell\r?\n/.test(recent) && term) {
         term.done = true;
-        // Proxmox leaves a root shell open after the updater, and nobody asked for one. Ctrl+D ends it,
-        // once bash has started: anything sent before then can be thrown away.
-        setTimeout(() => socket.readyState === 1 && socket.send("0:1:\u0004"), 2500);
         $(".termhelp").textContent = savedReboot()?.rolling && savedReboot().restart ? `The updater has finished on ${server}. Check the output, then close this window and BossMox restarts ${server}.` : `The updater has finished on ${server}. Check the output, then close this window.`;
       }
     };
@@ -1704,6 +1719,7 @@ document.addEventListener("input", (e) => {
 /* Look picker: remembered per browser */
 const LOOKS = [["daylight", "Daylight"], ["dusk", "Dusk"], ["workbench", "Workbench"]];
 function setLook(k) {
+  if (!["daylight", "dusk", "workbench"].includes(k)) k = "daylight";
   document.documentElement.dataset.look = k;
   try { localStorage.setItem("bossmox-look", k); } catch { /* still works, just not remembered */ }
   document.querySelectorAll("#looks button").forEach((b) => b.classList.toggle("on", b.dataset.look === k));
@@ -1748,8 +1764,9 @@ async function showLogin(message) {
   term = null;
   S.taskRunning = false;
   S.watching = false;
+  S.taskToken = (S.taskToken ?? 0) + 1;
+  S.pending = S.afterTask = S.who = S.backups = S.snapSupport = null;
   $("#scrim").classList.remove("on");
-  S.watching = false;
   closeVnc();
   Object.keys(wins).forEach((k) => {
     wins[k].remove();
@@ -1824,6 +1841,7 @@ $("#loginform").addEventListener("submit", async (e) => {
 });
 $("#signout").addEventListener("click", async () => {
   saveReboot(null);
+  saveMoved({});
   try { await post("api/logout", {}); } finally { showLogin(); }
 });
 

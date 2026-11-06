@@ -185,7 +185,8 @@ export interface RawBackupStorage {
 export function buildRebootPlan(active: Section<RawTask[]>, storages: Section<RawBackupStorage[]>, cantMove: string[] = []) {
   return {
     cantMove,
-    busy: active.available ? active.value.map((t) => `${friendlyTask(t)}${t.id ? ` on ${t.id}` : ""}`) : [],
+    // Someone's open console isn't work in progress, and it shouldn't hold up a restart.
+    busy: active.available ? active.value.filter((t) => !QUIET_TASKS.has(t.type ?? "")).map((t) => `${friendlyTask(t)}${t.id ? ` on ${t.id}` : ""}`) : [],
     busyKnown: active.available,
     backupStorages: storages.available
       ? storages.value.filter((s) => s.active !== 0 && s.enabled !== 0).map((s) => ({ name: s.storage, freeGb: gb(s.avail) }))

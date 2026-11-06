@@ -89,7 +89,7 @@ export function buildOverview(
   notBackedUp: { vmid: number }[],
   now: Date = new Date(),
 ) {
-  const unprotected = new Set(notBackedUp.map((g) => g.vmid));
+  const unprotected = new Set(notBackedUp.map((g) => Number(g.vmid)));
   const nodes = resources
     .filter((r) => r.type === "node")
     .map((r) => ({
@@ -131,11 +131,12 @@ export function buildOverview(
         memUsedGb: gb(r.mem),
         memTotalGb: gb(r.maxmem),
         diskGb: gb(r.maxdisk),
-        os: OS_NAMES[String(config?.ostype ?? "")] ?? (config?.ostype ? String(config.ostype) : "Not set"),
+        os: (Object.hasOwn(OS_NAMES, String(config?.ostype ?? "")) ? OS_NAMES[String(config?.ostype)] : undefined) ?? (config?.ostype ? String(config.ostype) : "Not set"),
         startsAtBoot: config?.onboot === 1,
         memoryMb: Number(config?.memory ?? Math.round((r.maxmem ?? 0) / 1024 ** 2)),
         disc: String(config?.ide2 ?? "").startsWith("none") ? "" : String(config?.ide2 ?? "").split(",")[0],
-        discLocked: String(config?.ide2 ?? "").includes("cloudinit"),
+        // Anything on that slot that isn't a disc drive, such as a data disk, must never be rewritten as one.
+        discLocked: config?.ide2 !== undefined && (String(config.ide2).includes("cloudinit") || !String(config.ide2).includes("media=cdrom")),
         bridges: [...new Set(Object.entries(config ?? {}).filter(([k]) => /^net\d+$/.test(k)).map(([, v]) => String(v).match(/bridge=([^,]+)/)?.[1]).filter((b): b is string => Boolean(b)))],
         configLoaded: config !== undefined,
         tech: {

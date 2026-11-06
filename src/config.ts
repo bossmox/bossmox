@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isIP } from "node:net";
 
 export interface Config {
   pveUrl: URL;
@@ -15,18 +16,27 @@ export interface Config {
   trustedProxies: Set<string>;
   consoleIdleMs: number;
   tlsConfigured: boolean;
+  /** The names people use, without ports. A proxy can drop the port from Host, so these also pass as an Origin there. */
+  publicNames: Set<string>;
 }
 
-const plainAddress = (a: string) => a.trim().toLowerCase().replace(/^::ffff:/, "");
+/** Takes off what proxies add: brackets, a port, the IPv4-in-IPv6 prefix. */
+function plainAddress(a: string): string {
+  const s = a.trim().toLowerCase();
+  const bracket = s.match(/^\[([^\]]+)\](:\d+)?$/);
+  const ip = bracket ? (bracket[1] as string) : s.replace(/^(\d+\.\d+\.\d+\.\d+):\d+$/, "$1");
+  return ip.replace(/^::ffff:/, "").replace(/%.*$/, "");
+}
 
 /**
  * Whether a request's Origin is this exact site. Only a page served from the same scheme, name and port counts,
  * so another app on the same machine, or a page on someone's localhost, doesn't pass as BossMox.
  */
-export function sameOrigin(origin: string, host: string | undefined, https: boolean): boolean {
+export function sameOrigin(origin: string, host: string | undefined, https: boolean, proxiedNames: Set<string> = new Set()): boolean {
   try {
     const o = new URL(origin);
-    return o.protocol === (https ? "https:" : "http:") && o.host.toLowerCase() === (host ?? "").toLowerCase();
+    if (o.protocol !== (https ? "https:" : "http:")) return false;
+    return o.host.toLowerCase() === (host ?? "").toLowerCase() || proxiedNames.has(o.hostname.toLowerCase());
   } catch {
     return false;
   }
@@ -42,7 +52,9 @@ export function clientAddress(socketAddress: string | undefined, forwarded: stri
   const hops = forwarded.split(",").map(plainAddress).filter(Boolean);
   for (let i = hops.length - 1; i >= 0; i--) {
     const hop = hops[i] as string;
-    if (!trusted.has(hop)) return hop;
+    if (trusted.has(hop)) continue;
+    // Anything that isn't an address isn't believed, and it never reaches a log or a limit key.
+    return isIP(hop) ? hop : direct;
   }
   return direct;
 }
@@ -59,7 +71,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (pveUrls.some((u) => u.protocol !== "https:" && !isLoopback(u.hostname))) {
     throw new Error("PVE_URL must use https, so passwords are never sent in the clear.");
   }
-  const extra = (env.BOSSMOX_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
+  const extra = (env.BOSSMOX_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase().replace(/:\d+$/, "")).filter(Boolean);
   const config: Config = {
     pveUrl,
     pveUrls,
@@ -68,6 +80,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     allowedHosts: new Set(["localhost", "127.0.0.1", ...extra]),
     behindProxy: env.BOSSMOX_BEHIND_HTTPS_PROXY === "1",
     allowHttp: env.BOSSMOX_ALLOW_HTTP === "1",
+    publicNames: new Set(extra),
     tlsConfigured: Boolean(env.TLS_CERT_FILE && env.TLS_KEY_FILE),
     consoleIdleMs: Math.max(1, Number(env.BOSSMOX_CONSOLE_IDLE_MINUTES) || 30) * 60 * 1000,
     trustedProxies: new Set((env.BOSSMOX_TRUSTED_PROXY ?? "").split(",").map(plainAddress).filter(Boolean)),

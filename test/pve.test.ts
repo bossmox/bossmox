@@ -44,6 +44,19 @@ test("a change still fails over when the connection never opened", async () => {
   second.close();
 });
 
+test("a change that never connected is marked as never reaching Proxmox", async () => {
+  const dead = await fake(good);
+  dead.close();
+  await new Promise((r) => setTimeout(r, 50));
+  await assert.rejects(client(dead.url).post("/x", who), (e: { unreached?: boolean }) => e.unreached === true);
+});
+
+test("a reset after connecting isn't marked that way", async () => {
+  const first = await fake(reset);
+  await assert.rejects(client(first.url).post("/x", who), (e: { unreached?: boolean }) => e.unreached === false);
+  first.close();
+});
+
 test("reads still fail over after a reset", async () => {
   const [first, second] = await Promise.all([fake(reset), fake(good)]);
   assert.equal(await client(first.url, second.url).get("/cluster/status"), "UPID:ok");

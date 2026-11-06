@@ -79,3 +79,12 @@ test("shared storage counts once in cluster usage", () => {
   const view = buildOverview([{ ...nas, node: "a" }, { ...nas, node: "b" }], new Map(), []);
   assert.equal(view.cluster.diskTotalGb, 100);
 });
+
+test("only a real disc drive can have its disc changed", () => {
+  const vm = (ide2?: string) => buildOverview([{ type: "qemu", vmid: 300, name: "vm", node: "a", status: "stopped" }], new Map([[300, { config: ide2 ? { ide2 } : {} }]]), []).vms[0];
+  assert.equal(vm()?.discLocked, false);
+  assert.equal(vm("none,media=cdrom")?.discLocked, false);
+  assert.equal(vm("local:iso/a.iso,media=cdrom")?.discLocked, false);
+  assert.equal(vm("local:100/vm-100-disk-1.raw,size=32G")?.discLocked, true, "a data disk");
+  assert.equal(vm("local:410/vm-410-cloudinit.qcow2,media=cdrom")?.discLocked, true, "cloud-init");
+});

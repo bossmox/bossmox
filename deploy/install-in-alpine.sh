@@ -6,11 +6,18 @@ set -eu
 PUBLIC_ADDRESS=$1
 PVE_URL=$2
 PVE_TLS_NAME=${3:-}
+
+# These end up in a file that's read by a root shell, so only what an address or URL needs gets through.
+for value in "$PUBLIC_ADDRESS" "$PVE_URL" "$PVE_TLS_NAME"; do
+  case "$value" in
+    *[!]A-Za-z0-9.:/,_[-]*) echo "That doesn't look like an address: $value" >&2; exit 1 ;;
+  esac
+done
 STAGE=$(dirname "$0")
 
 apk update -q
 apk upgrade -q
-apk add -q nodejs openssl
+apk add -q nodejs openssl logrotate
 
 # Alpine ignores Proxmox's shutdown request unless this is running, so the VM couldn't shut down cleanly.
 rc-update add acpid default >/dev/null
@@ -25,10 +32,18 @@ chown -R root:root /opt/bossmox
 install -m 644 "$STAGE/pve-root-ca.pem" /etc/bossmox/pve-root-ca.pem
 
 if [ ! -f /etc/bossmox/tls.key ]; then
-  case "$PUBLIC_ADDRESS" in
-    *[!0-9.]*) SAN="DNS:$PUBLIC_ADDRESS" ;;
-    *) SAN="IP:$PUBLIC_ADDRESS" ;;
-  esac
+  SAN=""
+  OLDIFS=$IFS
+  IFS=,
+  for name in $PUBLIC_ADDRESS; do
+    case "$name" in
+      *:*) entry="IP:${name%%:[0-9]*}" ;;
+      *[!0-9.]*) entry="DNS:$name" ;;
+      *) entry="IP:$name" ;;
+    esac
+    SAN="${SAN:+$SAN,}$entry"
+  done
+  IFS=$OLDIFS
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
     -keyout /etc/bossmox/tls.key -out /etc/bossmox/tls.crt \
     -subj "/CN=BossMox" -addext "subjectAltName=$SAN" 2>/dev/null
@@ -74,6 +89,25 @@ start_pre() {
 }
 EOF
 chmod 755 /etc/init.d/bossmox
+
+# The disk is 1 GB, so the log can't be left to grow.
+cat > /etc/logrotate.d/bossmox <<'EOF'
+/var/log/bossmox.log {
+  size 5M
+  rotate 3
+  compress
+  missingok
+  notifempty
+  copytruncate
+}
+EOF
+cat > /etc/periodic/hourly/bossmox-logs <<'EOF'
+#!/bin/sh
+exec /usr/sbin/logrotate /etc/logrotate.d/bossmox
+EOF
+chmod 755 /etc/periodic/hourly/bossmox-logs
+rc-update add crond default >/dev/null 2>&1 || true
+rc-service crond start >/dev/null 2>&1 || true
 rc-update add bossmox default >/dev/null 2>&1 || true
 rc-service bossmox restart >/dev/null 2>&1 || rc-service bossmox start
 rm -f "$STAGE/bossmox.tgz" "$STAGE/pve-root-ca.pem"

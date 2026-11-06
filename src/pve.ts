@@ -29,9 +29,10 @@ export class PveClient {
   }
 
   /**
-   * Tries each Proxmox address until one answers. Changes only move on when the connection never
-   * opened. A reset can arrive after Proxmox got the request, and a reboot mustn't run twice.
-   * Reads, and signing in, are safe to repeat.
+   * Tries each Proxmox address until one answers. Changes only move on when no connection ever
+   * opened, however that showed up: a node that's off may just never answer. Once connected, a reset
+   * can arrive after Proxmox got the request, and a reboot mustn't run twice. Reads, and signing in,
+   * are safe to repeat.
    */
   private async request<T>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, ticket?: string, body?: string, csrf?: string): Promise<T> {
     const urls = this.config.pveUrls;
@@ -42,9 +43,9 @@ export class PveClient {
         this.current = index;
         return out;
       } catch (err) {
-        const code = (err as NodeJS.ErrnoException).code ?? "";
         const repeatable = method === "GET" || path === "/access/ticket";
-        const unreachable = ["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"].includes(code) || (repeatable && err instanceof Error && !(err instanceof PveError));
+        const neverOpened = (err as { unreached?: boolean }).unreached === true;
+        const unreachable = neverOpened || (repeatable && err instanceof Error && !(err instanceof PveError));
         if (!unreachable || i >= urls.length - 1) throw err;
       }
     }
@@ -86,8 +87,13 @@ export class PveClient {
         });
       };
       const req = secure ? https.request(url, options, onResponse) : http.request(url, options, onResponse);
+      let connected = false;
+      req.on("socket", (socket) => {
+        if (socket.connecting) socket.once("connect", () => { connected = true; });
+        else connected = true;
+      });
       req.on("timeout", () => req.destroy(new Error("Proxmox took too long to answer")));
-      req.on("error", reject);
+      req.on("error", (err) => reject(Object.assign(err, { unreached: !connected })));
       req.end(body);
     });
   }

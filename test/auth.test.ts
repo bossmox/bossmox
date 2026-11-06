@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { fromPerson, Terminals } from "../src/terminal.js";
+import { fromPerson, Terminals, UPDATER_DONE } from "../src/terminal.js";
 import { clientAddress, sameOrigin } from "../src/config.js";
-import { AuthError, Sessions, type LoginClient } from "../src/auth.js";
+import { AuthError, clientGroup, Sessions, type LoginClient } from "../src/auth.js";
 import { PveError, type LoginResult } from "../src/pve.js";
 
 const HOUR = 60 * 60 * 1000;
@@ -197,8 +197,8 @@ test("old failure records don't pile up", async () => {
   const fails = (s as unknown as { fails: Map<string, unknown> }).fails;
   assert.equal(fails.size, 80);
   clock += FIVE_MIN + 1;
-  await assert.rejects(s.login("x@pve", "bad", "10.9.9.9"), AuthError);
-  assert.equal(fails.size, 2);
+  await s.tick();
+  assert.equal(fails.size, 0);
 });
 
 const trusted = new Set(["10.0.0.5"]);
@@ -214,6 +214,9 @@ test("a client can't forge its way past the proxy's own entry", () => {
   assert.equal(clientAddress("10.0.0.5", "9.9.9.9, 1.2.3.4", trusted), "1.2.3.4", "the proxy adds the real one on the right");
   assert.equal(clientAddress("10.0.0.5", "1.2.3.4, 10.0.0.5", trusted), "1.2.3.4", "skips trusted hops");
   assert.equal(clientAddress("1.2.3.4", "9.9.9.9", new Set()), "1.2.3.4", "with nothing trusted the header is ignored");
+  assert.equal(clientAddress("10.0.0.5", "1.2.3.4:51000", trusted), "1.2.3.4", "a port added by the proxy");
+  assert.equal(clientAddress("10.0.0.5", "[2001:db8::1]:51000", trusted), "2001:db8::1");
+  assert.equal(clientAddress("10.0.0.5", "not-an-address\nforged", trusted), "10.0.0.5", "junk isn't believed");
 });
 
 test("the timer ends expired sessions with nobody making requests", async () => {
@@ -265,12 +268,115 @@ test("only a person counts as console activity", () => {
   assert.equal(fromPerson(Buffer.from("2"), false), false, "the page's ping");
   assert.equal(fromPerson(Buffer.from("1:80:24:"), false), false, "a window resize");
   assert.equal(fromPerson(Buffer.from("0:1:a"), false), true, "a key");
+  assert.equal(fromPerson(Buffer.from("0:6:\x1b[5;9R"), false), false, "the terminal answering a cursor query");
+  assert.equal(fromPerson(Buffer.from("0:4:\x1b[0n"), false), false, "the terminal answering a status query");
+  assert.equal(fromPerson(Buffer.from("0:3:\x1b[I"), false), false, "window focus");
+  assert.equal(fromPerson(Buffer.from("0:3:\x1b[A"), false), true, "an arrow key is a person");
   const screen = b(3, 1, 0, 0, 0, 0, 2, 128, 1, 224);
+  const fence = b(248, 0, 0, 0, 0, 0, 0, 0, 2, 1, 2);
+  const continuous = b(150, 1, 0, 0, 0, 0, 2, 128, 1, 224);
   assert.equal(fromPerson(screen, true), false, "noVNC asking for the screen");
   assert.equal(fromPerson(Buffer.concat([screen, screen]), true), false, "two of those together");
+  assert.equal(fromPerson(fence, true), false, "an automatic fence reply");
+  assert.equal(fromPerson(continuous, true), false, "continuous updates");
   assert.equal(fromPerson(b(4, 1, 0, 0, 0, 0, 0, 97), true), true, "a key on a VM");
   assert.equal(fromPerson(b(5, 0, 0, 10, 0, 10), true), true, "the mouse");
-  assert.equal(fromPerson(Buffer.concat([screen, b(4, 1, 0, 0, 0, 0, 0, 97)]), true), true, "a key behind a screen request");
+  assert.equal(fromPerson(b(255, 0, 0, 1, 0, 0, 0, 97, 0, 0, 0, 30), true), true, "QEMU's extended key");
+  assert.equal(fromPerson(Buffer.concat([screen, fence, b(4, 1, 0, 0, 0, 0, 0, 97)]), true), true, "a key behind other messages");
+});
+
+test("the updater's end is matched only on a line of its own", () => {
+  assert.equal(UPDATER_DONE.test("Your System is up-to-date\r\n\r\nstarting shell\r\n"), true);
+  assert.equal(UPDATER_DONE.test("Unpacking starting shell helper\r\n"), false);
+});
+
+test("signing out never waits on Proxmox", async () => {
+  let clock = 1000;
+  let renewals = 0;
+  const s = new Sessions(client(async () => {
+    renewals += 1;
+    return ok();
+  }), () => clock);
+  const out = await s.login("a@pve", "pw", "1.1.1.1");
+  clock += 2 * HOUR;
+  assert.equal(s.end(out.id), "a@pve");
+  assert.equal(renewals, 1, "no renewal on the way out");
+  assert.equal(s.end(out.id), undefined);
+});
+
+test("requests during a renewal wait for its answer", async () => {
+  let clock = 1000;
+  let answer = (_: Error) => {};
+  let calls = 0;
+  const s = new Sessions(client(async () => {
+    calls += 1;
+    if (calls === 1) return ok();
+    return new Promise<LoginResult>((_, no) => { answer = no; });
+  }), () => clock);
+  const out = await s.login("a@pve", "pw", "1.1.1.1");
+  clock += 2 * HOUR;
+  const first = s.get(out.id);
+  const second = s.get(out.id);
+  answer(new PveError(401, "disabled"));
+  assert.equal(await first, undefined);
+  assert.equal(await second, undefined, "the second request must not slip through");
+  assert.equal(calls, 2, "and only one renewal ran");
+});
+
+test("a whole IPv6 /64 counts as one client", async () => {
+  assert.equal(clientGroup("2001:db8:1:2:aaaa::1"), "2001:db8:1:2::/64");
+  assert.equal(clientGroup("2001:db8:1:2:bbbb:cccc:dddd:eeee"), "2001:db8:1:2::/64");
+  assert.equal(clientGroup("2001:db8::1"), "2001:db8:0:0::/64");
+  assert.equal(clientGroup("1.2.3.4"), "1.2.3.4");
+  const s = new Sessions(client(wrong));
+  for (let i = 0; i < 10; i++) await assert.rejects(s.login("a@pve", "bad", `2001:db8:1:2::${i + 1}`), (e: AuthError) => e.status === 401);
+  await assert.rejects(s.login("a@pve", "bad", "2001:db8:1:2::99"), (e: AuthError) => e.status === 429);
+});
+
+test("someone's usual address gets in during an attack on their account", async () => {
+  let bad = false;
+  const s = new Sessions(client(async () => {
+    if (bad) throw new PveError(401, "no");
+    return ok();
+  }));
+  await s.login("root@pam", "pw", "10.0.0.9");
+  bad = true;
+  for (let i = 0; i < 50; i++) await assert.rejects(s.login("root@pam", "bad", `10.1.0.${i}`), (e: AuthError) => e.status === 401);
+  await assert.rejects(s.login("root@pam", "bad", "10.2.0.1"), (e: AuthError) => e.status === 429, "a new address is held back");
+  bad = false;
+  assert.equal((await s.login("root@pam", "pw", "10.0.0.9")).kind, "ok");
+});
+
+test("Proxmox being unwell doesn't count against anyone", async () => {
+  const s = new Sessions(client(async () => {
+    throw new PveError(503, "restarting");
+  }));
+  for (let i = 0; i < 25; i++) await assert.rejects(s.login("a@pve", "pw", "1.1.1.1"), PveError);
+  const t = new Sessions(client(async () => {
+    throw Object.assign(new Error("Proxmox took too long to answer"), { unreached: true });
+  }));
+  for (let i = 0; i < 25; i++) await assert.rejects(t.login("a@pve", "pw", "1.1.1.1"), /too long/);
+});
+
+test("a taken-back attempt can't erase a newer window's failures", async () => {
+  let clock = 1000;
+  let finish = () => {};
+  let hang = true;
+  const s = new Sessions(client(async () => {
+    if (hang) {
+      await new Promise<void>((r) => { finish = r; });
+      return ok();
+    }
+    throw new PveError(401, "no");
+  }), () => clock);
+  const slow = s.login("a@pve", "pw", "1.1.1.1");
+  clock += FIVE_MIN + 1;
+  await s.tick();
+  hang = false;
+  for (let i = 0; i < 10; i++) await assert.rejects(s.login("b@pve", "bad", "1.1.1.1"), AuthError);
+  finish();
+  await slow;
+  await assert.rejects(s.login("b@pve", "bad", "1.1.1.1"), (e: AuthError) => e.status === 429, "the 10 still count");
 });
 
 test("Origin has to be this exact site", () => {
@@ -284,4 +390,8 @@ test("Origin has to be this exact site", () => {
   assert.equal(sameOrigin("nonsense", "bossmox.lan", true), false);
   assert.equal(sameOrigin("https://bossmox.lan", undefined, true), false);
   assert.equal(sameOrigin("http://localhost:8080", "localhost:8080", false), true, "running on your own machine");
+  const names = new Set(["bossmox.lan"]);
+  assert.equal(sameOrigin("https://bossmox.lan:8443", "bossmox.lan", true, names), true, "a proxy that dropped the port");
+  assert.equal(sameOrigin("https://other.lan:8443", "bossmox.lan", true, names), false);
+  assert.equal(sameOrigin("http://bossmox.lan:8443", "bossmox.lan", true, names), false, "still https");
 });

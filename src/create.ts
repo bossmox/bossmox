@@ -98,6 +98,7 @@ export function settingsForm(kind: "qemu" | "lxc", v: SettingsInput, current: { 
   const form: Record<string, string> = { [kind === "qemu" ? "name" : "hostname"]: v.name, cores: String(v.cores), memory: String(v.memoryMb), onboot: v.startsAtBoot ? "1" : "0" };
   if (kind === "qemu" && v.disc !== null) {
     if (current.ide2?.includes("cloudinit")) throw new CreateError("This VM uses that drive for its setup disk, so a disc can't go there.");
+    if (current.ide2 && !current.ide2.includes("media=cdrom")) throw new CreateError("This VM has a disk on that drive, so a disc can't go there.");
     if (v.disc === "") form.ide2 = "none,media=cdrom";
     else {
       if (!VOLUME.test(v.disc)) throw new CreateError("That disc isn't valid.");

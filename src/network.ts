@@ -39,7 +39,7 @@ export function buildNetwork(server: string, interfaces: RawInterface[], dns: Ra
   }
   const list = interfaces.filter((i) => i.iface).map((i) => {
     const name = i.iface as string;
-    const kind = KINDS[i.type ?? ""] ?? i.type ?? "Unknown";
+    const kind = (Object.hasOwn(KINDS, i.type ?? "") ? KINDS[i.type as string] : i.type) ?? "Unknown";
     return {
       name,
       kind,

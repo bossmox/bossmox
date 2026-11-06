@@ -6,6 +6,13 @@ set -euo pipefail
 PUBLIC_ADDRESS=$1
 PVE_URL=$2
 PVE_TLS_NAME=${3:-}
+
+# These end up in a file that's read by a root shell, so only what an address or URL needs gets through.
+for value in "$PUBLIC_ADDRESS" "$PVE_URL" "$PVE_TLS_NAME"; do
+  case "$value" in
+    *[!]A-Za-z0-9.:/,_[-]*) echo "That doesn't look like an address: $value" >&2; exit 1 ;;
+  esac
+done
 NODE_VERSION=22.22.2
 
 export DEBIAN_FRONTEND=noninteractive
@@ -30,10 +37,18 @@ chown -R root:root /opt/bossmox
 install -m 644 /tmp/pve-root-ca.pem /etc/bossmox/pve-root-ca.pem
 
 if [ ! -f /etc/bossmox/tls.key ]; then
-  case "$PUBLIC_ADDRESS" in
-    *[!0-9.]*) SAN="DNS:$PUBLIC_ADDRESS" ;;
-    *) SAN="IP:$PUBLIC_ADDRESS" ;;
-  esac
+  SAN=""
+  OLDIFS=$IFS
+  IFS=,
+  for name in $PUBLIC_ADDRESS; do
+    case "$name" in
+      *:*) entry="IP:${name%%:[0-9]*}" ;;
+      *[!0-9.]*) entry="DNS:$name" ;;
+      *) entry="IP:$name" ;;
+    esac
+    SAN="${SAN:+$SAN,}$entry"
+  done
+  IFS=$OLDIFS
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
     -keyout /etc/bossmox/tls.key -out /etc/bossmox/tls.crt \
     -subj "/CN=BossMox" -addext "subjectAltName=$SAN" 2>/dev/null

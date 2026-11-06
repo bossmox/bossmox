@@ -74,6 +74,8 @@ setInterval(() => void sessions.tick().catch((err: Error) => console.error("Sess
 const secureCookie = Boolean(config.tls) || config.behindProxy;
 // The __Host- prefix stops a sibling site or another port from setting this cookie over the real one.
 const COOKIE = secureCookie ? "__Host-bossmox_session" : "bossmox_session";
+// A proxy on a custom port often drops that port from Host, so behind one the configured names are enough.
+const proxiedNames = config.behindProxy || config.trustedProxies.size > 0 ? config.publicNames : new Set<string>();
 type Loaded = Overview & { tasks: TaskFeed };
 const cache = new WeakMap<Session, { at: number; value: Promise<Loaded> }>();
 
@@ -86,7 +88,7 @@ async function fetchGuest(r: RawResource, ticket: string): Promise<[number, Gues
   const guest: Guest = {};
   if (cfg.status === "fulfilled") guest.config = cfg.value;
   if (snaps.status === "fulfilled") guest.snapshots = snaps.value;
-  return [r.vmid ?? 0, guest];
+  return [Number(r.vmid ?? 0), guest];
 }
 
 async function loadOverview(ticket: string): Promise<Loaded> {
@@ -253,6 +255,9 @@ async function loadRollingPlan(ticket: string) {
     : { available: false };
   return buildRollingPlan(servers, quorate, tieBreaker);
 }
+
+let realms: { realm: string; comment?: string; default?: number }[] = [];
+let realmsAt = 0;
 
 function send(res: http.ServerResponse, status: number, type: string, body: string | Buffer, extra: Record<string, string> = {}) {
   res.writeHead(status, { ...HEADERS, ...(secureCookie ? { "Strict-Transport-Security": "max-age=31536000" } : {}), "Content-Type": type, "Cache-Control": "no-store", ...extra });
@@ -465,48 +470,36 @@ async function openConsole(res: http.ServerResponse, body: Record<string, unknow
 }
 
 async function runAction(req: http.IncomingMessage, res: http.ServerResponse, action: string) {
-  const session = await sessions.get(cookieId(req));
+  // The body comes first. A slow upload shouldn't leave a checked session in hand while it's signed out.
+  const body = await readJson(req);
+  const id = cookieId(req);
+  const session = await sessions.get(id);
   if (!session) return json(res, 401, { error: "Sign in to continue." });
-  if (action === "guest-console") {
-    try {
-      const body = await readJson(req);
+  try {
+    if (action === "guest-console") {
       audit("console", session.username, addressOf(req), `node=${text(body.server, 64)} guest=${text(body.guest, 12)}`);
       return await openConsole(res, body, session);
-    } catch (err) {
-      if (err instanceof PveError && err.status === 403) return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
-      if (err instanceof PveError && err.status !== 401 && err.reason) return json(res, 400, { error: `Proxmox refused: ${err.reason}` });
-      throw err;
     }
-  }
-  if (action === "install-updates" || action === "node-console") {
-    const name = text((await readJson(req)).server, 64);
-    if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-    try {
+    const name = text(body.server, 64);
+    if (action === "install-updates" || action === "node-console") {
+      if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
       audit(action === "install-updates" ? "updater" : "console", session.username, addressOf(req), `node=${name}`);
       return await openNodeTerminal(res, name, session, action === "install-updates" ? { cmd: "upgrade" } : {});
-    } catch (err) {
-      if (err instanceof PveError && err.status === 403) {
-        return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
-      }
-      throw err;
     }
-  }
-  const run = Object.hasOwn(ACTIONS, action) ? ACTIONS[action] : undefined;
-  if (!run) return json(res, 404, { error: "BossMox doesn't have that action." });
-  const body = await readJson(req);
-  const name = text(body.server, 64);
-  if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-  try {
+    const run = Object.hasOwn(ACTIONS, action) ? ACTIONS[action] : undefined;
+    if (!run) return json(res, 404, { error: "BossMox doesn't have that action." });
+    if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
     const task = await run(name, session, body);
     audit(action, session.username, addressOf(req), `node=${name}${text(body.guest, 12) ? ` guest=${text(body.guest, 12)}` : ""}`);
     return json(res, 200, { task });
   } catch (err) {
-    if (err instanceof PveError && err.status === 403) {
-      return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
+    if (!(err instanceof PveError)) throw err;
+    if (err.status === 403) return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
+    if (err.status === 401) {
+      sessions.end(id);
+      return json(res, 401, { error: "Sign in to continue." });
     }
-    if (err instanceof PveError && err.status !== 401 && err.reason) {
-      return json(res, 400, { error: `Proxmox refused: ${err.reason}` });
-    }
+    if (err.reason) return json(res, 400, { error: `Proxmox refused: ${err.reason}` });
     throw err;
   }
 }
@@ -520,7 +513,7 @@ function sameSite(req: http.IncomingMessage): boolean {
   const origin = req.headers.origin;
   // Browsers always send Origin on these requests, so a request without one isn't coming from a web page.
   if (!origin) return true;
-  return sameOrigin(origin, req.headers.host, secureCookie);
+  return sameOrigin(origin, req.headers.host, secureCookie, proxiedNames);
 }
 
 function cookieId(req: http.IncomingMessage): string | undefined {
@@ -559,7 +552,18 @@ const text = (v: unknown, max: number) => (typeof v === "string" && v.length > 0
 
 /** Who did what, for anyone looking into an incident. Names and addresses only, never tickets, passwords or request bodies. */
 function audit(event: string, who: string, address: string, detail = "") {
-  console.log(`audit ${new Date().toISOString()} ${event} user=${who} from=${address}${detail ? ` ${detail}` : ""}`);
+  // Some of this comes from the request, so nothing in it gets to start a new line or colour a terminal.
+  const line = (s: string) => s.replace(/[^\x20-\x7e]/g, "?");
+  console.log(`audit ${new Date().toISOString()} ${event} user=${line(who).replace(/ /g, "?")} from=${line(address).replace(/ /g, "?")}${detail ? ` ${line(detail)}` : ""}`);
+}
+let lastLockoutLog = 0;
+/** A lockout can be hammered, and one line every 10 seconds says all it needs to without filling a small disk. */
+function auditRefused(event: string, who: string, address: string, status: number) {
+  if (status === 429) {
+    if (Date.now() - lastLockoutLog < 10000) return;
+    lastLockoutLog = Date.now();
+  }
+  audit(event, who, address, `status=${status}`);
 }
 function addressOf(req: http.IncomingMessage): string {
   const forwarded = req.headers["x-forwarded-for"];
@@ -585,7 +589,7 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
     try {
       return finishLogin(res, await sessions.login(`${user}@${realm}`, password, address), address);
     } catch (err) {
-      if (err instanceof AuthError) audit("sign-in-refused", `${user}@${realm}`, address, `status=${err.status}`);
+      if (err instanceof AuthError) auditRefused("sign-in-refused", `${user}@${realm}`, address, err.status);
       throw err;
     }
   }
@@ -597,13 +601,12 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
     try {
       return finishLogin(res, await sessions.submitCode(challenge, code, address), address);
     } catch (err) {
-      if (err instanceof AuthError) audit("code-refused", "unknown", address, `status=${err.status}`);
+      if (err instanceof AuthError) auditRefused("code-refused", "unknown", address, err.status);
       throw err;
     }
   }
   if (route === "/api/logout") {
-    audit("sign-out", (await sessions.get(cookieId(req)))?.username ?? "unknown", address);
-    sessions.end(cookieId(req));
+    audit("sign-out", sessions.end(cookieId(req)) ?? "unknown", address);
     return json(res, 200, { ok: true }, setCookie("", 0));
   }
   if (route.startsWith("/api/action/")) return runAction(req, res, route.slice("/api/action/".length));
@@ -620,7 +623,12 @@ const handler: http.RequestListener = async (req, res) => {
     if (req.method !== "GET") return json(res, 405, { error: "That method isn't allowed." });
     if (route === "/healthz") return json(res, 200, { ok: true });
     if (route === "/api/login-info") {
-      return json(res, 200, { realms: await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains") });
+      // Anyone can ask this, so a flood of them shouldn't become a flood at Proxmox.
+      if (Date.now() - realmsAt > 60 * 1000) {
+        realms = await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains");
+        realmsAt = Date.now();
+      }
+      return json(res, 200, { realms });
     }
     if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network") {
       const id = cookieId(req);
@@ -721,7 +729,8 @@ const handler: http.RequestListener = async (req, res) => {
 
 const serving = config.tls ? "https" : "http";
 const server = config.tls ? https.createServer(config.tls, handler) : http.createServer(handler);
-// The server has its own copy now, so the key doesn't need to stay around in ordinary memory.
+// OpenSSL holds its own copy now, so this one doesn't need to stay in ordinary memory.
+config.tls?.key.fill(0);
 delete config.tls;
 
 server.on("upgrade", async (req, socket, head) => {
@@ -735,7 +744,7 @@ server.on("upgrade", async (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://local");
     const origin = req.headers.origin ?? "";
     // Browsers don't apply same-origin rules to WebSockets, so the Origin check here is required.
-    if (url.pathname !== "/api/terminal" || !hostAllowed(req.headers.host) || !origin || !sameOrigin(origin, req.headers.host, secureCookie)) return refuse();
+    if (url.pathname !== "/api/terminal" || !hostAllowed(req.headers.host) || !origin || !sameOrigin(origin, req.headers.host, secureCookie, proxiedNames)) return refuse();
     const session = await sessions.get(cookieId(req));
     const term = session && terminals.claim(url.searchParams.get("id") ?? "", session);
     if (!term) return refuse();

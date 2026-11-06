@@ -183,3 +183,8 @@ test("the task feed shows every running task, however many", () => {
 test("a failed task shows as failed", () => {
   assert.equal(buildTaskFeed([task("x", "qmshutdown", 1, { status: "got timeout" })], []).items[0]?.result, "failed");
 });
+
+test("an open console doesn't count as a node being busy", () => {
+  const plan = buildRebootPlan({ available: true, value: [{ upid: "a", type: "vncproxy", id: "300" }, { upid: "b", type: "termproxy" }, { upid: "c", type: "vzdump", id: "200" }] }, { available: false });
+  assert.deepEqual(plan.busy, ["Backup on 200"]);
+});
