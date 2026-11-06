@@ -84,8 +84,19 @@ function renderHealth() {
   const run = guests.filter((v) => v.running).length;
   const free = storage.reduce((sum, s) => sum + s.freeGb, 0);
   const freeText = free >= 1024 ? `${(free / 1024).toFixed(1)} TB` : `${Math.round(free)} GB`;
+  const notes = readNotices();
+  const keys = issues.map(noticeKey);
+  const kept = notes.dismissed.filter((k) => keys.includes(k));
+  // A problem that clears is forgotten, so it shows again if it ever comes back.
+  if (kept.length !== notes.dismissed.length) saveNotices({ ...notes, dismissed: kept });
+  const shown = issues.filter((i) => !kept.includes(noticeKey(i)));
+  const heading = shown.length ? `${count(shown.length)} worth a look` : issues.length ? "Nothing new worth a look" : "Everything looks good";
+  const controls = [
+    shown.length ? `<button class="linkbtn" data-noticetoggle="1" aria-expanded="${!notes.collapsed}">${notes.collapsed ? "Show notices" : "Hide notices"}</button>` : "",
+    kept.length ? `<button class="linkbtn" data-noticerestore="1">Bring back ${kept.length} dismissed</button>` : "",
+  ].filter(Boolean).join("");
   h.innerHTML = `
-    <h1>${issues.length ? `${count(issues.length)} worth a look` : "Everything looks good"}</h1>
+    <h1>${heading}</h1>
     <p class="sub">${up} of ${nodes.length} ${nodes.length === 1 ? "node" : "nodes"} online. ${run} of ${guests.length} ${guests.length === 1 ? "VM" : "VMs"} running, and ${freeText} free.</p>
     ${overallBars(S.data.cluster, nodes.length)}
     <div class="rack">${nodes.map((n) => {
@@ -94,7 +105,26 @@ function renderHealth() {
         <span class="leds">${on.map((v) => `<i class="${!v.running ? "off" : v.issues.length ? "w" : ""}"></i>`).join("")}</span>
         <small>${n.online ? `${n.cpuPct}% busy` : "Offline"}</small></button>`;
     }).join("")}</div>
-    ${issues.length ? `<div class="look-items">${issues.map((i) => `<button class="look-item" ${i.vmId ? `data-vm="${i.vmId}"` : 'data-open="storage"'}><span class="dot warn"></span><span>${esc(i.title)}</span></button>`).join("")}</div>` : ""}`;
+    ${shown.length && !notes.collapsed ? `<div class="look-items">${shown.map((i) => `<div class="look-row"><button class="look-item" ${i.vmId ? `data-vm="${i.vmId}"` : 'data-open="storage"'}><span class="dot warn"></span><span>${esc(i.title)}</span></button><button class="look-x" data-noticex="${esc(noticeKey(i))}" aria-label="Dismiss ${esc(i.title)}" title="Dismiss">&times;</button></div>`).join("")}</div>` : ""}
+    ${controls ? `<div class="look-controls">${controls}</div>` : ""}`;
+}
+
+/* Notices are one person's view, so this lives in the browser. The problem itself stays on the guest's own page. */
+const NOTICES_KEY = "bossmox-notices";
+/** Leaves out the changing part of a title, so a disk going from 91% to 92% full doesn't undo a dismissal. */
+const noticeKey = (i) => (i.vmId ? `${i.kind}:${i.vmId}` : `${i.kind}:${i.title.split(" is ")[0]}`);
+function readNotices() {
+  try {
+    const n = JSON.parse(localStorage.getItem(NOTICES_KEY) ?? "{}");
+    return { collapsed: n.collapsed === true, dismissed: Array.isArray(n.dismissed) ? n.dismissed : [] };
+  } catch {
+    return { collapsed: false, dismissed: [] };
+  }
+}
+function saveNotices(value) {
+  try {
+    localStorage.setItem(NOTICES_KEY, JSON.stringify(value));
+  } catch { /* the choice just won't be remembered */ }
 }
 
 /* Window manager */
@@ -1817,6 +1847,20 @@ document.addEventListener("click", (e) => {
   if (d.min) {
     wins[d.min].classList.add("hidden");
     return renderTasks();
+  }
+  if (d.noticex) {
+    const n = readNotices();
+    saveNotices({ ...n, dismissed: [...n.dismissed, d.noticex] });
+    return renderHealth();
+  }
+  if (d.noticetoggle) {
+    const n = readNotices();
+    saveNotices({ ...n, collapsed: !n.collapsed });
+    return renderHealth();
+  }
+  if (d.noticerestore) {
+    saveNotices({ ...readNotices(), dismissed: [], collapsed: false });
+    return renderHealth();
   }
   if (d.server) {
     openWin("monitor");

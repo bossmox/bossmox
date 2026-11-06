@@ -80,6 +80,11 @@ h1,h2,h3,p{margin:0}
 .look-items{margin-top:14px;display:grid;gap:6px}
 .look-item{display:flex;gap:9px;text-align:left;padding:9px 11px;border-radius:var(--r-s);background:var(--warn-bg);font-size:14px;width:100%;align-items:baseline}
 .look-item b{font-weight:700}
+.look-row{display:flex;gap:4px}
+.look-row .look-item{flex:1;min-width:0}
+.look-x{flex:none;width:34px;border-radius:var(--r-s);background:var(--warn-bg);color:var(--muted);font-size:18px;line-height:1}
+.look-x:hover{color:var(--ink)}
+.look-controls{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 14px;margin-top:10px;font-size:13.5px}
 .dot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block;background:var(--muted)}
 .dot.running{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.busy{background:var(--accent);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.3}}
