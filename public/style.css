@@ -202,8 +202,8 @@ summary{cursor:pointer;font-weight:650}
 /* Look picker in the top bar */
 #looks{display:flex;gap:2px;margin-right:12px;font-size:13px;align-items:center}
 #looks span{padding:0 7px;color:var(--muted)}
-#looks button{padding:4px 9px;border-radius:var(--r-s);font-weight:600}
-#looks button.on{background:var(--accent);color:var(--on-accent)}
+#looks{display:flex;gap:2px}
+#lookpick{padding:4px 6px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface);color:var(--ink);font:inherit;font-weight:600}
 
 @media (max-width:760px){
   body{overflow:auto}

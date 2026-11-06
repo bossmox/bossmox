@@ -4,6 +4,16 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&
 const FINGERPRINT_HELP = "In Proxmox, open the node, then System, then Certificates, and look at pve-ssl.pem. Or run this on the node: openssl x509 -noout -fingerprint -sha256 -in /etc/pve/local/pve-ssl.pem";
 const S = { busy: false, first: null, cluster: null };
 
+/* The same setting as the main app, so the look chosen here carries over after setup. */
+function setLook(k) {
+  if (!["daylight", "dusk", "workbench"].includes(k)) k = "daylight";
+  document.documentElement.dataset.look = k;
+  $("#lookpick").value = k;
+  try { localStorage.setItem("bossmox-look", k); } catch { /* still works, just not remembered */ }
+}
+try { setLook(localStorage.getItem("bossmox-look")); } catch { setLook("daylight"); }
+$("#lookpick").addEventListener("change", (e) => setLook(e.target.value));
+
 async function post(route, body) {
   const res = await fetch(`setup/${route}`, { method: "POST", headers: { "Content-Type": "application/json", "X-BossMox": "1" }, body: JSON.stringify(body) });
   const out = await res.json().catch(() => ({}));

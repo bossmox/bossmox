@@ -1701,7 +1701,6 @@ document.addEventListener("click", (e) => {
     S.tab = d.tab;
     return renderDetail();
   }
-  if (d.look) setLook(d.look);
 });
 document.addEventListener("change", (e) => {
   if (e.target.id === "ckind" || e.target.id === "cserver") loadCreate($("#cserver").value, $("#ckind").value);
@@ -1722,9 +1721,10 @@ function setLook(k) {
   if (!["daylight", "dusk", "workbench"].includes(k)) k = "daylight";
   document.documentElement.dataset.look = k;
   try { localStorage.setItem("bossmox-look", k); } catch { /* still works, just not remembered */ }
-  document.querySelectorAll("#looks button").forEach((b) => b.classList.toggle("on", b.dataset.look === k));
+  $("#lookpick").value = k;
 }
-$("#looks").insertAdjacentHTML("beforeend", LOOKS.map(([k, l]) => `<button data-look="${k}">${l}</button>`).join(""));
+$("#looks").insertAdjacentHTML("beforeend", `<select id="lookpick" aria-label="Look">${LOOKS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select>`);
+$("#lookpick").addEventListener("change", (e) => setLook(e.target.value));
 
 function tick() {
   $("#clock").textContent = new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
