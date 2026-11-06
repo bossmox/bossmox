@@ -100,6 +100,7 @@ EOF
 chmod 755 /etc/init.d/bossmox
 
 # The setup code proves control of this VM, so it's shown only here and kept on disk only as a hash.
+mkdir -p /usr/local/sbin
 cat > /usr/local/sbin/bossmox-setup-code <<'EOF'
 #!/bin/sh
 ISSUE=/etc/issue
