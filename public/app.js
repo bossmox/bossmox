@@ -1102,8 +1102,8 @@ const POWER_WORDS = {
   stop: { title: "Force off", line: (v) => `This cuts the power to ${v.name}, like pulling the plug. Anything it hasn't saved is lost. Use it only if Shut down doesn't work.` },
 };
 const guestBody = (v) => ({ guest: String(v.id), type: v.type });
-function askPower(power) {
-  const v = selected();
+function askPower(power, id = S.sel) {
+  const v = S.data?.vms.find((g) => g.id === id);
   if (!v) return;
   const w = POWER_WORDS[power];
   const help = power === "shutdown" || power === "reboot" ? {
@@ -1214,18 +1214,19 @@ async function openTerminal(server) {
     const body = await res.json();
     if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
     if (!res.ok) throw new Error(body.error);
-    showTerminal(server, body.terminal, "Install updates", `Updating ${esc(server)}. Check the list, then type <b>Y</b> and press Enter to install.`, false);
+    showTerminal(server, body.terminal, "Install updates", `Updating ${esc(server)}. Check the list, then type <b>Y</b> and press Enter to install.`);
   } catch (err) {
     const plan = savedReboot();
     if (plan?.rolling && plan.phase === "installing") return rollingInstall(plan, err.message || "BossMox lost contact with Proxmox.");
     dialog(`<h3>Couldn't start the install</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
   }
 }
-function showTerminal(server, id, title, help, isConsole) {
+function showTerminal(server, id, title, help, guest = null) {
+  const isConsole = guest !== null;
   APPS.terminal.title = title;
   {
     openWin("terminal");
-    $(".wbody", wins.terminal).innerHTML = `<div class="termwrap"><p class="termhelp">${help}</p><div id="termbox"></div></div>`;
+    $(".wbody", wins.terminal).innerHTML = `<div class="termwrap">${isConsole ? `<div class="vnctools"><span>${help}</span><div class="actions conacts" data-guest="${guest}"></div></div>` : `<p class="termhelp">${help}</p>`}<div id="termbox"></div></div>`;
     const dark = { background: "#07161C", foreground: "#CFE6DF" };
     const xterm = new Terminal({ cursorBlink: true, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 14, theme: dark, scrollback: 10000 });
     const fit = new FitAddon.FitAddon();
@@ -1242,6 +1243,7 @@ function showTerminal(server, id, title, help, isConsole) {
     socket.onopen = () => {
       resize();
       xterm.focus();
+      drawConsoleActions();
     };
     const decoder = new TextDecoder();
     let recent = "";
@@ -1261,6 +1263,7 @@ function showTerminal(server, id, title, help, isConsole) {
         term.done = true;
         xterm.write("\r\n\r\nThe session has ended. You can close this window.\r\n");
       }
+      drawConsoleActions();
     };
     xterm.onData((d) => {
       if (socket.readyState === 1) socket.send(`0:${utf8.encode(d).length}:${d}`);
@@ -1268,15 +1271,36 @@ function showTerminal(server, id, title, help, isConsole) {
     const observer = new ResizeObserver(resize);
     observer.observe($("#termbox"));
     const ping = setInterval(() => socket.readyState === 1 ? socket.send("2") : clearInterval(ping), 30000);
-    term = { socket, xterm, observer, server, done: isConsole };
+    term = { socket, xterm, observer, server, done: isConsole, guest };
+    drawConsoleActions();
   }
 }
 
 /* Console: a container gets a terminal, and a VM shows its screen */
 let vnc = null;
 function closeVnc() {
-  vnc?.disconnect();
+  const old = vnc;
   vnc = null;
+  S.vncUp = null;
+  old?.disconnect();
+}
+/** The power buttons in a console window. They follow the guest, so they stay right if it changes from elsewhere. */
+function drawConsoleActions() {
+  document.querySelectorAll(".conacts").forEach((el) => {
+    const id = Number(el.dataset.guest);
+    const v = S.data?.vms.find((g) => g.id === id);
+    if (!v) return;
+    const screen = el.closest(".vncwrap") !== null;
+    const up = screen ? S.vncUp === id : term?.socket?.readyState === 1;
+    const button = (power, label) => `<button class="btn" data-power="${power}" data-guest="${id}">${label}</button>`;
+    const html = `${up || !v.running ? "" : `<button class="btn primary" data-console="${id}">Reconnect</button>`}
+      ${v.running ? button("shutdown", "Shut down") + button("reboot", "Restart") + button("stop", "Force off") : button("start", "Start")}
+      ${screen && up ? `<button class="btn" data-vnccad="1">Send Ctrl+Alt+Del</button>` : ""}`;
+    if (el.dataset.drawn !== html) {
+      el.dataset.drawn = html;
+      el.innerHTML = html;
+    }
+  });
 }
 function loadNoVnc() {
   if (window.NoVNC) return Promise.resolve();
@@ -1291,13 +1315,16 @@ function loadNoVnc() {
 async function openConsole(id) {
   const v = S.data?.vms.find((g) => g.id === id);
   if (!v) return;
-  if (v.type === "lxc" && term) return dialog(`<h3>A terminal is already open</h3><p>Close it first, then open this console.</p>${closeRow}`);
+  if (v.type === "lxc" && term) {
+    if (term.guest !== id) return dialog(`<h3>A terminal is already open</h3><p>Close it first, then open this console.</p>${closeRow}`);
+    closeTerminal();
+  }
   try {
     const res = await post("api/action/guest-console", { server: v.node, ...guestBody(v) });
     const body = await res.json();
     if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
     if (!res.ok) throw new Error(body.error);
-    if (body.terminal) return showTerminal(v.node, body.terminal, `Console: ${v.name}`, `Console for ${esc(v.name)}. Log in with its own account.`, true);
+    if (body.terminal) return showTerminal(v.node, body.terminal, `Console: ${v.name}`, `Console for ${esc(v.name)}. Log in with its own account.`, v.id);
     await loadNoVnc();
     closeVnc();
     if (wins.console) {
@@ -1306,15 +1333,25 @@ async function openConsole(id) {
     }
     APPS.console.title = `Console: ${v.name}`;
     openWin("console");
+    $(".conacts", wins.console).dataset.guest = v.id;
+    drawConsoleActions();
     const state = (t) => { if ($("#vncstate")) $("#vncstate").textContent = t; };
     const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/terminal?id=${encodeURIComponent(body.screen)}`;
     const rfb = new NoVNC.default($("#vncbox"), url, { credentials: { password: body.password }, wsProtocols: ["binary"] });
     rfb.scaleViewport = true;
     rfb.addEventListener("connect", () => {
+      if (vnc !== rfb) return;
+      S.vncUp = v.id;
       state(`Connected to ${v.name}. Click the screen to type.`);
+      drawConsoleActions();
       rfb.focus();
     });
-    rfb.addEventListener("disconnect", () => state(`The console for ${v.name} has closed.`));
+    rfb.addEventListener("disconnect", () => {
+      if (vnc !== rfb) return;
+      S.vncUp = null;
+      state(`The console for ${v.name} has closed.`);
+      drawConsoleActions();
+    });
     rfb.addEventListener("credentialsrequired", () => rfb.sendCredentials({ password: body.password }));
     vnc = rfb;
   } catch (err) {
@@ -1390,7 +1427,7 @@ function downloadDisc() {
 
 const RENDER = {
   terminal: () => "",
-  console: () => `<div class="vncwrap"><div class="vnctools"><span id="vncstate">Connecting.</span><button class="btn" data-vnccad="1">Send Ctrl+Alt+Del</button></div><div id="vncbox"></div></div>`,
+  console: () => `<div class="vncwrap"><div class="vnctools"><span id="vncstate">Connecting.</span><div class="actions conacts"></div></div><div id="vncbox"></div></div>`,
   vms: vmsShell, monitor: monView, storage: storeView,
   create: () => `<div id="newbox" class="bkbox"></div>`,
   network: () => `<div class="vms"><aside><div id="netlist"></div></aside><div id="netdetail"></div></div>`,
@@ -1443,10 +1480,7 @@ document.addEventListener("click", (e) => {
     S.taskToken++;
     S.taskRunning = false;
     S.afterTask = null;
-    if (d.forceoff) {
-      S.sel = +d.forceoff;
-      return askPower("stop");
-    }
+    if (d.forceoff) return askPower("stop", +d.forceoff);
     closeDialog();
     return refresh();
   }
@@ -1484,7 +1518,7 @@ document.addEventListener("click", (e) => {
   if (d.jobsave) return saveSchedule();
   if (d.jobtoggle) return toggleSchedule(d.jobtoggle);
   if (d.jobdelete) return askScheduleDelete(d.jobdelete);
-  if (d.power) return askPower(d.power);
+  if (d.power) return askPower(d.power, d.guest ? +d.guest : S.sel);
   if (d.snaptake) return askSnapshot();
   if (d.snapsave) return saveSnapshot();
   if (d.snaprestore) return askRestore(d.snaprestore);
@@ -1744,6 +1778,7 @@ async function refresh() {
   renderList();
   if (S.tab !== "settings") renderDetail();
   renderServers();
+  drawConsoleActions();
   if (wins.monitor && ++S.ticks % 3 === 0) loadServer();
   render("storage");
 }
