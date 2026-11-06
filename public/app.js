@@ -11,7 +11,7 @@ const GLYPHS = {
 };
 const APPS = {
   vms: { title: "Virtual Machines", color: "#0E7EA6", w: 920, h: 610 },
-  create: { title: "Create a VM", color: "#178A5F", w: 460, h: 250 },
+  create: { title: "Create a VM", color: "#178A5F", w: 560, h: 640 },
   monitor: { title: "Servers", color: "#7A5AC8", w: 900, h: 620 },
   storage: { title: "Storage", color: "#B9680A", w: 520, h: 420 },
   network: { title: "Network", color: "#2F7A7E", w: 460, h: 250 },
@@ -112,6 +112,7 @@ function render(app) {
   }
   if (app === "monitor") renderServers();
   if (app === "backups") loadBackups();
+  if (app === "create") startCreate();
 }
 
 /* Virtual Machines */
@@ -153,7 +154,7 @@ function renderDetail() {
       <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
       <div class="actions">${v.running
         ? `<button class="btn" data-power="shutdown">Shut down</button><button class="btn" data-power="reboot">Restart</button><button class="btn" data-power="stop">Force off</button>`
-        : `<button class="btn primary" data-power="start">Start</button>`}${(S.data?.nodes.length ?? 0) > 1 ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}</div></div>
+        : `<button class="btn primary" data-power="start">Start</button>`}${(S.data?.nodes.length ?? 0) > 1 ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${v.running ? "" : `<button class="btn" data-guestdelete="${v.id}">Delete</button>`}</div></div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["snapshots", "Snapshots"], ["settings", "Settings"]].map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${TAB[S.tab](v)}</div>`;
   if (S.tab === "snapshots") checkSnapshots(v);
@@ -786,6 +787,102 @@ function rollingNext(plan) {
   loadServer();
 }
 
+/* Creating and deleting VMs and containers */
+function startCreate() {
+  const server = S.data?.nodes.find((n) => n.online)?.name;
+  if (!server) {
+    $("#newbox").innerHTML = `<p class="empty">Waiting for a server to come online.</p>`;
+    return;
+  }
+  loadCreate(server, "qemu");
+}
+async function loadCreate(server, kind) {
+  const box = $("#newbox");
+  if (!box) return;
+  const kept = { name: $("#cname")?.value ?? "", cores: $("#ccores")?.value ?? "2", memory: $("#cmemory")?.value ?? "2", disk: $("#cdisk")?.value ?? "32" };
+  try {
+    S.createPlan = await signal(`api/create-plan?server=${encodeURIComponent(server)}&kind=${kind}`);
+  } catch (err) {
+    if (err.message !== "signed out") box.innerHTML = `<p class="empty">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>`;
+    return;
+  }
+  const p = S.createPlan;
+  const vm = kind === "qemu";
+  const field = (label, html) => `<label class="field"><span>${label}</span>${html}</label>`;
+  const nodes = S.data.nodes.filter((n) => n.online);
+  box.innerHTML = `<p class="meta" style="margin-top:0">${vm ? "A virtual machine is a full computer with its own operating system." : "A container shares this server's Linux, so it's lighter and starts in seconds."}</p>
+    <p class="loginerr" id="cerr" hidden></p>
+    ${field("What to create", `<select id="ckind"><option value="qemu" ${vm ? "selected" : ""}>Virtual machine</option><option value="lxc" ${vm ? "" : "selected"}>Container</option></select>`)}
+    ${nodes.length > 1 ? field("Server", `<select id="cserver">${nodes.map((n) => `<option ${n.name === server ? "selected" : ""}>${esc(n.name)}</option>`).join("")}</select>`) : `<input type="hidden" id="cserver" value="${esc(server)}">`}
+    ${field("Name", `<input id="cname" maxlength="63" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(kept.name)}">`)}
+    ${vm ? field("Operating system", `<select id="cos"><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Something else</option></select>`) : ""}
+    ${field(vm ? "Install from" : "Template", `<select id="cinstaller">${vm ? `<option value="">Nothing yet, I'll add a disc later</option>` : ""}${p.installers.map((i) => `<option value="${esc(i.volid)}">${esc(i.label)}</option>`).join("")}</select>`)}
+    ${!vm && !p.installers.length ? `<p class="meta">This server has no templates yet, so a container can't be made here.</p>` : ""}
+    ${vm && !p.installers.length ? `<p class="meta">This server has no installer discs yet.</p>` : ""}
+    ${vm ? "" : field("Password for root", `<input id="cpassword" type="password" autocomplete="new-password">`)}
+    <div class="createrow">
+      ${field(`Processor cores (${p.cores} here)`, `<input id="ccores" type="number" min="1" max="128" value="${esc(kept.cores)}">`)}
+      ${field(`Memory in GB (${p.memoryGb} here)`, `<input id="cmemory" type="number" min="0.25" step="0.25" value="${esc(kept.memory)}">`)}
+      ${field("Disk in GB", `<input id="cdisk" type="number" min="1" value="${esc(kept.disk)}">`)}
+    </div>
+    ${field("Keep its disk on", `<select id="cstorage">${p.storages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select>`)}
+    ${field("Network", `<select id="cbridge">${p.bridges.map((b) => `<option>${esc(b)}</option>`).join("")}</select>`)}
+    <label class="createcheck"><input id="cstart" type="checkbox"> Start it right away</label>
+    <div class="row-end"><button class="btn primary" data-createnew="1">Create</button></div>`;
+}
+function createGuest() {
+  const fail = (m) => {
+    const e = $("#cerr");
+    e.textContent = m;
+    e.hidden = false;
+    e.scrollIntoView({ block: "center" });
+  };
+  const kind = $("#ckind").value;
+  const server = $("#cserver").value;
+  const name = $("#cname").value.trim();
+  const memoryMb = Math.round(Number($("#cmemory").value) * 1024);
+  const taken = S.data.vms.find((v) => v.name.toLowerCase() === name.toLowerCase());
+  if (!/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(name)) return fail("A name uses letters, numbers, dots and dashes, and starts and ends with a letter or number.");
+  if (taken) return fail(`${taken.name} already exists. Pick another name.`);
+  if (!$("#cstorage").value || !$("#cbridge").value) return fail("This server needs a storage and a network first.");
+  if (kind === "lxc" && !$("#cinstaller").value) return fail("Pick a template.");
+  if (kind === "lxc" && $("#cpassword").value.length < 8) return fail("Give it a password of at least 8 characters.");
+  const body = {
+    kind, id: S.createPlan.nextId, name, cores: Number($("#ccores").value), memoryMb, diskGb: Number($("#cdisk").value),
+    storage: $("#cstorage").value, bridge: $("#cbridge").value, installer: $("#cinstaller").value, os: $("#cos")?.value ?? "linux",
+    start: $("#cstart").checked, password: $("#cpassword")?.value ?? "",
+  };
+  const id = Number(body.id);
+  runAction("guest-create", server, `Creating ${name}`, body, async () => {
+    await refresh();
+    if (S.data?.vms.some((v) => v.id === id)) {
+      S.sel = id;
+      S.tab = "overview";
+      S.filter = "all";
+      S.q = "";
+      wins.create?.remove();
+      delete wins.create;
+      openWin("vms");
+      render("vms");
+    } else if (wins.create) loadCreate(server, kind);
+  });
+}
+function askGuestDelete(id) {
+  const v = S.data?.vms.find((g) => g.id === id);
+  if (!v) return;
+  dialog(`<h3>Delete ${esc(v.name)}?</h3><p>${esc(v.name)} and its disks are erased for good, and its snapshots go too. Backups stay, so it can be restored from one.</p>
+    <label class="field restartname"><span>Type ${esc(v.name)} to confirm</span><input id="rname" data-word="${esc(v.name.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-guestdeletego="${v.id}" disabled>Delete ${esc(v.name)}</button></div>`);
+  $("#rname").focus();
+}
+function guestDelete(id) {
+  const v = S.data.vms.find((g) => g.id === id);
+  runAction("guest-delete", v.node, `Deleting ${v.name}`, { ...guestBody(v), confirm: String(v.id) }, async () => {
+    S.sel = null;
+    await refresh();
+  });
+}
+
 /* Backups */
 async function loadBackups() {
   try {
@@ -1116,7 +1213,7 @@ const soon = (t, line) => () => `<div class="soon"><h2>${t}</h2><p>${line}</p></
 const RENDER = {
   terminal: () => "",
   vms: vmsShell, monitor: monView, storage: storeView,
-  create: soon("Create a VM", "Not built yet."),
+  create: () => `<div id="newbox" class="bkbox"></div>`,
   network: soon("Network", "Not built yet."),
   backups: () => `<div id="bkbox" class="bkbox"></div>`,
 };
@@ -1161,6 +1258,12 @@ document.addEventListener("click", (e) => {
     closeDialog();
     return askMoveBack(d.moveback);
   }
+  if (d.guestdelete) return askGuestDelete(+d.guestdelete);
+  if (d.guestdeletego) {
+    t.disabled = true;
+    return guestDelete(+d.guestdeletego);
+  }
+  if (d.createnew) return createGuest();
   if (d.bktab) {
     S.bkTab = d.bktab;
     return drawBackups();
@@ -1269,6 +1372,9 @@ document.addEventListener("click", (e) => {
     return renderDetail();
   }
   if (d.look) setLook(d.look);
+});
+document.addEventListener("change", (e) => {
+  if (e.target.id === "ckind" || e.target.id === "cserver") loadCreate($("#cserver").value, $("#ckind").value);
 });
 document.addEventListener("input", (e) => {
   if (e.target.id === "rname") {

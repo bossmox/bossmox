@@ -8,6 +8,7 @@ import { loadConfig } from "./config.js";
 import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
+import { containerForm, CreateError, installerLabel, vmForm, type CreateInput } from "./create.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import {
   buildMovePlan,
@@ -163,6 +164,27 @@ async function loadRestorePlan(name: string, type: "qemu" | "lxc", ticket: strin
   return { nextId: Number(nextId), storages: storages.filter(usable).map((s) => s.storage) };
 }
 
+async function loadCreatePlan(name: string, kind: "qemu" | "lxc", ticket: string) {
+  const base = `/nodes/${encodeURIComponent(name)}`;
+  const content = kind === "qemu" ? "iso" : "vztmpl";
+  const [disks, media, bridges, status, nextId] = await Promise.all([
+    pve.get<RawStorage[]>(`${base}/storage?content=${kind === "qemu" ? "images" : "rootdir"}`, ticket),
+    pve.get<RawStorage[]>(`${base}/storage?content=${content}`, ticket),
+    pve.get<{ iface: string }[]>(`${base}/network?type=any_bridge`, ticket),
+    pve.get<RawStatus>(`${base}/status`, ticket),
+    pve.get<string | number>("/cluster/nextid", ticket),
+  ]);
+  const files = await Promise.all(media.filter(usable).map((s) => pve.get<{ volid: string }[]>(`${base}/storage/${encodeURIComponent(s.storage)}/content?content=${content}`, ticket).catch(() => [])));
+  return {
+    nextId: String(nextId),
+    storages: disks.filter(usable).map((s) => ({ name: s.storage, freeGb: Math.round((s.avail ?? 0) / 1024 ** 3) })),
+    installers: files.flat().map((f) => ({ volid: f.volid, label: installerLabel(f.volid) })),
+    bridges: bridges.map((b) => b.iface),
+    cores: status.cpuinfo?.cpus ?? 0,
+    memoryGb: Math.floor((status.memory?.total ?? 0) / 1024 ** 3),
+  };
+}
+
 async function loadRollingPlan(ticket: string) {
   const data = await loadOverview(ticket);
   const [cluster, tieBreaker, servers] = await Promise.all([
@@ -273,6 +295,35 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     const snap = snapshotName(body);
     if (body.confirm !== snap) throw new AuthError(400, "That wasn't confirmed.");
     return pve.delete<string>(`${path}/snapshot/${snap}`, who);
+  },
+  "guest-create": (name, who, body) => {
+    const kind = body.kind;
+    if (kind !== "qemu" && kind !== "lxc") throw new AuthError(400, "That request isn't valid.");
+    const input: CreateInput = {
+      id: text(body.id, 12),
+      name: text(body.name, 63),
+      cores: Number(body.cores),
+      memoryMb: Number(body.memoryMb),
+      diskGb: Number(body.diskGb),
+      storage: text(body.storage, 64),
+      bridge: text(body.bridge, 64),
+      installer: text(body.installer, 256),
+      os: text(body.os, 16),
+      start: body.start === true,
+      password: text(body.password, 128),
+    };
+    try {
+      const form = kind === "qemu" ? vmForm(input) : containerForm(input);
+      return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${kind}`, who, form);
+    } catch (err) {
+      if (err instanceof CreateError) throw new AuthError(400, err.message);
+      throw err;
+    }
+  },
+  "guest-delete": (name, who, body) => {
+    const { id, path } = guestPath(name, body);
+    if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
+    return pve.delete<string>(`${path}?purge=1`, who);
   },
   "backup-restore": async (name, who, body) => {
     const volid = text(body.volid, 256);
@@ -460,7 +511,7 @@ const handler: http.RequestListener = async (req, res) => {
     if (route === "/api/login-info") {
       return json(res, 200, { realms: await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains") });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -475,7 +526,10 @@ const handler: http.RequestListener = async (req, res) => {
             pve.get<RawTaskStatus>(`${base}/status`, session.ticket),
             pve.get<{ n?: number; t?: string }[]>(`${base}/log?limit=1000`, session.ticket),
           ]);
-          return json(res, 200, taskView(status, log));
+          const view = taskView(status, log);
+          // What the task changed should show right away, not after the cache runs out.
+          if (view.finished) cache.delete(session);
+          return json(res, 200, view);
         }
         if (route === "/api/move-plan") {
           const name = params.get("server") ?? "";
@@ -492,6 +546,12 @@ const handler: http.RequestListener = async (req, res) => {
         }
         if (route === "/api/rolling-plan") return json(res, 200, await loadRollingPlan(session.ticket));
         if (route === "/api/backups") return json(res, 200, await loadBackups(session.ticket));
+        if (route === "/api/create-plan") {
+          const name = params.get("server") ?? "";
+          const kind = params.get("kind");
+          if (!NODE_NAME.test(name) || (kind !== "qemu" && kind !== "lxc")) return json(res, 400, { error: "That request isn't valid." });
+          return json(res, 200, await loadCreatePlan(name, kind, session.ticket));
+        }
         if (route === "/api/restore-plan") {
           const name = params.get("server") ?? "";
           const type = params.get("type");

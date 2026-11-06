@@ -233,6 +233,9 @@ summary{cursor:pointer;font-weight:650}
 .rollbtn{width:calc(100% - 16px);margin:12px 8px 0}
 .bkbox{height:100%;overflow:auto;padding:14px 22px 22px}
 .bkhead{font-size:15px;margin:20px 0 6px}
+.createrow{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.createcheck{display:flex;gap:8px;align-items:center;margin:4px 0 14px}
+@media(max-width:560px){.createrow{grid-template-columns:1fr}}
 .bknow{justify-content:flex-end;margin:6px 0}
 #srvdetail{overflow:auto;padding:24px 26px;min-width:0}
 .upgroup{margin-top:16px}
