@@ -150,9 +150,12 @@ function renderDetail() {
   box.innerHTML = `
     <div class="head"><div><h2>${esc(v.name)}</h2>
       <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
-      ${(S.data?.nodes.length ?? 0) > 1 ? `<div class="actions"><button class="btn" data-move="${v.id}">Move</button></div>` : ""}</div>
+      <div class="actions">${v.running
+        ? `<button class="btn" data-power="shutdown">Shut down</button><button class="btn" data-power="reboot">Restart</button><button class="btn" data-power="stop">Force off</button>`
+        : `<button class="btn primary" data-power="start">Start</button>`}${(S.data?.nodes.length ?? 0) > 1 ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}</div></div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["snapshots", "Snapshots"], ["settings", "Settings"]].map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${TAB[S.tab](v)}</div>`;
+  if (S.tab === "snapshots") checkSnapshots(v);
 }
 const when = (t) => (t ? new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Time not recorded");
 const TAB = {
@@ -170,9 +173,12 @@ const TAB = {
       <dt>Starts at boot</dt><dd>${v.startsAtBoot ? "Yes" : "No"}</dd>
       <dt>Snapshots</dt><dd>${v.snapshots.length || "None"}</dd>
     </dl>`,
-  snapshots: (v) => v.snapshots.length
-    ? v.snapshots.map((s) => `<div class="snap"><div>${esc(s.name)}<small>${esc(s.description || when(s.takenAt))}</small></div></div>`).join("")
-    : `<p class="empty">This VM has no snapshots.</p>`,
+  snapshots: (v) => `<div class="head"><p class="meta" style="margin-top:0">A snapshot saves ${esc(v.name)} as it is now, so you can go back to it later. It isn't a backup: it lives on the same disk.</p>
+      ${S.snapSupport?.[v.id] === false ? "" : `<div class="actions"><button class="btn primary" data-snaptake="1">Take a snapshot</button></div>`}</div>
+    ${S.snapSupport?.[v.id] === false ? `<div class="advice"><div><b>Snapshots aren't available for ${esc(v.name)}</b>The storage holding its disk can't take them. Backups still work.</div></div>` : ""}
+    ${v.snapshots.length
+      ? v.snapshots.map((s) => `<div class="snap"><div>${esc(s.name)}<small>${esc(s.description ? `${s.description}, ${when(s.takenAt)}` : when(s.takenAt))}</small></div><div class="actions"><button class="btn" data-snaprestore="${esc(s.name)}">Go back to this</button><button class="btn" data-snapdelete="${esc(s.name)}">Delete</button></div></div>`).join("")
+      : S.snapSupport?.[v.id] === false ? "" : `<p class="empty">This VM has no snapshots yet.</p>`}`,
   settings: (v) => `<div class="raw">${Object.entries(v.tech).map(([k, val]) => `<span>${esc(k)}</span><code>${esc(val)}</code>`).join("")}</div>
     ${v.configLoaded ? "" : `<p class="meta">Proxmox didn't return this VM's settings.</p>`}`,
 };
@@ -317,9 +323,9 @@ const closeDialog = () => {
   if (S.taskRunning) return;
   $("#scrim").classList.remove("on");
 };
-function confirmAction(title, line, label, run) {
+function confirmAction(title, line, label, run, danger = false) {
   S.pending = run;
-  dialog(`<h3>${esc(title)}</h3><p>${esc(line)}</p><div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-dlg="ok">${esc(label)}</button></div>`);
+  dialog(`<h3>${esc(title)}</h3><p>${esc(line)}</p><div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn ${danger ? "danger" : "primary"}" data-dlg="ok">${esc(label)}</button></div>`);
 }
 function drawTask(title, view, error) {
   const running = !error && !view?.finished;
@@ -505,7 +511,7 @@ function drawRestart(plan, state, title, note, done) {
   dialog(`<h3>${esc(title)}</h3><p>${esc(note || STAGE_NOTE[stage])}</p><div class="restartlist">
     ${row(plan.server, state.back ? true : done ? false : null, serverWord)}
     ${plan.guests.map(guestRow).join("")}
-    </div><div class="row-end"><button class="btn" data-restartclose="1">${done ? "Close" : plan.rolling ? "Stop the update" : "Stop watching"}</button>${done && plan.target && state.back ? `<button class="btn primary" data-moveback="${esc(plan.server)}">Move everything back</button>` : ""}</div>`);
+    </div><div class="row-end"><button class="btn" data-restartclose="1">${done ? "Close" : plan.rolling ? "Stop the update" : "Stop watching"}</button>${done && movedGuests(plan.server) ? `<button class="btn primary" data-moveback="${esc(plan.server)}">Move everything back</button>` : ""}</div>`);
 }
 async function watchRestart() {
   const plan = savedReboot();
@@ -546,7 +552,7 @@ async function watchRestart() {
           plan.startedAt = Date.now();
           saveReboot(plan);
         } else if (task?.finished || Date.now() - plan.startedAt > 30 * 60 * 1000) {
-          if (plan.rolling) keepMoved(plan);
+          keepMoved(plan);
           drawRestart(plan, state, `${plan.server} was not restarted`, `These didn't move, so the restart was cancelled: ${left.map((g) => g.name).join(", ")}. Anything already moved stays where it is.${plan.rolling ? ` ${notTouched(plan)}` : ""}`, true);
           saveReboot(null);
           S.watching = false;
@@ -775,6 +781,78 @@ function rollingNext(plan) {
   loadServer();
 }
 
+/* Turning a VM or container on and off */
+const POWER_WORDS = {
+  start: { title: "Start", line: (v) => `${v.name} starts on ${v.node}.` },
+  shutdown: { title: "Shut down", line: (v) => `This asks ${v.name} to shut down properly, which can take a minute. If it won't respond, use Force off.` },
+  reboot: { title: "Restart", line: (v) => `This asks ${v.name} to restart properly. It's offline until it comes back.` },
+  stop: { title: "Force off", line: (v) => `This cuts the power to ${v.name}, like pulling the plug. Anything it hasn't saved is lost. Use it only if Shut down doesn't work.` },
+};
+const guestBody = (v) => ({ guest: String(v.id), type: v.type });
+function askPower(power) {
+  const v = selected();
+  if (!v) return;
+  const w = POWER_WORDS[power];
+  confirmAction(`${w.title} ${v.name}?`, w.line(v), `${w.title} ${v.name}`, () => runAction("guest-power", v.node, `${w.title} ${v.name}`, { ...guestBody(v), power, confirm: String(v.id) }, () => refresh()), power === "stop");
+}
+
+/* Snapshots */
+/** Asked when the tab opens, so a person learns this before typing a name. */
+async function checkSnapshots(v) {
+  if (S.snapSupport?.[v.id] !== undefined) return;
+  try {
+    const { supported } = await signal(`api/snapshot-support?server=${encodeURIComponent(v.node)}&guest=${v.id}&type=${v.type}`);
+    S.snapSupport = { ...S.snapSupport, [v.id]: supported };
+    if (S.tab === "snapshots") renderDetail();
+  } catch { /* Proxmox still refuses in plain view if this check couldn't run. */ }
+}
+function askSnapshot() {
+  const v = selected();
+  if (!v) return;
+  dialog(`<h3>Take a snapshot of ${esc(v.name)}?</h3><p>${v.running ? `${esc(v.name)} keeps running.` : ""} Disks are saved, but not what's in memory.</p>
+    <p class="loginerr" id="snaperr" hidden></p>
+    <label class="field restartname"><span>Name, such as before-update</span><input id="snapname" maxlength="40" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <label class="field restartname"><span>Note, if you want one</span><input id="snapnote" maxlength="200" autocomplete="off"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-snapsave="1">Take snapshot</button></div>`);
+  $("#snapname").focus();
+}
+function saveSnapshot() {
+  const v = selected();
+  const name = $("#snapname").value.trim();
+  if (!/^[A-Za-z][\w-]{1,39}$/.test(name)) {
+    const err = $("#snaperr");
+    err.textContent = "Start with a letter, then use letters, numbers, dashes or underscores. At least two characters.";
+    err.hidden = false;
+    return;
+  }
+  if (v.snapshots.some((s) => s.name === name)) {
+    const err = $("#snaperr");
+    err.textContent = `${v.name} already has a snapshot called ${name}.`;
+    err.hidden = false;
+    return;
+  }
+  runAction("snapshot-take", v.node, `Taking snapshot ${name}`, { ...guestBody(v), snapshot: name, description: $("#snapnote").value.trim() }, () => refresh());
+}
+function askRestore(name) {
+  const v = selected();
+  if (!v) return;
+  const s = v.snapshots.find((x) => x.name === name);
+  dialog(`<h3>Go back to ${esc(name)}?</h3>
+    <p>${esc(v.name)} changes back to how it was at ${esc(when(s?.takenAt))}. Anything that changed on it since then is lost.${v.running ? " It stops while this happens, then starts again." : ""}</p>
+    <label class="field restartname"><span>Type restore to confirm</span><input id="rname" data-word="restore" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-snapback="${esc(name)}" disabled>Go back to ${esc(name)}</button></div>`);
+  $("#rname").focus();
+}
+function doRestore(name) {
+  const v = selected();
+  runAction("snapshot-restore", v.node, `Going back to ${name}`, { ...guestBody(v), snapshot: name, confirm: "restore", start: v.running }, () => refresh());
+}
+function askDeleteSnapshot(name) {
+  const v = selected();
+  if (!v) return;
+  confirmAction(`Delete snapshot ${name}?`, `You won't be able to go back to it. ${v.name} itself doesn't change.`, `Delete ${name}`, () => runAction("snapshot-delete", v.node, `Deleting snapshot ${name}`, { ...guestBody(v), snapshot: name, confirm: name }, () => refresh()), true);
+}
+
 /* Moving a VM or container */
 async function startMove(id) {
   const v = S.data?.vms.find((g) => g.id === id);
@@ -919,6 +997,15 @@ document.addEventListener("click", (e) => {
     closeDialog();
     return askMoveBack(d.moveback);
   }
+  if (d.power) return askPower(d.power);
+  if (d.snaptake) return askSnapshot();
+  if (d.snapsave) return saveSnapshot();
+  if (d.snaprestore) return askRestore(d.snaprestore);
+  if (d.snapback) {
+    t.disabled = true;
+    return doRestore(d.snapback);
+  }
+  if (d.snapdelete) return askDeleteSnapshot(d.snapdelete);
   if (d.move) return startMove(+d.move);
   if (d.movego) {
     const { v } = S.move;
@@ -947,9 +1034,15 @@ document.addEventListener("click", (e) => {
   }
   if (d.restartclose) {
     const plan = savedReboot();
-    if (plan?.rolling) keepMoved(plan);
+    if (plan && (plan.rolling || plan.phase === "moving")) keepMoved(plan);
     saveReboot(null);
     S.watching = false;
+    if (plan?.phase === "moving") {
+      return dialog(`<h3>${esc(plan.server)} won't restart</h3><p>Anything already moving will finish moving. To send it back afterward, use Move everything back on the server's Overview.${plan.rolling ? ` ${esc(notTouched(plan))}` : ""}</p>${closeRow}`);
+    }
+    if (plan?.rolling && plan.phase === "restarting") {
+      return dialog(`<h3>BossMox stopped following the update</h3><p>${esc(plan.server)} is still restarting. To send its guests back afterward, use Move everything back on the server's Overview. ${esc(notTouched(plan))}</p>${closeRow}`);
+    }
     return closeDialog();
   }
   if (d.backup) {
@@ -997,7 +1090,7 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("input", (e) => {
   if (e.target.id === "rname") {
-    $("#rgo").disabled = e.target.value.trim().toLowerCase() !== "reboot";
+    $("#rgo").disabled = e.target.value.trim().toLowerCase() !== (e.target.dataset.word ?? "reboot");
   }
   if (e.target.id === "vmq") {
     S.q = e.target.value;

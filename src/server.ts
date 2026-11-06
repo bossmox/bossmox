@@ -156,6 +156,22 @@ const json = (res: http.ServerResponse, status: number, value: unknown, extra?: 
 const NODE_NAME = /^[\w.-]{1,64}$/;
 const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w.@!-]+:$/;
 
+const POWER = new Set(["start", "shutdown", "reboot", "stop"]);
+const SNAPSHOT_NAME = /^[A-Za-z][\w-]{1,39}$/;
+
+/** The address of one VM or container, checked, for actions that take one. */
+function guestPath(name: string, body: Record<string, unknown>): { id: string; path: string } {
+  const id = text(body.guest, 12);
+  const type = body.type;
+  if (!/^\d+$/.test(id) || (type !== "qemu" && type !== "lxc")) throw new AuthError(400, "That request isn't valid.");
+  return { id, path: `/nodes/${encodeURIComponent(name)}/${type}/${id}` };
+}
+function snapshotName(body: Record<string, unknown>): string {
+  const snap = text(body.snapshot, 40);
+  if (!SNAPSHOT_NAME.test(snap)) throw new AuthError(400, "A snapshot name starts with a letter, then letters, numbers, dashes or underscores.");
+  return snap;
+}
+
 /** Everything BossMox can change on Proxmox is listed here. There is no general pass-through. */
 const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string, unknown>) => Promise<string | null>> = {
   "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
@@ -180,6 +196,32 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     const target = text(body.target, 64);
     if (!/^\d+(,\d+)*$/.test(vms) || !NODE_NAME.test(target) || target === name) throw new AuthError(400, "That move request isn't valid.");
     return pve.post<string>(`/nodes/${encodeURIComponent(name)}/migrateall`, who, { target, vms, "with-local-disks": "1", maxworkers: "1" });
+  },
+  "guest-power": (name, who, body) => {
+    const { id, path } = guestPath(name, body);
+    const power = text(body.power, 16);
+    if (!POWER.has(power)) throw new AuthError(400, "That request isn't valid.");
+    if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
+    return pve.post<string>(`${path}/status/${power}`, who);
+  },
+  "snapshot-take": (name, who, body) => {
+    const { path } = guestPath(name, body);
+    const snapname = snapshotName(body);
+    const description = text(body.description, 200);
+    return pve.post<string>(`${path}/snapshot`, who, description ? { snapname, description } : { snapname });
+  },
+  "snapshot-restore": (name, who, body) => {
+    const { path } = guestPath(name, body);
+    const snap = snapshotName(body);
+    // The browser only sends this after the person types "restore", because newer changes are lost.
+    if (body.confirm !== "restore") throw new AuthError(400, "That wasn't confirmed.");
+    return pve.post<string>(`${path}/snapshot/${snap}/rollback`, who, body.start === true ? { start: "1" } : {});
+  },
+  "snapshot-delete": (name, who, body) => {
+    const { path } = guestPath(name, body);
+    const snap = snapshotName(body);
+    if (body.confirm !== snap) throw new AuthError(400, "That wasn't confirmed.");
+    return pve.delete<string>(`${path}/snapshot/${snap}`, who);
   },
   "back-up-guests": (name, who, body) => {
     const vmid = text(body.guests, 256);
@@ -219,6 +261,9 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
   } catch (err) {
     if (err instanceof PveError && err.status === 403) {
       return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
+    }
+    if (err instanceof PveError && err.status !== 401 && err.reason) {
+      return json(res, 400, { error: `Proxmox refused: ${err.reason}` });
     }
     throw err;
   }
@@ -317,7 +362,7 @@ const handler: http.RequestListener = async (req, res) => {
     if (route === "/api/login-info") {
       return json(res, 200, { realms: await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains") });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -348,6 +393,13 @@ const handler: http.RequestListener = async (req, res) => {
           return json(res, 200, buildMovePlan(type, name, nodes, raw, running));
         }
         if (route === "/api/rolling-plan") return json(res, 200, await loadRollingPlan(session.ticket));
+        if (route === "/api/snapshot-support") {
+          const name = params.get("server") ?? "";
+          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          const { path } = guestPath(name, { guest: params.get("guest"), type: params.get("type") });
+          const feature = await pve.get<{ hasFeature?: number }>(`${path}/feature?feature=snapshot`, session.ticket);
+          return json(res, 200, { supported: feature.hasFeature === 1 });
+        }
         if (route === "/api/reboot-plan") {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });

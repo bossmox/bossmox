@@ -32,7 +32,7 @@ export class PveClient {
    * Tries each Proxmox address until one answers. Only a failed connection moves to the next
    * address, because then the request never reached Proxmox and can't have run twice.
    */
-  private async request<T>(method: "GET" | "POST", path: string, ticket?: string, body?: string, csrf?: string): Promise<T> {
+  private async request<T>(method: "GET" | "POST" | "DELETE", path: string, ticket?: string, body?: string, csrf?: string): Promise<T> {
     const urls = this.config.pveUrls;
     for (let i = 0; ; i++) {
       const index = (this.current + i) % urls.length;
@@ -48,7 +48,7 @@ export class PveClient {
     }
   }
 
-  private attempt<T>(base: URL, method: "GET" | "POST", path: string, ticket?: string, body?: string, csrf?: string): Promise<T> {
+  private attempt<T>(base: URL, method: "GET" | "POST" | "DELETE", path: string, ticket?: string, body?: string, csrf?: string): Promise<T> {
     const url = new URL("/api2/json" + path, base);
     const secure = url.protocol === "https:";
     const headers: Record<string, string> = {};
@@ -73,7 +73,7 @@ export class PveClient {
         res.on("end", () => {
           const status = res.statusCode ?? 0;
           if (status < 200 || status >= 300) {
-            reject(new PveError(status, `Proxmox answered ${status} for ${path}`));
+            reject(new PveError(status, `Proxmox answered ${status} for ${path}`, res.statusMessage));
             return;
           }
           try {
@@ -104,10 +104,15 @@ export class PveClient {
   post<T>(path: string, who: Identity, form: Record<string, string> = {}): Promise<T> {
     return this.request<T>("POST", path, who.ticket, new URLSearchParams(form).toString(), who.csrf);
   }
+
+  delete<T>(path: string, who: Identity): Promise<T> {
+    return this.request<T>("DELETE", path, who.ticket, undefined, who.csrf);
+  }
 }
 
 export class PveError extends Error {
-  constructor(readonly status: number, message: string) {
+  /** `reason` is Proxmox's own explanation, which is worth showing when it refuses an action. */
+  constructor(readonly status: number, message: string, readonly reason?: string) {
     super(message);
   }
 }
