@@ -306,7 +306,7 @@ function renderDetail() {
       <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
       <div class="actions">${v.template ? `<button class="btn primary" data-clone="${v.id}">New from template</button>` : v.running
         ? `<button class="btn" data-console="${v.id}">Console</button><button class="btn" data-power="shutdown">Shut down</button><button class="btn" data-power="reboot">Restart</button><button class="btn" data-power="stop">Force off</button>`
-        : `<button class="btn primary" data-power="start">Start</button>`}${v.template ? "" : `<button class="btn" data-clone="${v.id}">Clone</button>`}${(S.data?.nodes.length ?? 0) > 1 && !v.template ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${v.running || v.template ? "" : `<button class="btn" data-maketemplate="${v.id}">Make template</button>`}${v.running ? "" : `<button class="btn" data-guestdelete="${v.id}">Delete</button>`}</div></div>
+        : `<button class="btn primary" data-power="start">Start</button>`}${v.template ? "" : `<button class="btn" data-clone="${v.id}">Clone</button>`}${(S.data?.nodes.length ?? 0) > 1 && !v.template ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${!v.running && !v.template && v.type === "qemu" ? `<button class="btn" data-bootmenu="${v.id}">Boot menu</button>` : ""}${v.running || v.template ? "" : `<button class="btn" data-maketemplate="${v.id}">Make template</button>`}${v.running ? "" : `<button class="btn" data-guestdelete="${v.id}">Delete</button>`}</div></div>
     <div id="vmwaiting">${waitingWords(v)}</div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["hardware", "Hardware"], ...(v.template ? [] : [["snapshots", "Snapshots"]]), ["settings", "Settings"]].map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${TAB[S.tab](v)}</div>`;
@@ -2200,6 +2200,22 @@ function drawWaiting(v) {
   const box = $("#vmwaiting");
   if (box) box.innerHTML = waitingWords(v);
 }
+/** Goes straight to the console, because the menu is why they pressed the button. */
+async function startToBootMenu(id) {
+  const v = S.data.vms.find((g) => g.id === id);
+  dialog(`<h3>Starting ${esc(v.name)}</h3><p>BossMox is getting it to the boot menu, then opens the console.</p>`);
+  try {
+    const res = await post("api/action/guest-boot-menu", { server: v.node, ...guestBody(v) });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.error);
+    closeDialog();
+    await refresh();
+    renderDetail();
+    openConsole(v.id);
+  } catch (err) {
+    failDialog(`${v.name} didn't start`, err);
+  }
+}
 async function askGuestDisc() {
   const v = selected();
   let discs;
@@ -2322,6 +2338,7 @@ document.addEventListener("click", (e) => {
   if (d.console) return openConsole(+d.console);
   if (d.nodeconsole) return openNodeConsole(d.nodeconsole);
   if (d.vnccad) return vnc?.sendCtrlAltDel();
+  if (d.bootmenu) return startToBootMenu(+d.bootmenu);
   if (d.setsave) return saveSettings();
   if (d.setundo) return renderDetail();
   if (d.gdisc) return askGuestDisc();

@@ -275,6 +275,8 @@ const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w
 const POWER = new Set(["start", "shutdown", "reboot", "stop"]);
 const MAX_UPLOAD = 200 * 1024 ** 3;
 const FULL_LOG = 20000;
+const ESC_WINDOW_MS = 8000;
+const ESC_GAP_MS = 1200;
 const UPLOAD_NAME = /^[\w.-]{1,200}\.(iso|img)$/i;
 
 /** Turns a hardware rule into a plain 400, and reads the guest's settings the rule needs. */
@@ -406,6 +408,30 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
       if (err instanceof SettingsError) throw new AuthError(400, err.message);
       throw err;
     }
+  },
+  /**
+   * Proxmox has no "stop at the boot menu" setting, so this starts the VM and presses Esc while the logo is up.
+   * It keeps pressing for a few seconds, because how long the logo takes to appear varies.
+   */
+  "guest-boot-menu": async (name, who, body) => {
+    const { path } = guestPath(name, { ...body, type: "qemu" });
+    const task = await pve.post<string>(`${path}/status/start`, who);
+    const taskPath = `/nodes/${encodeURIComponent(name)}/tasks/${encodeURIComponent(task)}/status`;
+    for (let i = 0; i < 60; i++) {
+      const status = await pve.get<RawTaskStatus>(taskPath, who.ticket);
+      if (status.status === "stopped") {
+        if (status.exitstatus !== "OK") throw new AuthError(400, status.exitstatus ?? "It wouldn't start.");
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    // A VM still starting can refuse a key, which only means pressing again.
+    const until = Date.now() + ESC_WINDOW_MS;
+    while (Date.now() < until) {
+      await pve.put<null>(`${path}/sendkey`, who, { key: "esc" }).catch(() => null);
+      await new Promise((r) => setTimeout(r, ESC_GAP_MS));
+    }
+    return null;
   },
   "guest-disc": async (name, who, body) => {
     const { path } = guestPath(name, body);

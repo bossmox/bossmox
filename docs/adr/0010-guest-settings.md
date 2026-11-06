@@ -15,6 +15,10 @@ Date: 2026-11-06. Status: accepted.
 - Changes a running guest can't take straight away show in a "Waiting for a restart" notice above the tabs, read from Proxmox's own pending list.
 - The disc drive moved to the Hardware tab, where it sits with what it is.
 
+## Boot menu button
+
+Proxmox has no "force BIOS setup on next boot" setting. **Boot menu** on a shut-down VM starts it, presses Esc about once every 1.2 seconds for 8 seconds, then opens the console. Faster presses failed: a VM still starting refuses keys, so refused presses are ignored and it just keeps pressing. Results on nested test VMs: BIOS 5 of 5, UEFI 3 of 4. A miss does no harm, the VM just boots normally. UEFI lands on the boot menu, where EFI Firmware Setup is one of the choices.
+
 ## Not offered
 
 Hook scripts, raw QEMU arguments, PCI and USB passthrough, cloud-init, and hotplug choices. Passthrough and cloud-init need their own screens. Changing a container's system or privilege type isn't offered because they can't change after it's made.
