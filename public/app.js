@@ -389,7 +389,7 @@ async function startRestart(server) {
     ${plan.busyKnown ? "" : `<p class="loginerr" style="margin-top:12px">BossMox can't tell whether jobs are running on this server.</p>`}
     ${guests.length ? `<div class="restartlist">${guests.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state">${v.startsAtBoot ? "Starts again by itself" : "Stays off until started"}</span></div>`).join("")}</div>` : ""}
     ${guests.length && plan.backupStorages.length ? `<div class="restartbackup"><select id="rstore" aria-label="Backup storage">${plan.backupStorages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select><button class="btn" data-backup="${esc(server)}">Back up first</button></div>` : ""}
-    <label class="field restartname"><span>Type ${esc(server)} to confirm</span><input id="rname" autocomplete="off" spellcheck="false"></label>
+    <label class="field restartname"><span>Type reboot to confirm</span><input id="rname" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-restart="${esc(server)}" disabled>Restart ${esc(server)}</button></div>`);
   $("#rname").focus();
 }
@@ -398,7 +398,7 @@ async function doRestart(server) {
   S.restart = null;
   saveReboot({ server, startedAt: Date.now(), guests: guests.map((v) => ({ id: v.id, name: v.name, auto: v.startsAtBoot })) });
   try {
-    const res = await post("api/action/restart-server", { server, confirm: server });
+    const res = await post("api/action/restart-server", { server, confirm: "reboot" });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error);
   } catch (err) {
@@ -681,7 +681,7 @@ document.addEventListener("click", (e) => {
 });
 document.addEventListener("input", (e) => {
   if (e.target.id === "rname") {
-    $("#rgo").disabled = e.target.value !== S.restart?.server;
+    $("#rgo").disabled = e.target.value.trim().toLowerCase() !== "reboot";
   }
   if (e.target.id === "vmq") {
     S.q = e.target.value;

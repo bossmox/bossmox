@@ -121,8 +121,8 @@ const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w
 const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string, unknown>) => Promise<string | null>> = {
   "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
   "restart-server": async (name, who, body) => {
-    // The browser sends the name the person typed, so a stale or scripted click can't restart the wrong server.
-    if (body.confirm !== name) throw new AuthError(400, "The typed name doesn't match the server.");
+    // The browser only sends this after the person types "reboot", so a stray click can't restart a server.
+    if (body.confirm !== "reboot") throw new AuthError(400, "The restart wasn't confirmed.");
     return pve.post<null>(`/nodes/${encodeURIComponent(name)}/status`, who, { command: "reboot" });
   },
   "move-guest": (name, who, body) => {
