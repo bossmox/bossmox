@@ -204,6 +204,7 @@ export function taskView(status: RawTaskStatus, log: { n?: number; t?: string }[
 }
 
 export interface RawBackupStorage {
+  shared?: number;
   storage: string;
   avail?: number;
   active?: number;
@@ -217,7 +218,7 @@ export function buildRebootPlan(active: Section<RawTask[]>, storages: Section<Ra
     busy: active.available ? active.value.filter((t) => !QUIET_TASKS.has(t.type ?? "")).map((t) => `${friendlyTask(t)}${t.id ? ` on ${t.id}` : ""}`) : [],
     busyKnown: active.available,
     backupStorages: storages.available
-      ? storages.value.filter((s) => s.active !== 0 && s.enabled !== 0).map((s) => ({ name: s.storage, freeGb: gb(s.avail) }))
+      ? storages.value.filter((s) => s.active !== 0 && s.enabled !== 0).map((s) => ({ name: s.storage, freeGb: gb(s.avail), shared: s.shared === 1 }))
       : [],
   };
 }

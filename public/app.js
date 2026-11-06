@@ -13,7 +13,7 @@ const APPS = {
   vms: { title: "Virtual Machines", color: "#0E7EA6", w: 920, h: 610 },
   create: { title: "Create a VM", color: "#178A5F", w: 560, h: 640 },
   monitor: { title: "Nodes", color: "#7A5AC8", w: 900, h: 620 },
-  storage: { title: "Storage", color: "#B9680A", w: 520, h: 420 },
+  storage: { title: "Storage", color: "#B9680A", w: 760, h: 610 },
   network: { title: "Network", color: "#2F7A7E", w: 860, h: 580 },
   tasklog: { title: "All tasks", color: "#3C6E9E", w: 860, h: 610, noIcon: true },
   backups: { title: "Backups", color: "#C43838", w: 860, h: 610 },
@@ -139,7 +139,8 @@ function renderHealth() {
       : `<h1>Connecting to Proxmox</h1>`;
     return;
   }
-  const { nodes, vms, storage, issues } = S.data;
+  const { nodes, vms, storage } = S.data;
+  const issues = [...S.data.issues, ...diskIssues()];
   const up = nodes.filter((n) => n.online).length;
   const guests = vms.filter((v) => !v.template);
   const run = guests.filter((v) => v.running).length;
@@ -213,7 +214,7 @@ function openWin(app) {
   drag(el, $(".tbar", el));
   render(app);
   focusWin(app);
-  if (app === "vms" || app === "monitor" || app === "network") loadAhead();
+  if (["vms", "monitor", "network", "storage", "backups", "tasklog"].includes(app)) loadAhead();
 }
 function focusWin(app) {
   wins[app].style.zIndex = ++S.z;
@@ -252,6 +253,10 @@ function render(app) {
   if (app === "backups") {
     drawBackups();
     loadBackups();
+  }
+  if (app === "storage") {
+    drawStore();
+    loadStorage();
   }
   if (app === "tasklog") {
     $("#tlshow").value = S.tlShow ?? "all";
@@ -404,6 +409,14 @@ async function loadAhead() {
       }
     }
     if (first || wins.tasklog) await loadTaskLog();
+    if (first || wins.storage) await loadStorage();
+    // Disks answer slowly and rarely change, but a failing one should still reach the desktop.
+    if (first || wins.storage || S.aheadRuns % 10 === 0) {
+      for (const node of onlineNodes()) {
+        if (run !== S.loadRun) return;
+        await loadDisks(node);
+      }
+    }
     // Backups mean asking every storage on every node, so this one runs a third as often.
     if (first || (wins.backups && S.aheadRuns % 3 === 0)) await loadBackups();
     if (first || wins.vms) {
@@ -515,8 +528,200 @@ function renderServerDetail() {
   box.scrollTop = top;
 }
 function storeView() {
-  if (!S.data) return `<p class="empty">Waiting for Proxmox.</p>`;
-  return `<div class="store">${S.data.storage.map((s) => `<div><b>${esc(s.name)}</b><small>${s.freeGb} GB free of ${s.totalGb} GB, on ${esc(s.node)}${s.online ? "" : ", not available"}</small><div class="meter"><i style="width:${s.usedPct}%"></i></div></div>`).join("")}</div>`;
+  return `<div id="stbox" class="stbox"></div>`;
+}
+const USE_WORDS = { images: "VM disks", rootdir: "Container disks", backup: "Backups", iso: "Installer discs", vztmpl: "Container templates" };
+const onlineNodes = () => (S.data?.nodes ?? []).filter((n) => n.online).map((n) => n.name);
+function storagePane() {
+  if (!S.storeList) return `<p class="empty">${esc(S.storeError || "Looking at your storage.")}</p>`;
+  const row = (s) => {
+    const used = s.totalGb ? Math.round(((s.totalGb - s.freeGb) / s.totalGb) * 100) : 0;
+    return `<div class="stcard"><div class="sthead"><div><b>${esc(s.id)}</b><small>${esc(s.kind)}${s.where ? `, ${esc(s.where)}` : ""}</small></div>
+      <div class="actions"><button class="btn" data-stedit="${esc(s.id)}">Change use</button><button class="btn" data-stremove="${esc(s.id)}">Remove</button></div></div>
+      ${s.totalGb ? `<small>${s.freeGb} GB free of ${s.totalGb} GB</small><div class="meter"><i style="width:${used}%"></i></div>` : ""}
+      <small>Holds ${esc(s.uses.map((u) => USE_WORDS[u]).join(", ") || "nothing yet")}${s.nodes.length ? `. On ${esc(s.nodes.join(", "))}` : ""}</small>
+      ${s.missing.length ? `<p class="loginerr">Not available on ${esc(s.missing.join(", "))}.</p>` : ""}</div>`;
+  };
+  return `<div class="row-end" style="margin:0 0 12px"><button class="btn primary" data-stadd="1">Add network storage</button></div>${S.storeList.map(row).join("") || `<p class="empty">No storage yet.</p>`}`;
+}
+function disksPane() {
+  const nodes = onlineNodes();
+  S.storeNode = nodes.includes(S.storeNode) ? S.storeNode : nodes[0];
+  const list = S.diskData?.[S.storeNode];
+  const row = (d) => `<div class="snap"><div>${esc(d.path)}${d.model ? ` <small class="inl">${esc(d.model)}</small>` : ""}<small>${d.sizeGb} GB${d.kind ? ` ${esc(d.kind)}` : ""}, ${d.free ? "empty" : `in use (${esc(d.used)})`}${d.wearLeft === null ? "" : `, ${d.wearLeft}% life left`}</small></div>
+    <div class="actions"><button class="linkbtn healthbtn ${d.failing ? "bad" : ""}" data-diskhealth="${esc(d.path)}"><span class="dot ${d.failing ? "warn" : d.health === "UNKNOWN" ? "" : "running"}"></span>${d.failing ? "Failing" : d.health === "UNKNOWN" ? "Health unknown" : "Healthy"}</button>${d.canWipe ? `<button class="btn" data-diskwipe="${esc(d.path)}">Wipe</button>` : ""}</div></div>`;
+  const pick = `<label class="field stnode"><span>Node</span><select id="stnode">${nodes.map((n) => `<option ${n === S.storeNode ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>`;
+  if (!list) return `${pick}<p class="empty">Looking at this node's disks.</p>`;
+  const free = list.filter((d) => d.free);
+  return `<div class="sttop">${pick}${free.length ? `<button class="btn primary" data-diskmake="1">Make storage</button>` : ""}</div>
+    ${list.map(row).join("") || `<p class="empty">This node didn't report any disks.</p>`}
+    ${free.length ? "" : `<p class="meta">Nothing's empty on this node, so there's nothing to turn into storage. Wipe a disk you no longer need to use it.</p>`}`;
+}
+function drawStore() {
+  const box = $("#stbox");
+  if (!box) return;
+  S.stTab ??= "storage";
+  const html = `<div class="tabs" role="tablist">${[["storage", "Storage"], ["disks", "Disks"]].map(([k, l]) => `<button role="tab" aria-selected="${S.stTab === k}" class="${S.stTab === k ? "on" : ""}" data-sttab="${k}">${l}</button>`).join("")}</div>
+    <div class="tabpane">${S.stTab === "storage" ? storagePane() : disksPane()}</div>`;
+  if (html === box.dataset.drawn) return;
+  box.innerHTML = html;
+  box.dataset.drawn = html;
+}
+async function loadStorage() {
+  const run = S.loadRun;
+  try {
+    const { list } = await signal("api/storage-list");
+    if (run !== S.loadRun) return;
+    S.storeList = list;
+    S.storeError = "";
+  } catch (err) {
+    if (err.message === "signed out" || run !== S.loadRun) return;
+    S.storeError = err.message || "BossMox lost contact with Proxmox.";
+  }
+  drawStore();
+}
+async function loadDisks(node) {
+  const run = S.loadRun;
+  try {
+    const { disks } = await signal(`api/disks?server=${encodeURIComponent(node)}`);
+    if (run !== S.loadRun) return;
+    S.diskData = { ...S.diskData, [node]: disks };
+    drawStore();
+    renderHealth();
+  } catch { /* the next pass asks again, and the tab says it's still looking */ }
+}
+const afterStorage = async () => {
+  await refresh();
+  await loadStorage();
+};
+function askAddShare() {
+  S.scan = null;
+  dialog(`<h3>Add network storage</h3><p>BossMox looks at what the NAS shares, so you can pick from a list.</p>
+    <p class="loginerr" id="formerr" hidden></p>
+    <label class="field restartname"><span>Type</span><select id="sharekind"><option value="nfs">NFS</option><option value="smb">SMB (Windows sharing)</option></select></label>
+    <label class="field restartname"><span>NAS address</span><input id="sharehost" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="192.168.1.20"></label>
+    <div id="smbfields" hidden><div class="createrow"><label class="field"><span>Username</span><input id="shareuser" autocomplete="off" autocapitalize="none" spellcheck="false"></label><label class="field"><span>Password</span><input id="sharepass" type="password" autocomplete="new-password"></label></div></div>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-stscan="1">Look for shares</button></div>`);
+  $("#sharehost").focus();
+}
+async function scanShares() {
+  const kind = $("#sharekind").value;
+  const host = $("#sharehost").value.trim();
+  const username = $("#shareuser").value.trim();
+  const password = $("#sharepass").value;
+  if (!host) return formError("Enter the NAS address.");
+  const server = onlineNodes()[0];
+  if (!server) return formError("No node is online to look from.");
+  const go = $("[data-stscan]");
+  go.disabled = true;
+  go.textContent = "Looking";
+  try {
+    const res = await post("api/storage-scan", { server, kind, host, username, password });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.error);
+    if (!out.shares) throw new Error(`${server} couldn't reach ${host}${kind === "smb" ? ", or that sign-in was refused" : ""}.`);
+    if (!out.shares.length) throw new Error(`${host} isn't sharing anything with this node.`);
+    S.scan = { server, kind, host, username, password, shares: out.shares };
+    const suggest = (out.shares[0].split("/").filter(Boolean).pop() ?? "nas").replace(/[^A-Za-z0-9-]/g, "-");
+    dialog(`<h3>Add ${esc(host)}</h3><p class="loginerr" id="formerr" hidden></p>
+      <label class="field restartname"><span>Shared folder</span><select id="sharepath">${out.shares.map((x) => `<option>${esc(x)}</option>`).join("")}</select></label>
+      <label class="field restartname"><span>Name in BossMox</span><input id="shareid" maxlength="64" value="${esc(`nas-${suggest}`)}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+      <fieldset class="uses"><legend>What it's for</legend>${["backup", "iso", "vztmpl", "images", "rootdir"].map((u) => `<label class="createcheck"><input type="checkbox" value="${u}" ${u === "backup" || u === "iso" ? "checked" : ""}> ${USE_WORDS[u]}</label>`).join("")}</fieldset>
+      <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-stsave="1">Test and add</button></div>`);
+  } catch (err) {
+    go.disabled = false;
+    go.textContent = "Look for shares";
+    if (err.message !== "signed out") formError(err.message || "BossMox lost contact with Proxmox.");
+  }
+}
+const pickedUses = () => [...document.querySelectorAll(".uses input:checked")].map((c) => c.value);
+function saveShare() {
+  const c = S.scan;
+  const id = $("#shareid").value.trim();
+  const uses = pickedUses();
+  if (!uses.length) return formError("Pick at least one thing to keep there.");
+  if (S.storeList?.some((s) => s.id.toLowerCase() === id.toLowerCase())) return formError(`${id} already exists. Pick another name.`);
+  runAction("storage-add", c.server, `Testing and adding ${id}`, { kind: c.kind, id, host: c.host, path: $("#sharepath").value, username: c.username, password: c.password, uses }, afterStorage);
+  S.scan = null;
+}
+function askEditStorage(id) {
+  const s = S.storeList.find((x) => x.id === id);
+  S.editStore = id;
+  dialog(`<h3>What's ${esc(id)} for?</h3><p class="loginerr" id="formerr" hidden></p>
+    <fieldset class="uses"><legend>Keep on it</legend>${s.usesAllowed.map((u) => `<label class="createcheck"><input type="checkbox" value="${u}" ${s.uses.includes(u) ? "checked" : ""}> ${USE_WORDS[u]}</label>`).join("")}</fieldset>
+    <p class="meta">Turning something off doesn't delete what's already there.</p>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-stuses="1">Save</button></div>`);
+}
+function saveUses() {
+  const uses = pickedUses();
+  if (!uses.length) return formError("Pick at least one thing to keep there.");
+  runAction("storage-edit", onlineNodes()[0], `Changing ${S.editStore}`, { id: S.editStore, uses }, afterStorage);
+}
+function askRemoveStorage(id) {
+  dialog(`<h3>Remove ${esc(id)}?</h3><p>BossMox and Proxmox stop using it. Nothing on it is erased, so you can add it back later.</p>
+    <label class="field restartname"><span>Type ${esc(id)} to confirm</span><input id="rname" data-word="${esc(id.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-stremovego="${esc(id)}" disabled>Remove</button></div>`);
+  $("#rname").focus();
+}
+async function showDiskHealth(path) {
+  const node = S.storeNode;
+  const d = S.diskData?.[node]?.find((x) => x.path === path);
+  dialog(`<h3>${esc(path)} on ${esc(node)}</h3><p>Asking the disk.</p>${closeRow}`);
+  try {
+    const r = await signal(`api/disk-smart?server=${encodeURIComponent(node)}&disk=${encodeURIComponent(path)}`);
+    const rows = (r.attributes ?? []).map((a) => `${a.name ?? a.id}: ${a.raw ?? a.value ?? ""}`);
+    const body = rows.length ? rows.join("\n") : r.text ?? "";
+    dialog(`<h3>${esc(path)} on ${esc(node)}</h3><p class="${d?.failing ? "loginerr" : ""}">${d?.failing ? "This disk reports a problem. Move what's on it and replace it." : (r.health ?? "UNKNOWN") === "UNKNOWN" ? "This disk doesn't report its health. Virtual disks and some USB drives can't." : "This disk reports that it's healthy."}</p>
+      ${body.trim() ? `<pre class="tasklog whole">${esc(body)}</pre>` : ""}${closeRow}`);
+  } catch (err) {
+    if (err.message !== "signed out") failDialog("Couldn't ask that disk", err);
+  }
+}
+function askWipe(path) {
+  const node = S.storeNode;
+  const d = S.diskData[node].find((x) => x.path === path);
+  S.editDisk = path;
+  dialog(`<h3>Wipe ${esc(path)} on ${esc(node)}?</h3><p>Everything on this ${d.sizeGb} GB disk is erased for good. It holds ${esc(d.used)} now.</p>
+    <label class="field restartname"><span>Type erase to confirm</span><input id="rname" data-word="erase" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-diskwipego="1" disabled>Wipe disk</button></div>`);
+  $("#rname").focus();
+}
+function askMakeStorage() {
+  const free = S.diskData[S.storeNode].filter((d) => d.free);
+  dialog(`<h3>Make storage on ${esc(S.storeNode)}</h3><p class="loginerr" id="formerr" hidden></p>
+    <label class="field restartname"><span>Type</span><select id="mkkind"><option value="zfs">ZFS: copies, checks and snapshots</option><option value="lvmthin">LVM-thin: simple, with snapshots</option><option value="directory">Folder: holds anything, including backups</option></select></label>
+    <label class="field restartname"><span>Name</span><input id="mkname" maxlength="31" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="fast"></label>
+    <fieldset class="uses" id="mkdisks"><legend>Disks</legend>${free.map((d) => `<label class="createcheck"><input type="checkbox" value="${esc(d.path)}"> ${esc(d.path)}, ${d.sizeGb} GB${d.model ? ` ${esc(d.model)}` : ""}</label>`).join("")}</fieldset>
+    <div id="mkraidwrap"></div><div id="mkfswrap" hidden><label class="field restartname"><span>Format</span><select id="mkfs"><option>ext4</option><option>xfs</option></select></label></div>
+    <label class="field restartname"><span>Everything on these disks is erased. Type erase to confirm</span><input id="rname" data-word="erase" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-mkgo="1" disabled>Make storage</button></div>`);
+  drawMakeChoices();
+}
+const pickedDisks = () => [...document.querySelectorAll("#mkdisks input:checked")].map((c) => c.value);
+/** Only offers layouts the number of picked disks can actually do. */
+function drawMakeChoices() {
+  const kind = $("#mkkind").value;
+  const n = pickedDisks().length;
+  $("#mkfswrap").hidden = kind !== "directory";
+  const was = $("#mkraid")?.value;
+  const options = [["single", "One disk, no copies", n === 1], ["mirror", "Mirror: survives losing all but one disk", n >= 2], ["raidz", "RAIDZ: survives losing 1 disk", n >= 3], ["raidz2", "RAIDZ2: survives losing 2 disks", n >= 4], ["raid10", "Striped mirrors: fast, survives 1 per pair", n >= 4 && n % 2 === 0]].filter((o) => o[2]);
+  $("#mkraidwrap").innerHTML = kind === "zfs" && options.length ? `<label class="field restartname"><span>How the disks work together</span><select id="mkraid">${options.map(([k, l]) => `<option value="${k}" ${k === was ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : "";
+}
+function makeStorage() {
+  const kind = $("#mkkind").value;
+  const devices = pickedDisks();
+  const name = $("#mkname").value.trim();
+  if (!name) return formError("Enter a name.");
+  if (!devices.length) return formError("Pick a disk.");
+  if (kind !== "zfs" && devices.length !== 1) return formError("This type uses one disk.");
+  const node = S.storeNode;
+  runAction("disk-storage", node, `Making ${name} on ${node}`, { kind, name, devices, raid: $("#mkraid")?.value ?? "", filesystem: $("#mkfs").value, confirm: "erase" }, async () => {
+    await loadDisks(node);
+    await afterStorage();
+  });
+}
+function diskIssues() {
+  return Object.entries(S.diskData ?? {}).flatMap(([node, disks]) => disks.filter((d) => d.failing).map((d) => ({ kind: "disk-health", title: `${d.path} on ${node} is failing`, detail: "" })));
 }
 /* Confirmations and following a task */
 const dialog = (html) => {
@@ -1409,10 +1614,45 @@ function backupsPane() {
   const row = (x) => `<div class="snap"><div>${esc(when(x.takenAt))}<small>${esc(x.size)} on ${esc(x.storage)}, ${esc(x.node)}${x.notes ? `, ${esc(x.notes)}` : ""}</small></div><div class="actions"><button class="btn" data-bkrestore="${esc(x.volid)}">Restore</button><button class="btn" data-bkdelete="${esc(x.volid)}" ${x.locked ? "disabled title=\"This backup is protected\"" : ""}>Delete</button></div></div>`;
   const group = (g) => `<details class="upgroup"><summary>${esc(g.name)} (${g.backups.length}), latest ${esc(when(g.backups[0]?.takenAt))}</summary>
     ${g.exists ? `<div class="actions bknow"><button class="btn" data-bknow="${g.id}">Back up now</button></div>` : ""}${g.backups.map(row).join("")}</details>`;
-  return `${b.unscheduled.length ? `<div class="advice"><div><b>${b.unscheduled.length} ${b.unscheduled.length === 1 ? "isn't" : "aren't"} on a backup schedule</b>${esc(b.unscheduled.join(", "))}</div><button class="btn" data-jobadd="1">Add a schedule</button></div>` : ""}
+  return `${protectBanner()}${b.unscheduled.length ? `<div class="advice"><div><b>${b.unscheduled.length} ${b.unscheduled.length === 1 ? "isn't" : "aren't"} on a backup schedule</b>${esc(b.unscheduled.join(", "))}</div><button class="btn" data-jobadd="1">Add a schedule</button></div>` : ""}
     ${b.groups.map(group).join("")}
     ${missing.length ? `<h3 class="bkhead">No backups yet</h3>${missing.map((v) => `<div class="snap"><div>${esc(v.name)}<small>On ${esc(v.node)}</small></div><button class="btn" data-bknow="${v.id}">Back up now</button></div>`).join("")}` : ""}
     ${!b.groups.length && !missing.length ? `<p class="empty">There's nothing to back up yet.</p>` : ""}`;
+}
+/** A schedule that takes in every guest also takes in ones made later, which is why this is the one to have. */
+const everythingCovered = () => S.backups.schedules.some((j) => j.what === "Everything" && j.on);
+const protectBanner = () => (everythingCovered() ? "" : `<div class="advice"><div><b>Protect everything</b>Back up every guest each night, including new ones you add later.</div><button class="btn primary" data-protect="1">Set it up</button></div>`);
+async function askProtect() {
+  const server = onlineNodes()[0];
+  if (!server) return;
+  try {
+    const plan = await signal(`api/reboot-plan?server=${encodeURIComponent(server)}`);
+    if (!plan.backupStorages.length) {
+      dialog(`<h3>Nowhere to save backups</h3><p>Add a NAS first, and pick Backups as one of the things it's for.</p><div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-openstore="1">Open Storage</button></div>`);
+      return;
+    }
+    S.protectOn = server;
+    const best = [...plan.backupStorages].sort((a, b) => Number(b.shared) - Number(a.shared))[0];
+    const on = (x) => `<option value="${esc(x.name)}" ${x.name === best.name ? "selected" : ""}>${esc(x.name)}, ${x.freeGb} GB free</option>`;
+    dialog(`<h3>Protect everything</h3><p>Every guest gets backed up each night, including new ones you add later. Proxmox runs this itself, so BossMox doesn't need to be running.</p>
+      <p class="loginerr" id="formerr" hidden></p>
+      <label class="field restartname"><span>Save to</span><select id="prstore">${plan.backupStorages.map(on).join("")}</select></label>
+      ${best.shared ? "" : `<p class="meta">This is on the node itself, so it won't help if that node's disk dies. A NAS is safer.</p>`}
+      <div class="createrow"><label class="field"><span>What time</span><input id="prtime" type="time" value="02:00"></label><label class="field"><span>Nights to keep</span><input id="prkeep" type="number" min="1" max="99" value="7"></label></div>
+      <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-protectgo="1">Protect everything</button></div>`);
+  } catch (err) {
+    if (err.message !== "signed out") failDialog("Couldn't prepare that", err);
+  }
+}
+function saveProtect() {
+  const time = $("#prtime").value;
+  const keep = Number($("#prkeep").value);
+  if (!/^\d\d:\d\d$/.test(time)) return formError("Pick a time.");
+  if (!Number.isInteger(keep) || keep < 1 || keep > 99) return formError("Keep between 1 and 99 nights.");
+  runAction("schedule-add", S.protectOn, "Setting up nightly backups", { schedule: time, guests: "all", storage: $("#prstore").value, keep }, () => {
+    S.bkTab = "schedules";
+    return loadBackups();
+  });
 }
 function schedulesPane() {
   const list = S.backups.schedules;
@@ -2012,6 +2252,35 @@ document.addEventListener("click", (e) => {
   }
   if (d.bkdelete) return askBackupDelete(d.bkdelete);
   if (d.jobadd) return askSchedule();
+  if (d.openstore) {
+    closeDialog();
+    return openWin("storage");
+  }
+  if (d.protect) return askProtect();
+  if (d.protectgo) return saveProtect();
+  if (d.sttab) {
+    S.stTab = d.sttab;
+    return drawStore();
+  }
+  if (d.stadd) return askAddShare();
+  if (d.stscan) return scanShares();
+  if (d.stsave) return saveShare();
+  if (d.stedit) return askEditStorage(d.stedit);
+  if (d.stuses) return saveUses();
+  if (d.stremove) return askRemoveStorage(d.stremove);
+  if (d.stremovego) {
+    t.disabled = true;
+    return runAction("storage-remove", onlineNodes()[0], `Removing ${d.stremovego}`, { id: d.stremovego, confirm: d.stremovego }, afterStorage);
+  }
+  if (d.diskhealth) return showDiskHealth(d.diskhealth);
+  if (d.diskwipe) return askWipe(d.diskwipe);
+  if (d.diskwipego) {
+    t.disabled = true;
+    const node = S.storeNode;
+    return runAction("disk-wipe", node, `Wiping ${S.editDisk}`, { disk: S.editDisk, confirm: "erase" }, () => loadDisks(node));
+  }
+  if (d.diskmake) return askMakeStorage();
+  if (d.mkgo) return makeStorage();
   if (d.jobsave) return saveSchedule();
   if (d.jobtoggle) return toggleSchedule(d.jobtoggle);
   if (d.jobdelete) return askScheduleDelete(d.jobdelete);
@@ -2129,6 +2398,13 @@ document.addEventListener("click", (e) => {
   }
 });
 document.addEventListener("change", (e) => {
+  if (e.target.id === "stnode") {
+    S.storeNode = e.target.value;
+    drawStore();
+    loadDisks(S.storeNode);
+  }
+  if (e.target.id === "sharekind") $("#smbfields").hidden = e.target.value !== "smb";
+  if (e.target.id === "mkkind" || e.target.closest?.("#mkdisks")) drawMakeChoices();
   if (e.target.id === "tlshow") {
     S.tlShow = e.target.value;
     drawTaskLog();
@@ -2197,6 +2473,9 @@ async function showLogin(message) {
   S.backups = null;
   S.backupsError = "";
   S.taskLog = null;
+  S.storeList = null;
+  S.diskData = {};
+  S.scan = null;
   S.addresses = {};
   S.snapSupport = {};
   S.loadRun += 1;
@@ -2324,7 +2603,7 @@ async function refresh() {
   renderServers();
   drawConsoleActions();
   if (S.ticks++ % 3 === 0) loadAhead();
-  render("storage");
+  drawStore();
 }
 
 const q = new URLSearchParams(location.search);

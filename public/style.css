@@ -240,9 +240,19 @@ summary{cursor:pointer;font-weight:650}
 .ro{font-size:12.5px;font-weight:700;padding:3px 9px;border-radius:var(--r-s);background:var(--surface2);color:var(--muted);margin-right:10px;white-space:nowrap}
 .stale{color:var(--bad);font-size:13px;margin-right:10px}
 .meta{color:var(--muted);font-size:13px;margin-top:12px}
-.store{padding:22px;display:grid;gap:18px}
-.store b{font-weight:650}
-.store small{display:block;color:var(--muted)}
+.stbox{padding:18px 24px;overflow:auto;height:100%}
+.stcard{padding:14px 0;border-bottom:1px solid var(--line);display:grid;gap:6px}
+.stcard small{display:block;color:var(--muted)}
+.sthead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.sthead b{font-weight:650}
+.sttop{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin-bottom:6px}
+.stnode{max-width:240px;margin:0}
+.uses{border:0;padding:0;margin:0 0 12px;display:grid;gap:6px}
+.uses legend{font-weight:600;font-size:13.5px;margin-bottom:6px;padding:0}
+.uses .createcheck{margin:0}
+.inl{display:inline;color:var(--muted)}
+.healthbtn{display:inline-flex;gap:7px;align-items:center;font-weight:600;font-size:13.5px;margin-right:6px}
+.healthbtn.bad{color:var(--bad)}
 .empty{padding:24px;color:var(--muted)}
 @media (max-width:760px){.ro{display:none}}
 

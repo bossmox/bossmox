@@ -70,7 +70,7 @@ test("a reboot plan lists running jobs and usable backup storage", () => {
     { available: true, value: [{ storage: "qcow", avail: 2 * 1024 ** 3, active: 1, enabled: 1 }, { storage: "off", active: 0 }] },
   );
   assert.deepEqual(plan.busy, ["Backup on 100"]);
-  assert.deepEqual(plan.backupStorages, [{ name: "qcow", freeGb: 2 }]);
+  assert.deepEqual(plan.backupStorages, [{ name: "qcow", freeGb: 2, shared: false }]);
   assert.equal(buildRebootPlan({ available: false }, { available: false }).busyKnown, false);
 });
 

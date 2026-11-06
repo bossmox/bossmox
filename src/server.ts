@@ -10,6 +10,7 @@ import { buildOverview, type Guest, type Overview, type RawConfig, type RawResou
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
 import { containerForm, CreateError, discDownload, installerLabel, settingsForm, vmForm, type CreateInput } from "./create.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
+import { assertCanWipe, buildStorageList, deviceIsValid, diskStorageForm, hostIsValid, networkForm, readHardDisks, StorageError, storageBlockers, usesForm, type RawDisk, type RawStorageConfig } from "./storage.js";
 import { addDiskForm, addNicForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import {
@@ -285,6 +286,18 @@ async function withConfig<T>(path: string, who: Identity, run: (config: RawConfi
     throw err;
   }
 }
+/** Turns a storage rule into a plain 400 rather than a failure. */
+function rule<T>(run: () => T): T {
+  try {
+    return run();
+  } catch (err) {
+    if (err instanceof StorageError) throw new AuthError(400, err.message);
+    throw err;
+  }
+}
+const nodeDisks = async (name: string, ticket: string) =>
+  readHardDisks(await pve.get<RawDisk[]>(`/nodes/${encodeURIComponent(name)}/disks/list?include-partitions=1`, ticket));
+const usesStorageNames = (body: unknown) => (Array.isArray(body) ? body.filter((d): d is string => typeof d === "string").slice(0, 32) : []);
 const kindOf = (body: Record<string, unknown>) => (body.type === "lxc" ? "lxc" as const : "qemu" as const);
 const VOLUME = /^[\w.-]+:[\w./-]+$/;
 const STORAGE = /^[\w.-]{1,64}$/;
@@ -405,6 +418,51 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
       if (err instanceof CreateError) throw new AuthError(400, err.message);
       throw err;
     }
+  },
+  "storage-add": async (name, who, body) => {
+    const form = rule(() => networkForm({ kind: text(body.kind, 8), id: text(body.id, 64), host: text(body.host, 253), path: text(body.path, 255), username: text(body.username, 64), password: text(body.password, 256), domain: text(body.domain, 64), uses: body.uses }));
+    await pve.post<null>("/storage", who, form);
+    // Saving doesn't prove it works, so ask a node to use it. One that can't connect isn't left behind.
+    const path = `/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(form.storage as string)}/status`;
+    for (let i = 0; i < 8; i++) {
+      const status = await pve.get<{ active?: number }>(path, who.ticket).catch(() => null);
+      if (status?.active === 1) return null;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    await pve.delete<null>(`/storage/${encodeURIComponent(form.storage as string)}`, who).catch(() => null);
+    throw new AuthError(400, `${name} couldn't connect to that share, so it wasn't added. Check that the NAS lets this node in.`);
+  },
+  "storage-edit": async (_name, who, body) => {
+    const id = text(body.id, 64);
+    if (!STORAGE.test(id)) throw new AuthError(400, "That storage isn't valid.");
+    const list = await pve.get<RawStorageConfig[]>("/storage", who.ticket);
+    const found = list.find((s) => s.storage === id);
+    if (!found) throw new AuthError(400, "That storage doesn't exist.");
+    await pve.put<null>(`/storage/${encodeURIComponent(id)}`, who, { content: rule(() => usesForm(found.type ?? "", body.uses)) });
+    return null;
+  },
+  "storage-remove": async (_name, who, body) => {
+    const id = text(body.id, 64);
+    if (!STORAGE.test(id) || body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
+    const [data, jobs] = await Promise.all([loadOverview(who.ticket), pve.get<{ storage?: string }[]>("/cluster/backup", who.ticket)]);
+    const using = storageBlockers(id, data.vms, jobs);
+    if (using.length) throw new AuthError(400, `${id} is still in use by ${using.join(", ")}.`);
+    await pve.delete<null>(`/storage/${encodeURIComponent(id)}`, who);
+    return null;
+  },
+  "disk-storage": async (name, who, body) => {
+    if (body.confirm !== "erase") throw new AuthError(400, "That wasn't confirmed.");
+    const kind = text(body.kind, 12);
+    const disks = await nodeDisks(name, who.ticket);
+    const form = rule(() => diskStorageForm(kind, disks, { name: text(body.name, 32), devices: usesStorageNames(body.devices), raid: text(body.raid, 8), filesystem: text(body.filesystem, 8) }));
+    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/disks/${kind}`, who, form);
+  },
+  "disk-wipe": async (name, who, body) => {
+    const disk = text(body.disk, 64);
+    if (body.confirm !== "erase" || !deviceIsValid(disk)) throw new AuthError(400, "That wasn't confirmed.");
+    const disks = await nodeDisks(name, who.ticket);
+    rule(() => assertCanWipe(disks, disk));
+    return pve.put<string>(`/nodes/${encodeURIComponent(name)}/disks/wipedisk`, who, { disk });
   },
   "disk-grow": async (name, who, body) => {
     const { path } = guestPath(name, body);
@@ -652,6 +710,36 @@ function finishLogin(res: http.ServerResponse, out: LoginOutcome, address: strin
   return json(res, 200, { username: out.username }, setCookie(out.id, 12 * 60 * 60));
 }
 
+/**
+ * A POST because SMB needs a password. Proxmox's own scan takes it in the address, which lands in that node's
+ * access log, but only root can read that log, and root can already read the saved storage passwords.
+ */
+async function scanShares(req: http.IncomingMessage, res: http.ServerResponse) {
+  const body = await readJson(req);
+  const session = await sessions.get(cookieId(req));
+  if (!session) return json(res, 401, { error: "Sign in to continue." });
+  const name = text(body.server, 64);
+  const host = text(body.host, 253);
+  const kind = text(body.kind, 8);
+  if (!NODE_NAME.test(name) || !hostIsValid(host) || (kind !== "nfs" && kind !== "smb")) return json(res, 400, { error: "That address isn't valid." });
+  const base = `/nodes/${encodeURIComponent(name)}/scan`;
+  const query = new URLSearchParams({ server: host });
+  if (text(body.username, 64)) query.set("username", text(body.username, 64));
+  if (text(body.password, 256)) query.set("password", text(body.password, 256));
+  if (text(body.domain, 64)) query.set("domain", text(body.domain, 64));
+  try {
+    if (kind === "nfs") {
+      const found = await pve.get<{ path: string }[]>(`${base}/nfs?${query}`, session.ticket);
+      return json(res, 200, { shares: found.map((f) => f.path) });
+    }
+    const found = await pve.get<{ share: string }[]>(`${base}/cifs?${query}`, session.ticket);
+    return json(res, 200, { shares: found.map((f) => f.share).filter((s) => !s.endsWith("$")) });
+  } catch (err) {
+    if (err instanceof PveError && err.status !== 401) return json(res, 200, { shares: null });
+    throw err;
+  }
+}
+
 /** The one POST that isn't JSON: a file, passed straight through to Proxmox as it arrives. */
 async function upload(req: http.IncomingMessage, res: http.ServerResponse) {
   const session = await sessions.get(cookieId(req));
@@ -703,6 +791,7 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
     return json(res, 200, { ok: true }, setCookie("", 0));
   }
   if (route === "/api/upload") return upload(req, res);
+  if (route === "/api/storage-scan") return scanShares(req, res);
   if (route.startsWith("/api/action/")) return runAction(req, res, route.slice("/api/action/".length));
   return json(res, 404, { error: "Not found." });
 }
@@ -724,7 +813,7 @@ const handler: http.RequestListener = async (req, res) => {
       }
       return json(res, 200, { realms });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -761,6 +850,25 @@ const handler: http.RequestListener = async (req, res) => {
         }
         if (route === "/api/rolling-plan") return json(res, 200, await loadRollingPlan(session.ticket));
         if (route === "/api/backups") return json(res, 200, await loadBackups(session.ticket));
+        if (route === "/api/storage-list") {
+          const [config, data] = await Promise.all([pve.get<RawStorageConfig[]>("/storage", session.ticket), overview(session)]);
+          // Asked of each node directly: the cluster summary takes a while to notice a storage that was just added.
+          const online = data.nodes.filter((n) => n.online).map((n) => n.name);
+          const lists = await Promise.allSettled(online.map((n) => pve.get<(RawStorage & { total?: number })[]>(`/nodes/${encodeURIComponent(n)}/storage`, session.ticket)));
+          const usage = online.flatMap((node, i) => {
+            const r = lists[i];
+            return r?.status === "fulfilled" ? r.value.filter((s) => s.enabled !== 0).map((s) => ({ name: s.storage, node, freeGb: (s.avail ?? 0) / 1024 ** 3, totalGb: (s.total ?? 0) / 1024 ** 3, online: s.active === 1 })) : [];
+          });
+          return json(res, 200, { list: buildStorageList(config, usage) });
+        }
+        if (route === "/api/disks" || route === "/api/disk-smart") {
+          const name = params.get("server") ?? "";
+          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          if (route === "/api/disks") return json(res, 200, { disks: await nodeDisks(name, session.ticket) });
+          const disk = params.get("disk") ?? "";
+          if (!deviceIsValid(disk)) return json(res, 400, { error: "That disk isn't valid." });
+          return json(res, 200, await pve.get<unknown>(`/nodes/${encodeURIComponent(name)}/disks/smart?disk=${encodeURIComponent(disk)}`, session.ticket));
+        }
         if (route === "/api/tasks") {
           const asked = Number(params.get("limit"));
           const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, 2000) : 200;
