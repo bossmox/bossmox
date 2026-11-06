@@ -80,12 +80,13 @@ function renderHealth() {
   }
   const { nodes, vms, storage, issues } = S.data;
   const up = nodes.filter((n) => n.online).length;
-  const run = vms.filter((v) => v.running).length;
+  const guests = vms.filter((v) => !v.template);
+  const run = guests.filter((v) => v.running).length;
   const free = storage.reduce((sum, s) => sum + s.freeGb, 0);
   const freeText = free >= 1024 ? `${(free / 1024).toFixed(1)} TB` : `${Math.round(free)} GB`;
   h.innerHTML = `
     <h1>${issues.length ? `${count(issues.length)} worth a look` : "Everything looks good"}</h1>
-    <p class="sub">${up} of ${nodes.length} ${nodes.length === 1 ? "node" : "nodes"} online. ${run} of ${vms.length} ${vms.length === 1 ? "VM" : "VMs"} running, and ${freeText} free.</p>
+    <p class="sub">${up} of ${nodes.length} ${nodes.length === 1 ? "node" : "nodes"} online. ${run} of ${guests.length} ${guests.length === 1 ? "VM" : "VMs"} running, and ${freeText} free.</p>
     ${overallBars(S.data.cluster, nodes.length)}
     <div class="rack">${nodes.map((n) => {
       const on = vms.filter((v) => v.node === n.name);
@@ -111,7 +112,7 @@ function openWin(app) {
   const vw = innerWidth, vh = innerHeight, w = Math.min(a.w, vw - 40), h = Math.min(a.h, vh - 90);
   el.style.cssText = `width:${w}px;height:${h}px;left:${Math.max(20, (vw - w) / 2 - 120 + n * 30)}px;top:${Math.max(58, (vh - h) / 2 - 10 + n * 26)}px`;
   const title = esc(a.title);
-  el.innerHTML = `<div class="tbar"><span>${title}</span>
+  el.innerHTML = `<div class="tbar"><span>${title}</span>${app === "vms" ? `<button class="btn tbarbtn" data-open="create">Create a VM</button>` : ""}
     <button class="wbtn" data-min="${app}" aria-label="Minimize ${title}"><svg viewBox="0 0 16 16"><path d="M3 12h10"/></svg></button>
     <button class="wbtn" data-close="${app}" aria-label="Close ${title}"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>
     <div class="wbody"></div>`;
@@ -164,7 +165,7 @@ function render(app) {
 /* Virtual Machines */
 const selected = () => S.data?.vms.find((v) => v.id === S.sel) ?? null;
 const dotClass = (v) => (v.issues.length ? "warn" : v.running ? "running" : "");
-const stateWord = (v) => `${v.running ? "Running" : "Shut down"} on ${v.node}`;
+const stateWord = (v) => `${v.template ? "Template" : v.paused ? "Paused" : v.running ? "Running" : "Shut down"} on ${v.node}`;
 
 function vmsShell() {
   return `<div class="vms"><aside>
@@ -198,12 +199,13 @@ function renderDetail() {
   box.innerHTML = `
     <div class="head"><div><h2>${esc(v.name)}</h2>
       <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
-      <div class="actions">${v.running
+      <div class="actions">${v.template ? `<button class="btn primary" data-clone="${v.id}">New from template</button>` : v.running
         ? `<button class="btn" data-console="${v.id}">Console</button><button class="btn" data-power="shutdown">Shut down</button><button class="btn" data-power="reboot">Restart</button><button class="btn" data-power="stop">Force off</button>`
-        : `<button class="btn primary" data-power="start">Start</button>`}${(S.data?.nodes.length ?? 0) > 1 ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${v.running ? "" : `<button class="btn" data-guestdelete="${v.id}">Delete</button>`}</div></div>
-    <div class="tabs" role="tablist">${[["overview", "Overview"], ["snapshots", "Snapshots"], ["settings", "Settings"]].map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
+        : `<button class="btn primary" data-power="start">Start</button>`}${v.template ? "" : `<button class="btn" data-clone="${v.id}">Clone</button>`}${(S.data?.nodes.length ?? 0) > 1 && !v.template ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${v.running || v.template ? "" : `<button class="btn" data-maketemplate="${v.id}">Make template</button>`}${v.running ? "" : `<button class="btn" data-guestdelete="${v.id}">Delete</button>`}</div></div>
+    <div class="tabs" role="tablist">${[["overview", "Overview"], ["hardware", "Hardware"], ...(v.template ? [] : [["snapshots", "Snapshots"]]), ["settings", "Settings"]].map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${TAB[S.tab](v)}</div>`;
   if (S.tab === "snapshots") checkSnapshots(v);
+  if (S.tab === "overview" && v.running) loadAddress(v);
 }
 const when = (t) => (t ? new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Time not recorded");
 const TAB = {
@@ -218,9 +220,19 @@ const TAB = {
       <dt>Type</dt><dd>${esc(v.kind)}</dd>
       <dt>Operating system</dt><dd>${esc(v.os)}</dd>
       <dt>Processor cores</dt><dd>${v.cores}</dd>
+      ${v.running ? `<dt>Address</dt><dd id="vmaddr">${esc(addressWords(v))}</dd>` : ""}
       <dt>Starts at boot</dt><dd>${v.startsAtBoot ? "Yes" : "No"}</dd>
       <dt>Snapshots</dt><dd>${v.snapshots.length || "None"}</dd>
     </dl>`,
+  hardware: (v) => {
+    const lock = v.template ? "" : "1";
+    const disk = (d) => `<div class="snap"><div>${d.boot ? "Boot disk" : d.mount ? esc(d.mount) : "Disk"}<small>${d.sizeGb} GB on ${esc(d.storage)}, ${esc(d.slot)}</small></div>${lock ? `<div class="actions"><button class="btn" data-diskgrow="${esc(d.slot)}">Grow</button>${d.boot ? "" : `<button class="btn" data-diskremove="${esc(d.slot)}">Remove</button>`}</div>` : ""}</div>`;
+    const nic = (n) => `<div class="snap"><div>${esc(n.bridge || "Not connected")}${n.vlan ? `, VLAN ${esc(n.vlan)}` : ""}<small>${esc(n.model)}, ${esc(n.mac)}</small></div>${lock && v.nics.length > 1 ? `<button class="btn" data-nicremove="${esc(n.slot)}">Remove</button>` : ""}</div>`;
+    return `${v.configLoaded ? "" : `<p class="meta">Proxmox didn't return this guest's settings.</p>`}
+      <div class="hwhead"><h3>Disks</h3>${lock ? `<button class="btn" data-diskadd="1">Add a disk</button>` : ""}</div>${v.disks.map(disk).join("") || `<p class="empty">No disks.</p>`}
+      <div class="hwhead"><h3>Network</h3>${lock ? `<button class="btn" data-nicadd="1">Add a network card</button>` : ""}</div>${v.nics.map(nic).join("") || `<p class="empty">Not connected to a network.</p>`}
+      ${v.running && lock ? `<p class="meta">It's running. Added disks usually appear right away, but some changes wait until it's shut down and started.</p>` : ""}`;
+  },
   snapshots: (v) => `<div class="head"><p class="meta" style="margin-top:0">A snapshot saves ${esc(v.name)} as it is now, so you can go back to it later. It isn't a backup: it lives on the same disk.</p>
       ${S.snapSupport?.[v.id] === false ? "" : `<div class="actions"><button class="btn primary" data-snaptake="1">Take a snapshot</button></div>`}</div>
     ${S.snapSupport?.[v.id] === false ? `<div class="advice"><div><b>Snapshots aren't available for ${esc(v.name)}</b>The storage holding its disk can't take them. Backups still work.</div></div>` : ""}
@@ -916,6 +928,207 @@ async function loadNetwork() {
   }
 }
 
+/* A guest's address, asked for only while its Overview is showing */
+function addressWords(v) {
+  const a = S.addresses?.[v.id];
+  if (!a) return "Checking";
+  if (a.list.length) return a.list.join(", ");
+  if (v.type === "qemu" && !a.known) return "Needs the guest agent to show this";
+  return "None yet";
+}
+async function loadAddress(v) {
+  const got = S.addresses?.[v.id];
+  if (got && Date.now() - got.at < 20000) return;
+  S.addresses = { ...S.addresses, [v.id]: { list: got?.list ?? [], known: got?.known ?? true, at: Date.now() } };
+  try {
+    const r = await signal(`api/guest-addresses?server=${encodeURIComponent(v.node)}&guest=${v.id}&type=${v.type}`);
+    S.addresses[v.id] = { list: r.addresses, known: r.known, at: Date.now() };
+    if (S.sel === v.id && $("#vmaddr")) $("#vmaddr").textContent = addressWords(v);
+  } catch { /* the next look asks again */ }
+}
+
+/* Hardware */
+const planFor = (v) => signal(`api/create-plan?server=${encodeURIComponent(v.node)}&kind=${v.type}`);
+const after = () => refresh().then(renderDetail);
+const storageOptions = (plan) => plan.storages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("");
+const formError = (text) => {
+  const e = $("#formerr");
+  e.textContent = text;
+  e.hidden = false;
+};
+function askGrow(slot) {
+  const v = selected();
+  S.editDisk = slot;
+  dialog(`<h3>Grow this disk</h3><p>It's ${v.disks.find((d) => d.slot === slot)?.sizeGb} GB now. A disk can only grow, and the system inside ${esc(v.name)} may need telling about the new space.</p>
+    <p class="loginerr" id="formerr" hidden></p>
+    <label class="field restartname"><span>GB to add</span><input id="growby" type="number" min="1" value="8"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-growgo="1">Grow disk</button></div>`);
+  $("#growby").focus();
+}
+function growDisk() {
+  const v = selected();
+  const addGb = Number($("#growby").value);
+  if (!Number.isInteger(addGb) || addGb < 1) return formError("Enter a whole number of GB.");
+  runAction("disk-grow", v.node, `Growing a disk on ${v.name}`, { ...guestBody(v), disk: S.editDisk, addGb }, after);
+}
+async function askAddDisk() {
+  const v = selected();
+  let plan;
+  try {
+    plan = await planFor(v);
+  } catch (err) {
+    return failDialog("Couldn't prepare that", err);
+  }
+  dialog(`<h3>Add a disk to ${esc(v.name)}</h3><p class="loginerr" id="formerr" hidden></p>
+    <div class="createrow"><label class="field"><span>Size in GB</span><input id="disksize" type="number" min="1" value="32"></label></div>
+    <label class="field"><span>Keep it on</span><select id="diskstore">${storageOptions(plan)}</select></label>
+    ${v.type === "lxc" ? `<label class="field"><span>Where it appears</span><input id="diskmount" placeholder="/data" autocomplete="off" autocapitalize="none" spellcheck="false"></label>` : ""}
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-diskaddgo="1">Add disk</button></div>`);
+}
+function addDisk() {
+  const v = selected();
+  const sizeGb = Number($("#disksize").value);
+  if (!Number.isInteger(sizeGb) || sizeGb < 1) return formError("Enter a whole number of GB.");
+  if (v.type === "lxc" && !$("#diskmount").value.trim()) return formError("Enter where it should appear, such as /data.");
+  runAction("disk-add", v.node, `Adding a disk to ${v.name}`, { ...guestBody(v), sizeGb, storage: $("#diskstore").value, mount: $("#diskmount")?.value.trim() ?? "" }, after);
+}
+function askRemoveDisk(slot) {
+  const v = selected();
+  const d = v.disks.find((x) => x.slot === slot);
+  dialog(`<h3>Erase this disk?</h3><p>The ${d?.sizeGb} GB disk ${esc(slot)} on ${esc(v.name)} and everything on it is erased for good.</p>
+    <label class="field restartname"><span>Type erase to confirm</span><input id="rname" data-word="erase" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-diskremovego="${esc(slot)}" disabled>Erase disk</button></div>`);
+  $("#rname").focus();
+}
+function removeDisk(slot) {
+  const v = selected();
+  runAction("disk-remove", v.node, `Erasing a disk on ${v.name}`, { ...guestBody(v), disk: slot, confirm: "erase" }, after);
+}
+async function askAddNic() {
+  const v = selected();
+  let plan;
+  try {
+    plan = await planFor(v);
+  } catch (err) {
+    return failDialog("Couldn't prepare that", err);
+  }
+  dialog(`<h3>Add a network card to ${esc(v.name)}</h3><p class="loginerr" id="formerr" hidden></p>
+    <label class="field"><span>Network</span><select id="nicbridge">${plan.bridges.map((b) => `<option>${esc(b)}</option>`).join("")}</select></label>
+    <label class="field"><span>VLAN, if it needs one</span><input id="nicvlan" inputmode="numeric" autocomplete="off"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-nicaddgo="1">Add card</button></div>`);
+}
+function addNic() {
+  const v = selected();
+  runAction("nic-add", v.node, `Adding a network card to ${v.name}`, { ...guestBody(v), bridge: $("#nicbridge").value, vlan: $("#nicvlan").value.trim() }, after);
+}
+function askRemoveNic(slot) {
+  const v = selected();
+  const n = v.nics.find((x) => x.slot === slot);
+  confirmAction(`Remove this network card from ${v.name}?`, `It's connected to ${n?.bridge}. Anything using it loses that connection.`, "Remove card", () => runAction("nic-remove", v.node, `Removing a network card from ${v.name}`, { ...guestBody(v), nic: slot, confirm: slot }, after), true);
+}
+async function askClone(id) {
+  const v = S.data?.vms.find((g) => g.id === id);
+  if (!v) return;
+  if (v.type === "lxc" && v.running) return dialog(`<h3>Shut down ${esc(v.name)} first</h3><p>Proxmox can only copy a container while it's shut down.</p>${closeRow}`);
+  let plan;
+  try {
+    plan = await planFor(v);
+  } catch (err) {
+    return failDialog("Couldn't prepare that", err);
+  }
+  dialog(`<h3>${v.template ? `New guest from ${esc(v.name)}` : `Clone ${esc(v.name)}`}</h3><p>${v.template ? "This makes a separate guest from the template." : "This makes a complete separate copy."} ${v.running ? `${esc(v.name)} keeps running, with a brief pause as the copy starts.` : ""} The new one starts switched off, on ${esc(v.node)}.</p>
+    <p class="loginerr" id="formerr" hidden></p>
+    <label class="field restartname"><span>Name</span><input id="clonename" maxlength="63" value="${esc(v.template ? "" : `${v.name}-copy`)}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <label class="field"><span>Keep its disks on</span><select id="clonestore">${storageOptions(plan)}</select></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-clonego="${v.id}">${v.template ? "Create" : "Clone"}</button></div>`);
+  $("#clonename").focus();
+}
+function cloneGuest(id) {
+  const v = S.data.vms.find((g) => g.id === id);
+  const name = $("#clonename").value.trim();
+  if (!/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(name)) return formError("A name uses letters, numbers, dots and dashes, and starts and ends with a letter or number.");
+  if (S.data.vms.some((g) => g.name.toLowerCase() === name.toLowerCase())) return formError(`${name} already exists. Pick another name.`);
+  runAction("guest-clone", v.node, `Making ${name}`, { ...guestBody(v), name, storage: $("#clonestore").value }, after);
+}
+function askTemplate(id) {
+  const v = S.data?.vms.find((g) => g.id === id);
+  if (!v) return;
+  dialog(`<h3>Make ${esc(v.name)} a template?</h3><p>A template is a master copy for making new guests. ${esc(v.name)} can't be started again after this, and that can't be undone. Clone it first if you want to keep using it.</p>
+    <label class="field restartname"><span>Type template to confirm</span><input id="rname" data-word="template" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-templatego="${v.id}" disabled>Make template</button></div>`);
+  $("#rname").focus();
+}
+function makeTemplate(id) {
+  const v = S.data.vms.find((g) => g.id === id);
+  runAction("guest-template", v.node, `Making ${v.name} a template`, { ...guestBody(v), confirm: "template" }, after);
+}
+
+/* Installer discs from this computer, and container templates */
+function askUpload() {
+  const stores = S.createPlan?.mediaStorages ?? [];
+  const { server } = S.createFor;
+  if (!stores.length) return dialog(`<h3>Nowhere to keep a disc</h3><p>${esc(server)} has no storage set up for installer discs.</p>${closeRow}`);
+  dialog(`<h3>Upload an installer disc</h3><p>The file goes straight to ${esc(server)}. Keep this page open until it finishes.</p>
+    <p class="loginerr" id="formerr" hidden></p>
+    <label class="field restartname"><span>Disc image (.iso)</span><input id="uploadfile" type="file" accept=".iso,.img"></label>
+    <label class="field restartname"><span>Keep it on</span><select id="uploadstore">${stores.map((s) => `<option>${esc(s)}</option>`).join("")}</select></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-uploadgo="1">Upload</button></div>`);
+}
+function startUpload() {
+  const file = $("#uploadfile").files[0];
+  if (!file) return formError("Choose a file first.");
+  if (!/^[\w.-]+\.(iso|img)$/i.test(file.name)) return formError("That has to be an .iso or .img file, with no spaces in its name.");
+  const { server, kind } = S.createFor;
+  const storage = $("#uploadstore").value;
+  const xhr = new XMLHttpRequest();
+  S.taskRunning = true;
+  const show = (line) => dialog(`<h3>Uploading ${esc(file.name)}</h3><p>${esc(line)}</p><div class="meter"><i style="width:${S.uploadPct ?? 0}%"></i></div>`);
+  S.uploadPct = 0;
+  show("Starting.");
+  xhr.upload.onprogress = (e) => {
+    S.uploadPct = Math.round((e.loaded / e.total) * 100);
+    show(S.uploadPct < 100 ? `${S.uploadPct}% sent.` : "Sent. Proxmox is saving it.");
+  };
+  const done = (title, line, bad) => {
+    S.taskRunning = false;
+    dialog(`<h3>${esc(title)}</h3><p class="${bad ? "loginerr" : ""}">${esc(line)}</p>${closeRow}`);
+    S.afterTask = () => loadCreate(server, kind);
+  };
+  xhr.onload = () => {
+    let body = {};
+    try {
+      body = JSON.parse(xhr.responseText);
+    } catch { /* the status still says what happened */ }
+    if (xhr.status === 200) done("Uploaded", `${file.name} is ready on ${server}.`, false);
+    else done("The upload failed", body.error || "BossMox couldn't finish that.", true);
+  };
+  xhr.onerror = () => done("The upload failed", "The connection dropped. Nothing was saved.", true);
+  xhr.open("POST", `api/upload?server=${encodeURIComponent(server)}&storage=${encodeURIComponent(storage)}&filename=${encodeURIComponent(file.name)}`);
+  xhr.setRequestHeader("X-BossMox", "1");
+  xhr.setRequestHeader("Content-Type", "application/octet-stream");
+  xhr.send(file);
+}
+async function askDownloadTemplate() {
+  const { server } = S.createFor;
+  const stores = S.createPlan?.mediaStorages ?? [];
+  let list;
+  try {
+    list = (await signal(`api/templates?server=${encodeURIComponent(server)}`)).templates;
+  } catch (err) {
+    return failDialog("Couldn't list the templates", err);
+  }
+  if (!list.length) return dialog(`<h3>No templates listed</h3><p>${esc(server)} hasn't fetched the template list yet. Try again in a minute.</p>${closeRow}`);
+  if (!stores.length) return dialog(`<h3>Nowhere to keep a template</h3><p>${esc(server)} has no storage set up for templates.</p>${closeRow}`);
+  dialog(`<h3>Download a template</h3><p>A template is a ready-made system for new containers. ${esc(server)} downloads it directly.</p>
+    <label class="field restartname"><span>System</span><select id="tmplname">${list.map((t) => `<option value="${esc(t.template)}">${esc(t.template.replace(/\.tar\.\w+$/, ""))}</option>`).join("")}</select></label>
+    <label class="field restartname"><span>Keep it on</span><select id="tmplstore">${stores.map((s) => `<option>${esc(s)}</option>`).join("")}</select></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-tmplgo="1">Download</button></div>`);
+}
+function downloadTemplate() {
+  const { server, kind } = S.createFor;
+  runAction("template-download", server, "Downloading the template", { storage: $("#tmplstore").value, template: $("#tmplname").value }, () => loadCreate(server, kind));
+}
+
 /* Creating and deleting VMs and containers */
 function startCreate() {
   const server = S.data?.nodes.find((n) => n.online)?.name;
@@ -931,6 +1144,7 @@ async function loadCreate(server, kind) {
   const kept = { name: $("#cname")?.value ?? "", cores: $("#ccores")?.value ?? "2", memory: $("#cmemory")?.value ?? "2", disk: $("#cdisk")?.value ?? "32" };
   try {
     S.createPlan = await signal(`api/create-plan?server=${encodeURIComponent(server)}&kind=${kind}`);
+    S.createFor = { server, kind };
   } catch (err) {
     if (err.message !== "signed out") box.innerHTML = `<p class="empty">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>`;
     return;
@@ -946,8 +1160,8 @@ async function loadCreate(server, kind) {
     ${field("Name", `<input id="cname" maxlength="63" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(kept.name)}">`)}
     ${vm ? field("Operating system", `<select id="cos"><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Something else</option></select>`) : ""}
     ${field(vm ? "Install from" : "Template", `<select id="cinstaller">${vm ? `<option value="">Nothing yet, I'll add a disc later</option>` : ""}${p.installers.map((i) => `<option value="${esc(i.volid)}">${esc(i.label)}</option>`).join("")}</select>`)}
-    ${!vm && !p.installers.length ? `<p class="meta">This node has no templates yet, so a container can't be made here.</p>` : ""}
-    ${vm ? `<p class="meta" style="margin:-8px 0 14px">${p.installers.length ? "" : "This node has no installer discs yet. "}<button class="linkbtn" data-discadd="1">Add a disc from a web address</button></p>` : ""}
+    ${!vm && !p.installers.length ? `<p class="meta">This node has no templates yet. Download one to make a container.</p>` : ""}
+    ${vm ? `<p class="meta" style="margin:-8px 0 14px">${p.installers.length ? "" : "This node has no installer discs yet. "}<button class="linkbtn" data-discadd="1">Add a disc from a web address</button> or <button class="linkbtn" data-discupload="1">upload one</button></p>` : `<p class="meta" style="margin:-8px 0 14px"><button class="linkbtn" data-tmpladd="1">Download a template</button></p>`}
     ${vm ? "" : field("Password for root", `<input id="cpassword" type="password" autocomplete="new-password">`)}
     <div class="createrow">
       ${field(`Processor cores (${p.cores} here)`, `<input id="ccores" type="number" min="1" max="128" value="${esc(kept.cores)}">`)}
@@ -1472,6 +1686,7 @@ async function askGuestEdit(id) {
     <label class="field"><span>Memory in GB</span><input id="ememory" type="number" min="0.25" step="0.25" value="${v.memoryMb / 1024}"></label></div>
     ${discs ? `<label class="field"><span>Installer disc</span><select id="edisc"><option value="">No disc</option>${v.disc && !known ? `<option value="${esc(v.disc)}" selected>${esc(v.disc)}</option>` : ""}${discs.map((d) => `<option value="${esc(d.volid)}" ${d.volid === v.disc ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select></label>` : ""}
     <label class="createcheck"><input id="eboot" type="checkbox" ${v.startsAtBoot ? "checked" : ""}> Start when its node starts</label>
+    ${v.type === "qemu" ? `<label class="createcheck"><input id="eagent" type="checkbox" ${v.agent ? "checked" : ""}> The guest agent is installed inside it</label>` : ""}
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-guestsave="1">Save</button></div>`);
 }
 function saveGuestEdit() {
@@ -1486,7 +1701,7 @@ function saveGuestEdit() {
     return;
   }
   const disc = $("#edisc") ? $("#edisc").value : undefined;
-  runAction("guest-settings", v.node, `Saving ${name}`, { ...guestBody(v), name, cores: Number($("#ecores").value), memoryMb, startsAtBoot: $("#eboot").checked, ...(disc === undefined ? {} : { disc }) }, async () => {
+  runAction("guest-settings", v.node, `Saving ${name}`, { ...guestBody(v), name, cores: Number($("#ecores").value), memoryMb, startsAtBoot: $("#eboot").checked, ...(v.type === "qemu" ? { agent: $("#eagent").checked } : {}), ...(disc === undefined ? {} : { disc }) }, async () => {
     await refresh();
     renderDetail();
   });
@@ -1613,6 +1828,29 @@ document.addEventListener("click", (e) => {
   if (d.jobtoggle) return toggleSchedule(d.jobtoggle);
   if (d.jobdelete) return askScheduleDelete(d.jobdelete);
   if (d.power) return askPower(d.power, d.guest ? +d.guest : S.sel);
+  if (d.diskgrow) return askGrow(d.diskgrow);
+  if (d.growgo) return growDisk();
+  if (d.diskadd) return askAddDisk();
+  if (d.diskaddgo) return addDisk();
+  if (d.diskremove) return askRemoveDisk(d.diskremove);
+  if (d.diskremovego) {
+    t.disabled = true;
+    return removeDisk(d.diskremovego);
+  }
+  if (d.nicadd) return askAddNic();
+  if (d.nicaddgo) return addNic();
+  if (d.nicremove) return askRemoveNic(d.nicremove);
+  if (d.clone) return askClone(+d.clone);
+  if (d.clonego) return cloneGuest(+d.clonego);
+  if (d.maketemplate) return askTemplate(+d.maketemplate);
+  if (d.templatego) {
+    t.disabled = true;
+    return makeTemplate(+d.templatego);
+  }
+  if (d.discupload) return askUpload();
+  if (d.uploadgo) return startUpload();
+  if (d.tmpladd) return askDownloadTemplate();
+  if (d.tmplgo) return downloadTemplate();
   if (d.snaptake) return askSnapshot();
   if (d.snapsave) return saveSnapshot();
   if (d.snaprestore) return askRestore(d.snaprestore);

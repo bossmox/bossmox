@@ -10,6 +10,7 @@ import { buildOverview, type Guest, type Overview, type RawConfig, type RawResou
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
 import { containerForm, CreateError, discDownload, installerLabel, settingsForm, vmForm, type CreateInput } from "./create.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
+import { addDiskForm, addNicForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import {
   buildMovePlan,
@@ -93,7 +94,7 @@ async function fetchGuest(r: RawResource, ticket: string): Promise<[number, Gues
 
 async function loadOverview(ticket: string): Promise<Loaded> {
   const resources = await pve.get<RawResource[]>("/cluster/resources", ticket);
-  const guests = resources.filter((r) => (r.type === "qemu" || r.type === "lxc") && !r.template && r.status !== "unknown");
+  const guests = resources.filter((r) => (r.type === "qemu" || r.type === "lxc") && r.status !== "unknown");
   const [details, notBackedUp, tasks] = await Promise.all([
     Promise.all(guests.map((g) => fetchGuest(g, ticket))),
     // Limited accounts can't read this report, and that shouldn't blank the whole screen.
@@ -270,6 +271,20 @@ const NODE_NAME = /^(?!\.+$)[\w.-]{1,64}$/;
 const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w.@!-]+:$/;
 
 const POWER = new Set(["start", "shutdown", "reboot", "stop"]);
+const MAX_UPLOAD = 200 * 1024 ** 3;
+const UPLOAD_NAME = /^[\w.-]{1,200}\.(iso|img)$/i;
+
+/** Turns a hardware rule into a plain 400, and reads the guest's settings the rule needs. */
+async function withConfig<T>(path: string, who: Identity, run: (config: RawConfig) => T): Promise<T> {
+  const config = await pve.get<RawConfig>(`${path}/config`, who.ticket);
+  try {
+    return run(config);
+  } catch (err) {
+    if (err instanceof HardwareError) throw new AuthError(400, err.message);
+    throw err;
+  }
+}
+const kindOf = (body: Record<string, unknown>) => (body.type === "lxc" ? "lxc" as const : "qemu" as const);
 const VOLUME = /^[\w.-]+:[\w./-]+$/;
 const STORAGE = /^[\w.-]{1,64}$/;
 const JOB_ID = /^[\w-]{1,64}$/;
@@ -371,7 +386,7 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     const disc = typeof body.disc === "string" ? body.disc.slice(0, 256) : null;
     const current = disc === null ? {} : await pve.get<RawConfig>(`${path}/config`, who.ticket);
     try {
-      const form = settingsForm(type, { name: text(body.name, 63), cores: Number(body.cores), memoryMb: Number(body.memoryMb), startsAtBoot: body.startsAtBoot === true, disc }, { boot: current.boot === undefined ? undefined : String(current.boot), ide2: current.ide2 === undefined ? undefined : String(current.ide2) });
+      const form = settingsForm(type, { name: text(body.name, 63), cores: Number(body.cores), memoryMb: Number(body.memoryMb), startsAtBoot: body.startsAtBoot === true, disc, agent: typeof body.agent === "boolean" ? body.agent : undefined }, { boot: current.boot === undefined ? undefined : String(current.boot), ide2: current.ide2 === undefined ? undefined : String(current.ide2) });
       await pve.put<null>(`${path}/config`, who, form);
       return null;
     } catch (err) {
@@ -389,6 +404,64 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
       if (err instanceof CreateError) throw new AuthError(400, err.message);
       throw err;
     }
+  },
+  "disk-grow": async (name, who, body) => {
+    const { path } = guestPath(name, body);
+    const form = await withConfig(path, who, (c) => growForm(kindOf(body), c, text(body.disk, 16), Number(body.addGb)));
+    return (await pve.put<string | null>(`${path}/resize`, who, form)) ?? null;
+  },
+  "disk-add": async (name, who, body) => {
+    const { path } = guestPath(name, body);
+    const form = await withConfig(path, who, (c) => addDiskForm(kindOf(body), c, { storage: text(body.storage, 64), sizeGb: Number(body.sizeGb), mount: text(body.mount, 200) }));
+    await pve.put<null>(`${path}/config`, who, form);
+    return null;
+  },
+  "disk-remove": async (name, who, body) => {
+    const { path } = guestPath(name, body);
+    // This one erases data, so it needs the typed word, and the disk is cleared rather than left detached.
+    if (body.confirm !== "erase") throw new AuthError(400, "That wasn't confirmed.");
+    const slot = text(body.disk, 16);
+    const before = await withConfig(path, who, (c) => ({ config: c, form: removeDiskForm(kindOf(body), c, slot) }));
+    const volume = String(before.config[slot]).split(",")[0];
+    await pve.put<null>(`${path}/config`, who, before.form);
+    const after = await pve.get<RawConfig>(`${path}/config`, who.ticket);
+    const unused = Object.entries(after).find(([k, v]) => /^unused\d+$/.test(k) && String(v) === volume)?.[0];
+    if (unused) await pve.put<null>(`${path}/config`, who, { delete: unused });
+    return null;
+  },
+  "nic-add": async (name, who, body) => {
+    const { path } = guestPath(name, body);
+    const form = await withConfig(path, who, (c) => addNicForm(kindOf(body), c, { bridge: text(body.bridge, 32), vlan: text(body.vlan, 4) }));
+    await pve.put<null>(`${path}/config`, who, form);
+    return null;
+  },
+  "nic-remove": async (name, who, body) => {
+    const { path } = guestPath(name, body);
+    if (body.confirm !== text(body.nic, 8)) throw new AuthError(400, "That wasn't confirmed.");
+    const form = await withConfig(path, who, (c) => removeNicForm(c, text(body.nic, 8)));
+    await pve.put<null>(`${path}/config`, who, form);
+    return null;
+  },
+  "guest-clone": async (name, who, body) => {
+    const { path } = guestPath(name, body);
+    const newName = text(body.name, 63);
+    const storage = text(body.storage, 64);
+    if (!/^[A-Za-z0-9]([A-Za-z0-9.-]{0,61}[A-Za-z0-9])?$/.test(newName)) throw new AuthError(400, "A name uses letters, numbers, dots and dashes, and starts and ends with a letter or number.");
+    if (!STORAGE.test(storage)) throw new AuthError(400, "Pick a storage.");
+    const newid = String(await pve.get<string | number>("/cluster/nextid", who.ticket));
+    return pve.post<string>(`${path}/clone`, who, { newid, full: "1", storage, [kindOf(body) === "qemu" ? "name" : "hostname"]: newName });
+  },
+  "guest-template": async (name, who, body) => {
+    const { path } = guestPath(name, body);
+    // There's no way back from this short of cloning it, so it gets the typed word too.
+    if (body.confirm !== "template") throw new AuthError(400, "That wasn't confirmed.");
+    return (await pve.post<string | null>(`${path}/template`, who)) ?? null;
+  },
+  "template-download": (name, who, body) => {
+    const storage = text(body.storage, 64);
+    const template = text(body.template, 200);
+    if (!STORAGE.test(storage) || !/^[\w.+-]+$/.test(template)) throw new AuthError(400, "That request isn't valid.");
+    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/aplinfo`, who, { storage, template });
   },
   "guest-delete": (name, who, body) => {
     const { id, path } = guestPath(name, body);
@@ -490,6 +563,8 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
     if (!run) return json(res, 404, { error: "BossMox doesn't have that action." });
     if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
     const task = await run(name, session, body);
+    // No task means it's already done, so nothing else will clear the old view of it.
+    if (!task) cache.delete(session);
     audit(action, session.username, addressOf(req), `node=${name}${text(body.guest, 12) ? ` guest=${text(body.guest, 12)}` : ""}`);
     return json(res, 200, { task });
   } catch (err) {
@@ -576,6 +651,23 @@ function finishLogin(res: http.ServerResponse, out: LoginOutcome, address: strin
   return json(res, 200, { username: out.username }, setCookie(out.id, 12 * 60 * 60));
 }
 
+/** The one POST that isn't JSON: a file, passed straight through to Proxmox as it arrives. */
+async function upload(req: http.IncomingMessage, res: http.ServerResponse) {
+  const session = await sessions.get(cookieId(req));
+  if (!session) return json(res, 401, { error: "Sign in to continue." });
+  const params = new URL(req.url ?? "/", "http://local").searchParams;
+  const name = params.get("server") ?? "";
+  const storage = params.get("storage") ?? "";
+  const filename = params.get("filename") ?? "";
+  const size = Number(req.headers["content-length"]);
+  if (!NODE_NAME.test(name) || !STORAGE.test(storage)) return json(res, 400, { error: "That upload isn't valid." });
+  if (!UPLOAD_NAME.test(filename)) return json(res, 400, { error: "That has to be an .iso or .img file, with a plain file name." });
+  if (!Number.isInteger(size) || size < 1 || size > MAX_UPLOAD) return json(res, 400, { error: "That file is too large." });
+  audit("upload", session.username, addressOf(req), `node=${name} storage=${storage} file=${filename} bytes=${size}`);
+  const task = await pve.upload(`/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}/upload`, session, { content: "iso" }, { name: filename, size, stream: req });
+  return json(res, 200, { task });
+}
+
 async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, route: string) {
   if (!sameSite(req)) return json(res, 403, { error: "This request didn't come from BossMox." });
   const address = addressOf(req);
@@ -609,6 +701,7 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
     audit("sign-out", sessions.end(cookieId(req)) ?? "unknown", address);
     return json(res, 200, { ok: true }, setCookie("", 0));
   }
+  if (route === "/api/upload") return upload(req, res);
   if (route.startsWith("/api/action/")) return runAction(req, res, route.slice("/api/action/".length));
   return json(res, 404, { error: "Not found." });
 }
@@ -630,7 +723,7 @@ const handler: http.RequestListener = async (req, res) => {
       }
       return json(res, 200, { realms });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -665,6 +758,25 @@ const handler: http.RequestListener = async (req, res) => {
         }
         if (route === "/api/rolling-plan") return json(res, 200, await loadRollingPlan(session.ticket));
         if (route === "/api/backups") return json(res, 200, await loadBackups(session.ticket));
+        if (route === "/api/templates") {
+          const name = params.get("server") ?? "";
+          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          const list = await pve.get<{ template?: string; headline?: string; section?: string; package?: string }[]>(`/nodes/${encodeURIComponent(name)}/aplinfo`, session.ticket);
+          return json(res, 200, { templates: list.filter((t) => t.section === "system" && t.template).map((t) => ({ template: t.template, title: t.headline || t.package || t.template })) });
+        }
+        if (route === "/api/guest-addresses") {
+          const name = params.get("server") ?? "";
+          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          const type = params.get("type") === "lxc" ? "lxc" : "qemu";
+          const { path } = guestPath(name, { guest: params.get("guest"), type });
+          try {
+            const raw = await pve.get<unknown>(type === "lxc" ? `${path}/interfaces` : `${path}/agent/network-get-interfaces`, session.ticket);
+            return json(res, 200, { addresses: pickAddresses(type, raw), known: true });
+          } catch (err) {
+            if (err instanceof PveError && err.status !== 401) return json(res, 200, { addresses: [], known: false });
+            throw err;
+          }
+        }
         if (route === "/api/network") {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
@@ -732,6 +844,9 @@ const server = config.tls ? https.createServer(config.tls, handler) : http.creat
 // OpenSSL holds its own copy now, so this one doesn't need to stay in ordinary memory.
 config.tls?.key.fill(0);
 delete config.tls;
+
+// Node's default would cut off a big ISO upload after 5 minutes.
+server.requestTimeout = 6 * 60 * 60 * 1000;
 
 server.on("upgrade", async (req, socket, head) => {
   // Without this, a client dropping the connection during the checks below could take the whole process down.

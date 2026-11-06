@@ -1,3 +1,4 @@
+import { readDisks, readNics } from "./hardware.js";
 /** Turns raw Proxmox answers into the plain-language view the screens use. */
 
 export interface RawResource {
@@ -104,14 +105,17 @@ export function buildOverview(
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const vms = resources
-    .filter((r) => (r.type === "qemu" || r.type === "lxc") && !r.template)
+    .filter((r) => r.type === "qemu" || r.type === "lxc")
     .map((r) => {
       const id = Number(r.vmid ?? 0);
-      const name = r.name ?? `VM ${id}`;
       const guest = guests.get(id);
       const config = guest?.config;
-      const issues = vmIssues(id, name, config);
-      if (unprotected.has(id)) {
+      // Proxmox's summary list lags a new guest by several seconds, so its own settings win.
+      const name = r.name ?? String(config?.name ?? config?.hostname ?? `VM ${id}`);
+      const template = r.template === 1 || config?.template === 1;
+      // A template never runs, so the usual advice about guests doesn't apply to one.
+      const issues = template ? [] : vmIssues(id, name, config);
+      if (unprotected.has(id) && !template) {
         issues.push({
           kind: "no-backup",
           vmId: id,
@@ -125,13 +129,19 @@ export function buildOverview(
         kind: r.type === "lxc" ? "Container" : "Virtual machine",
         type: r.type === "lxc" ? "lxc" : "qemu",
         node: r.node ?? "",
-        running: r.status === "running",
+        // A paused guest is still on: Proxmox pauses one for a moment while it's being cloned, among other reasons.
+        running: r.status === "running" || r.status === "paused",
+        paused: r.status === "paused",
         cpuPct: Math.round((r.cpu ?? 0) * 100),
         cores: Number(r.maxcpu ?? 0),
         memUsedGb: gb(r.mem),
         memTotalGb: gb(r.maxmem),
         diskGb: gb(r.maxdisk),
         os: (Object.hasOwn(OS_NAMES, String(config?.ostype ?? "")) ? OS_NAMES[String(config?.ostype)] : undefined) ?? (config?.ostype ? String(config.ostype) : "Not set"),
+        template,
+        disks: config ? readDisks(r.type === "lxc" ? "lxc" : "qemu", config) : [],
+        nics: config ? readNics(r.type === "lxc" ? "lxc" : "qemu", config) : [],
+        agent: String(config?.agent ?? "").startsWith("1") || /enabled=1/.test(String(config?.agent ?? "")),
         startsAtBoot: config?.onboot === 1,
         memoryMb: Number(config?.memory ?? Math.round((r.maxmem ?? 0) / 1024 ** 2)),
         disc: String(config?.ide2 ?? "").startsWith("none") ? "" : String(config?.ide2 ?? "").split(",")[0],

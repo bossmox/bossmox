@@ -27,6 +27,7 @@ test("builds the overview from real-shaped data", () => {
     { type: "node", node: "n2", status: "offline" },
     { type: "qemu", vmid: 100, node: "n1", name: "HA", status: "running", cpu: 0.1, maxcpu: 4, mem: G, maxmem: 4 * G, maxdisk: 32 * G },
     { type: "qemu", vmid: 900, node: "n1", name: "tmpl", status: "stopped", template: 1 },
+    { type: "qemu", vmid: 901, node: "n1", name: "held", status: "paused" },
     { type: "storage", storage: "fast", node: "n1", status: "available", disk: 90 * G, maxdisk: 100 * G },
     { type: "storage", storage: "nas", node: "n1", shared: 1, status: "available", disk: G, maxdisk: 10 * G },
     { type: "storage", storage: "nas", node: "n2", shared: 1, status: "available", disk: G, maxdisk: 10 * G },
@@ -35,9 +36,13 @@ test("builds the overview from real-shaped data", () => {
     [100, { config: { ostype: "l26", onboot: 1 }, snapshots: [{ name: "current" }, { name: "pre", snaptime: 5 }] }],
   ]);
   const o = buildOverview(res, guests, [{ vmid: 100 }]);
-  assert.equal(o.vms.length, 1, "templates are left out");
-  assert.equal(o.vms[0]?.os, "Linux");
-  assert.deepEqual(o.vms[0]?.snapshots.map((s) => s.name), ["pre"], "the current marker is not a snapshot");
+  const ha = o.vms.find((v) => v.id === 100);
+  assert.equal(o.vms.find((v) => v.id === 900)?.template, true, "templates are listed, and marked");
+  assert.equal(ha?.template, false);
+  const held = o.vms.find((v) => v.id === 901);
+  assert.deepEqual([held?.running, held?.paused], [true, true], "a paused guest is on, not shut down");
+  assert.equal(ha?.os, "Linux");
+  assert.deepEqual(ha?.snapshots.map((s) => s.name), ["pre"], "the current marker is not a snapshot");
   assert.equal(o.storage.length, 2, "shared storage is counted once");
   assert.deepEqual(o.issues.map((i) => i.kind), ["server-offline", "no-backup", "storage-full"]);
 });

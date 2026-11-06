@@ -95,7 +95,6 @@ export function updateChannel(repos: RawRepositories, subscription?: RawSubscrip
 }
 
 const TASKS: Record<string, string> = {
-  aptupdate: "Check for updates",
   vzdump: "Backup",
   qmstart: "Start VM",
   qmstop: "Force stop VM",
@@ -119,6 +118,16 @@ const TASKS: Record<string, string> = {
   srvstop: "Stop service",
   vncshell: "Shell session",
   termproxy: "Shell session",
+  clustercreate: "Create cluster",
+  clusterjoin: "Join cluster",
+  qmclone: "Clone VM",
+  vzclone: "Clone container",
+  qmtemplate: "Make template",
+  vztemplate: "Make template",
+  qmresize: "Resize disk",
+  vzresize: "Resize disk",
+  aptupdate: "Check for updates",
+  imgcopy: "Copy disk",
   vzmigrate: "Move container",
   vzreboot: "Restart container",
   vzsnapshot: "Take snapshot",

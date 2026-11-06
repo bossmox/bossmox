@@ -251,6 +251,10 @@ summary{cursor:pointer;font-weight:650}
 .rollbtn{width:calc(100% - 16px);margin:12px 8px 0}
 .bkbox{height:100%;overflow:auto;padding:14px 22px 22px}
 .bkhead{font-size:15px;margin:20px 0 6px}
+.tbarbtn{padding:4px 10px;font-size:13.5px;font-weight:600}
+.hwhead{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:18px 0 6px}
+.hwhead:first-child{margin-top:0}
+.hwhead h3{font-size:15px;font-weight:700}
 #loginform.setupbox{width:520px}
 .setupbox .restartlist+.field{margin-top:14px}
 .setupbox .field select{width:100%}

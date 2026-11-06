@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import http from "node:http";
 import https from "node:https";
 import tls from "node:tls";
@@ -97,6 +98,52 @@ export class PveClient {
       req.on("timeout", () => req.destroy(new Error("Proxmox took too long to answer")));
       req.on("error", (err) => reject(Object.assign(err, { unreached: !connected })));
       req.end(body);
+    });
+  }
+
+  /**
+   * Streams a file straight through to Proxmox, so a big ISO never sits in BossMox's memory or on its small disk.
+   * Uploads can run for hours, so the timeout only catches a connection that has stopped moving.
+   */
+  upload(path: string, who: Identity, fields: Record<string, string>, file: { name: string; size: number; stream: NodeJS.ReadableStream }): Promise<string> {
+    const boundary = `----BossMox${randomBytes(16).toString("hex")}`;
+    const head = Object.entries(fields).map(([k, v]) => `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`).join("")
+      + `--${boundary}\r\nContent-Disposition: form-data; name="filename"; filename="${file.name}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+    const tail = `\r\n--${boundary}--\r\n`;
+    const url = new URL(`/api2/json${path}`, this.activeUrl);
+    const headers = {
+      Cookie: `PVEAuthCookie=${encodeURIComponent(who.ticket)}`,
+      CSRFPreventionToken: who.csrf,
+      "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      "Content-Length": String(Buffer.byteLength(head) + file.size + Buffer.byteLength(tail)),
+    };
+    const secure = url.protocol === "https:";
+    const options: https.RequestOptions = { method: "POST", headers, timeout: 300000, agent: false };
+    if (secure && this.config.pveCa) options.ca = this.config.pveCa;
+    const tlsName = this.config.pveTlsName;
+    if (secure && tlsName) options.checkServerIdentity = (_host, cert) => tls.checkServerIdentity(tlsName, cert);
+    return new Promise<string>((resolve, reject) => {
+      const onResponse = (res: http.IncomingMessage) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("error", reject);
+        res.on("end", () => {
+          const status = res.statusCode ?? 0;
+          if (status < 200 || status >= 300) return reject(new PveError(status, `Proxmox answered ${status} for an upload`, res.statusMessage));
+          try {
+            resolve((JSON.parse(Buffer.concat(chunks).toString("utf8")) as { data: string }).data);
+          } catch {
+            reject(new PveError(status, "Proxmox sent an unreadable reply to an upload"));
+          }
+        });
+      };
+      const req = secure ? https.request(url, options, onResponse) : http.request(url, options, onResponse);
+      req.on("timeout", () => req.destroy(new Error("The upload stopped moving.")));
+      req.on("error", reject);
+      file.stream.on("error", (err) => req.destroy(err as Error));
+      req.write(head);
+      file.stream.pipe(req, { end: false });
+      file.stream.on("end", () => req.end(tail));
     });
   }
 
