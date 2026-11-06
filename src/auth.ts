@@ -9,6 +9,8 @@ const MAX_FAILS = 10;
 // One address can't reach this alone, so locking an account out takes many machines, not one.
 const MAX_ACCOUNT_FAILS = 50;
 const MAX_CODE_TRIES = 5;
+// An open console sends no HTTP requests, so nothing else would notice a disabled account.
+const CONSOLE_CHECK_MS = 5 * 60 * 1000;
 const NEVER_REACHED = new Set(["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"]);
 
 export interface LoginClient {
@@ -43,6 +45,8 @@ export class Sessions {
 
   /** Runs whenever a session ends, however it ended, so nothing keeps working on its authority. */
   onEnd: (session: Session) => void = () => {};
+  /** Whether a session has a console open, so it gets checked even with no requests arriving. */
+  isBusy: (session: Session) => boolean = () => false;
 
   constructor(private readonly client: LoginClient, private readonly now: () => number = Date.now) {}
 
@@ -132,6 +136,27 @@ export class Sessions {
     return this.start(result);
   }
 
+  private async renew(id: string, s: Session) {
+    const t = this.now();
+    s.renewedAt = t; // Stops every poll in this window from renewing at once.
+    try {
+      const renewed = await this.client.login(s.username, s.ticket);
+      s.ticket = renewed.ticket;
+      s.csrf = renewed.csrf;
+    } catch (err) {
+      if (err instanceof PveError && err.status === 401) this.drop(id);
+      else s.renewedAt = t - RENEW_MS; // Proxmox is unreachable, so try again next time.
+    }
+  }
+
+  /** Runs every minute. Ends expired sessions, and re-checks with Proxmox any session holding a console open. */
+  async tick() {
+    this.sweep();
+    const t = this.now();
+    const due = [...this.sessions].filter(([, s]) => this.isBusy(s) && t - s.renewedAt >= CONSOLE_CHECK_MS);
+    await Promise.all(due.map(([id, s]) => this.renew(id, s)));
+  }
+
   /** Returns a live session, renewing its Proxmox ticket when due. */
   async get(id: string | undefined): Promise<Session | undefined> {
     if (!id) return undefined;
@@ -143,18 +168,7 @@ export class Sessions {
       return undefined;
     }
     if (t - s.renewedAt >= RENEW_MS) {
-      s.renewedAt = t; // Stops every poll in this window from renewing at once.
-      try {
-        const renewed = await this.client.login(s.username, s.ticket);
-        s.ticket = renewed.ticket;
-        s.csrf = renewed.csrf;
-      } catch (err) {
-        if (err instanceof PveError && err.status === 401) {
-          this.drop(id);
-          return undefined;
-        }
-        s.renewedAt = t - RENEW_MS; // Proxmox is unreachable, so try again next time.
-      }
+      await this.renew(id, s);
       // Signing out can land while that was waiting. An ended session must stay ended.
       if (!this.sessions.has(id)) return undefined;
     }

@@ -4,7 +4,7 @@ import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AuthError, Sessions, type LoginOutcome, type Session } from "./auth.js";
-import { clientAddress, loadConfig } from "./config.js";
+import { clientAddress, loadConfig, sameOrigin } from "./config.js";
 import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
@@ -50,7 +50,6 @@ const HEADERS = {
   "Referrer-Policy": "no-referrer",
 };
 const CACHE_MS = 4000;
-const COOKIE = "bossmox_session";
 const MAX_BODY = 8 * 1024;
 
 const config = loadConfig();
@@ -60,11 +59,16 @@ const terminals = new Terminals({
   get pveUrl() {
     return pve.activeUrl;
   },
+  consoleIdleMs: config.consoleIdleMs,
   pveCa: config.pveCa,
   pveTlsName: config.pveTlsName,
 } as ConstructorParameters<typeof Terminals>[0]);
 sessions.onEnd = (session) => terminals.closeSession(session);
+sessions.isBusy = (session) => terminals.hasOpen(session);
+setInterval(() => void sessions.tick().catch((err: Error) => console.error("Session check failed:", err.message)), 60 * 1000).unref();
 const secureCookie = Boolean(config.tls) || config.behindProxy;
+// The __Host- prefix stops a sibling site or another port from setting this cookie over the real one.
+const COOKIE = secureCookie ? "__Host-bossmox_session" : "bossmox_session";
 const cache = new WeakMap<Session, { at: number; value: Promise<Overview> }>();
 
 async function fetchGuest(r: RawResource, ticket: string): Promise<[number, Guest]> {
@@ -249,7 +253,7 @@ function send(res: http.ServerResponse, status: number, type: string, body: stri
 const json = (res: http.ServerResponse, status: number, value: unknown, extra?: Record<string, string>) =>
   send(res, status, "application/json; charset=utf-8", JSON.stringify(value), extra);
 
-const NODE_NAME = /^[\w.-]{1,64}$/;
+const NODE_NAME = /^(?!\.+$)[\w.-]{1,64}$/;
 const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w.@!-]+:$/;
 
 const POWER = new Set(["start", "shutdown", "reboot", "stop"]);
@@ -435,7 +439,7 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
 
 async function openNodeTerminal(res: http.ServerResponse, name: string, session: Session, form: Record<string, string>) {
   const proxy = await pve.post<TermProxy>(`/nodes/${encodeURIComponent(name)}/termproxy`, session, form);
-  return json(res, 200, { terminal: terminals.prepare(name, session, proxy) });
+  return json(res, 200, { terminal: terminals.prepare(name, session, proxy, { outputCounts: form.cmd === "upgrade" }) });
 }
 
 async function openConsole(res: http.ServerResponse, body: Record<string, unknown>, session: Session) {
@@ -476,7 +480,7 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
       throw err;
     }
   }
-  const run = ACTIONS[action];
+  const run = Object.hasOwn(ACTIONS, action) ? ACTIONS[action] : undefined;
   if (!run) return json(res, 404, { error: "BossMox doesn't have that action." });
   const body = await readJson(req);
   const name = text(body.server, 64);
@@ -501,12 +505,9 @@ const hostAllowed = (header = "") => config.allowedHosts.has(stripPort(header));
 function sameSite(req: http.IncomingMessage): boolean {
   if (req.headers["x-bossmox"] !== "1") return false;
   const origin = req.headers.origin;
+  // Browsers always send Origin on these requests, so a request without one isn't coming from a web page.
   if (!origin) return true;
-  try {
-    return hostAllowed(new URL(origin).host);
-  } catch {
-    return false;
-  }
+  return sameOrigin(origin, req.headers.host, secureCookie);
 }
 
 function cookieId(req: http.IncomingMessage): string | undefined {
@@ -679,9 +680,9 @@ const handler: http.RequestListener = async (req, res) => {
     return send(res, 200, file[1], await readFile(path.join(PUBLIC, file[0])));
   } catch (err) {
     if (err instanceof AuthError) return json(res, err.status, { error: err.message });
-    const message = err instanceof Error ? err.message : "BossMox hit an internal error.";
-    console.error("Request failed:", message);
-    return json(res, 502, { error: message });
+    // The detail can name internal addresses, and some of these routes are open to anyone, so it stays in the log.
+    console.error("Request failed:", err instanceof Error ? err.message : err);
+    return json(res, 502, { error: "BossMox couldn't get an answer from Proxmox." });
   }
 };
 
@@ -698,7 +699,7 @@ server.on("upgrade", async (req, socket, head) => {
     const url = new URL(req.url ?? "/", "http://local");
     const origin = req.headers.origin ?? "";
     // Browsers don't apply same-origin rules to WebSockets, so the Origin check here is required.
-    if (url.pathname !== "/api/terminal" || !hostAllowed(req.headers.host) || !origin || !hostAllowed(new URL(origin).host)) return refuse();
+    if (url.pathname !== "/api/terminal" || !hostAllowed(req.headers.host) || !origin || !sameOrigin(origin, req.headers.host, secureCookie)) return refuse();
     const session = await sessions.get(cookieId(req));
     const term = session && terminals.claim(url.searchParams.get("id") ?? "", session);
     if (!term) return refuse();

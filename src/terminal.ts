@@ -6,7 +6,6 @@ import type { Config } from "./config.js";
 import type { Session } from "./auth.js";
 
 const TTL_MS = 30 * 1000;
-const IDLE_MS = 30 * 60 * 1000;
 const CONNECT_MS = 10 * 1000;
 const MAX_QUEUED = 256;
 
@@ -24,6 +23,22 @@ interface Pending extends TermProxy {
   path: string;
   /** A VM's screen is plain binary VNC, with none of the terminal's login line or text framing. */
   raw: boolean;
+  /** An update can run a long time with nobody typing, and cutting it off would interrupt the install. */
+  outputCounts: boolean;
+}
+
+/**
+ * Whether a message from the browser came from a person. A console shouldn't stay open forever because the page
+ * pings it, or because noVNC keeps asking for screen updates. Terminal messages are "0:" for input, "1:" for a
+ * resize and "2" for a ping. VNC is a stream of typed messages: 3 asks for the screen, 4 is a key, 5 is the mouse.
+ */
+export function fromPerson(data: Buffer, raw: boolean): boolean {
+  if (!raw) return data.subarray(0, 2).toString() === "0:";
+  for (let at = 0; at < data.length; ) {
+    if (data[at] !== 3) return true; // Input, or something unknown, which isn't worth cutting a person off over.
+    at += 10;
+  }
+  return false;
 }
 
 /** Connects the browser's terminal to Proxmox. The browser never sees either Proxmox ticket. */
@@ -32,15 +47,15 @@ export class Terminals {
   private readonly live = new Map<Session, Set<() => void>>();
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
-  constructor(private readonly config: Pick<Config, "pveCa" | "pveTlsName"> & { readonly pveUrl: URL }) {}
+  constructor(private readonly config: Pick<Config, "pveCa" | "pveTlsName" | "consoleIdleMs"> & { readonly pveUrl: URL }) {}
 
   /** One-time ID: valid once, only for the session that asked, and only for 30 seconds. */
-  prepare(server: string, session: Session, proxy: TermProxy, target: { path?: string; raw?: boolean } = {}): string {
+  prepare(server: string, session: Session, proxy: TermProxy, target: { path?: string; raw?: boolean; outputCounts?: boolean } = {}): string {
     const now = Date.now();
     for (const [k, p] of this.pending) if (p.expiresAt <= now) this.pending.delete(k);
     const id = randomBytes(32).toString("base64url");
     const path = target.path ?? `/nodes/${encodeURIComponent(server)}`;
-    this.pending.set(id, { ...proxy, server, session, expiresAt: now + TTL_MS, path, raw: target.raw === true });
+    this.pending.set(id, { ...proxy, server, session, expiresAt: now + TTL_MS, path, raw: target.raw === true, outputCounts: target.outputCounts === true });
     return id;
   }
 
@@ -60,6 +75,10 @@ export class Terminals {
     for (const [k, p] of this.pending) if (p.session === session) this.pending.delete(k);
     for (const close of [...(this.live.get(session) ?? [])]) close();
     this.live.delete(session);
+  }
+
+  hasOpen(session: Session): boolean {
+    return (this.live.get(session)?.size ?? 0) > 0;
   }
 
   claim(id: string, session: Session): Pending | undefined {
@@ -104,13 +123,13 @@ export class Terminals {
     const untrack = this.track(term.session, closeBoth);
     const touch = () => {
       clearTimeout(idle);
-      idle = setTimeout(closeBoth, IDLE_MS);
+      idle = setTimeout(closeBoth, this.config.consoleIdleMs);
     };
     touch();
 
     upstream.on("open", () => (term.raw ? flush() : upstream.send(`${term.user}:${term.ticket}\n`)));
     upstream.on("message", (data: RawData) => {
-      touch();
+      if (term.outputCounts) touch();
       if (!ready) {
         if (!data.toString().startsWith("OK")) return closeBoth();
         return flush();
@@ -118,7 +137,7 @@ export class Terminals {
       if (browser.readyState === WebSocket.OPEN) browser.send(data, { binary: true });
     });
     browser.on("message", (data: RawData) => {
-      touch();
+      if (fromPerson(data as Buffer, term.raw)) touch();
       if (!ready) {
         if (queue.length >= MAX_QUEUED) closeBoth();
         else queue.push(data);

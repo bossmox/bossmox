@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Terminals } from "../src/terminal.js";
-import { clientAddress } from "../src/config.js";
+import { fromPerson, Terminals } from "../src/terminal.js";
+import { clientAddress, sameOrigin } from "../src/config.js";
 import { AuthError, Sessions, type LoginClient } from "../src/auth.js";
 import { PveError, type LoginResult } from "../src/pve.js";
 
@@ -214,4 +214,74 @@ test("a client can't forge its way past the proxy's own entry", () => {
   assert.equal(clientAddress("10.0.0.5", "9.9.9.9, 1.2.3.4", trusted), "1.2.3.4", "the proxy adds the real one on the right");
   assert.equal(clientAddress("10.0.0.5", "1.2.3.4, 10.0.0.5", trusted), "1.2.3.4", "skips trusted hops");
   assert.equal(clientAddress("1.2.3.4", "9.9.9.9", new Set()), "1.2.3.4", "with nothing trusted the header is ignored");
+});
+
+test("the timer ends expired sessions with nobody making requests", async () => {
+  let clock = 1000;
+  const ended: string[] = [];
+  const s = new Sessions(client(async () => ok()), () => clock);
+  s.onEnd = (x) => ended.push(x.username);
+  await s.login("a@pve", "pw", "1.1.1.1");
+  clock += 13 * HOUR;
+  await s.tick();
+  assert.equal(ended.length, 1);
+});
+
+test("a session with a console open is re-checked, and a disabled account loses it", async () => {
+  let clock = 1000;
+  let disabled = false;
+  const ended: string[] = [];
+  const s = new Sessions(client(async () => {
+    if (disabled) throw new PveError(401, "no");
+    return ok();
+  }), () => clock);
+  s.onEnd = (x) => ended.push(x.username);
+  s.isBusy = () => true;
+  await s.login("a@pve", "pw", "1.1.1.1");
+  clock += FIVE_MIN + 1;
+  await s.tick();
+  assert.equal(ended.length, 0, "still fine");
+  disabled = true;
+  clock += FIVE_MIN + 1;
+  await s.tick();
+  assert.equal(ended.length, 1);
+});
+
+test("a quiet session with no console isn't checked early", async () => {
+  let clock = 1000;
+  let logins = 0;
+  const s = new Sessions(client(async () => {
+    logins += 1;
+    return ok();
+  }), () => clock);
+  await s.login("a@pve", "pw", "1.1.1.1");
+  clock += 30 * 60 * 1000;
+  await s.tick();
+  assert.equal(logins, 1);
+});
+
+test("only a person counts as console activity", () => {
+  const b = (...n: number[]) => Buffer.from(n);
+  assert.equal(fromPerson(Buffer.from("2"), false), false, "the page's ping");
+  assert.equal(fromPerson(Buffer.from("1:80:24:"), false), false, "a window resize");
+  assert.equal(fromPerson(Buffer.from("0:1:a"), false), true, "a key");
+  const screen = b(3, 1, 0, 0, 0, 0, 2, 128, 1, 224);
+  assert.equal(fromPerson(screen, true), false, "noVNC asking for the screen");
+  assert.equal(fromPerson(Buffer.concat([screen, screen]), true), false, "two of those together");
+  assert.equal(fromPerson(b(4, 1, 0, 0, 0, 0, 0, 97), true), true, "a key on a VM");
+  assert.equal(fromPerson(b(5, 0, 0, 10, 0, 10), true), true, "the mouse");
+  assert.equal(fromPerson(Buffer.concat([screen, b(4, 1, 0, 0, 0, 0, 0, 97)]), true), true, "a key behind a screen request");
+});
+
+test("Origin has to be this exact site", () => {
+  assert.equal(sameOrigin("https://10.0.0.9", "10.0.0.9", true), true);
+  assert.equal(sameOrigin("https://bossmox.lan:8443", "bossmox.lan:8443", true), true);
+  assert.equal(sameOrigin("https://BossMox.lan", "bossmox.lan", true), true);
+  assert.equal(sameOrigin("http://localhost:3000", "bossmox.lan", true), false, "a page on someone's localhost");
+  assert.equal(sameOrigin("https://bossmox.lan:9999", "bossmox.lan", true), false, "another app on the same machine");
+  assert.equal(sameOrigin("http://bossmox.lan", "bossmox.lan", true), false, "plain http");
+  assert.equal(sameOrigin("https://evil.example", "bossmox.lan", true), false);
+  assert.equal(sameOrigin("nonsense", "bossmox.lan", true), false);
+  assert.equal(sameOrigin("https://bossmox.lan", undefined, true), false);
+  assert.equal(sameOrigin("http://localhost:8080", "localhost:8080", false), true, "running on your own machine");
 });

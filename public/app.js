@@ -1446,7 +1446,7 @@ function askDisc() {
 function downloadDisc() {
   const url = $("#discurl").value.trim();
   const server = $("#cserver").value;
-  if (!/^https?:\/\/\S+\.iso$/i.test(url)) {
+  if (!/^https:\/\/\S+\.iso$/i.test(url)) {
     const e = $("#discerr");
     e.textContent = "Use an address that starts with https and ends in .iso.";
     e.hidden = false;

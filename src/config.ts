@@ -13,9 +13,23 @@ export interface Config {
   allowHttp: boolean;
   /** Proxies whose X-Forwarded-For can be believed. Nobody else's is. */
   trustedProxies: Set<string>;
+  consoleIdleMs: number;
 }
 
 const plainAddress = (a: string) => a.trim().toLowerCase().replace(/^::ffff:/, "");
+
+/**
+ * Whether a request's Origin is this exact site. Only a page served from the same scheme, name and port counts,
+ * so another app on the same machine, or a page on someone's localhost, doesn't pass as BossMox.
+ */
+export function sameOrigin(origin: string, host: string | undefined, https: boolean): boolean {
+  try {
+    const o = new URL(origin);
+    return o.protocol === (https ? "https:" : "http:") && o.host.toLowerCase() === (host ?? "").toLowerCase();
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Who's really connecting. Behind a trusted proxy that's the nearest address in X-Forwarded-For that isn't
@@ -53,6 +67,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     allowedHosts: new Set(["localhost", "127.0.0.1", ...extra]),
     behindProxy: env.BOSSMOX_BEHIND_HTTPS_PROXY === "1",
     allowHttp: env.BOSSMOX_ALLOW_HTTP === "1",
+    consoleIdleMs: Math.max(1, Number(env.BOSSMOX_CONSOLE_IDLE_MINUTES) || 30) * 60 * 1000,
     trustedProxies: new Set((env.BOSSMOX_TRUSTED_PROXY ?? "").split(",").map(plainAddress).filter(Boolean)),
   };
   if (env.PVE_CA_FILE) config.pveCa = readFileSync(env.PVE_CA_FILE);

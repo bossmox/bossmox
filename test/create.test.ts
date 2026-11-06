@@ -50,6 +50,7 @@ test("bad settings are refused in plain words, and can't smuggle in extra option
   assert.throws(() => vmForm(input({ bridge: "vmbr0,firewall=0" })), CreateError);
   assert.throws(() => vmForm(input({ installer: "local:iso/a.iso,media=disk" })), CreateError);
   assert.throws(() => vmForm(input({ os: "beos" })), CreateError);
+  assert.throws(() => vmForm(input({ os: "constructor" })), CreateError, "a built-in property isn't an operating system");
   assert.throws(() => containerForm(input({ password: "short" })), /at least 8/);
   assert.throws(() => containerForm(input({ installer: "", password: "longenough" })), /template/);
 });
@@ -83,6 +84,7 @@ test("a cloud-init drive is never replaced with a disc", () => {
 test("disc downloads must be a plain .iso from the web", () => {
   assert.deepEqual(discDownload("https://example.com/a/alpine-3.iso"), { url: "https://example.com/a/alpine-3.iso", filename: "alpine-3.iso" });
   assert.throws(() => discDownload("file:///etc/passwd.iso"), /https/);
+  assert.throws(() => discDownload("http://example.com/a.iso"), /https/, "plain http could be swapped on the way");
   assert.throws(() => discDownload("https://example.com/setup.exe"), /\.iso/);
   assert.throws(() => discDownload("https://example.com/..%2F..%2Fetc%2Fx.iso"), /\.iso/);
   assert.throws(() => discDownload("nonsense"), CreateError);

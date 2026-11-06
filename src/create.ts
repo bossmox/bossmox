@@ -36,7 +36,7 @@ function checkCommon(v: CreateInput) {
 export function vmForm(v: CreateInput): Record<string, string> {
   checkCommon(v);
   if (v.installer && !VOLUME.test(v.installer)) throw new CreateError("That installer isn't valid.");
-  const ostype = OS[v.os];
+  const ostype = Object.hasOwn(OS, v.os) ? OS[v.os] : undefined;
   if (!ostype) throw new CreateError("Pick an operating system.");
   const windows = v.os === "windows";
   const disk = windows ? "sata0" : "scsi0";
@@ -116,7 +116,8 @@ export function discDownload(url: string): { url: string; filename: string } {
   } catch {
     throw new CreateError("That doesn't look like a web address.");
   }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new CreateError("Use an address that starts with https.");
+  // Proxmox boots whatever arrives, and plain http could be swapped on the way.
+  if (parsed.protocol !== "https:") throw new CreateError("Use an address that starts with https.");
   // Taken as written, so an encoded slash or a stray % can only fail this check.
   const filename = parsed.pathname.split("/").pop() ?? "";
   if (!/^[\w.-]+\.iso$/i.test(filename)) throw new CreateError("The address has to end in a file name ending in .iso.");
