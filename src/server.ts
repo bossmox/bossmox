@@ -11,6 +11,8 @@ import { PveClient, PveError, type Identity } from "./pve.js";
 import {
   buildMovePlan,
   buildRebootPlan,
+  buildRollingPlan,
+  groupUpdates,
   buildServerDetail,
   taskView,
   type RawBackupStorage,
@@ -22,6 +24,7 @@ import {
   type RawTask,
   type RawTaskStatus,
   type RawUpdate,
+  type RollingInput,
   type Section,
   type ServerDetail,
 } from "./server-detail.js";
@@ -111,6 +114,36 @@ async function loadServerDetail(name: string, ticket: string): Promise<ServerDet
     section(pve.get<{ type?: string }[]>("/cluster/status", ticket)),
   ]);
   return buildServerDetail(name, status, updates, repos, subscription, services, tasks, clusterStatus);
+}
+
+async function loadRollingPlan(ticket: string) {
+  const data = await loadOverview(ticket);
+  const [cluster, tieBreaker, servers] = await Promise.all([
+    section(pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", ticket)),
+    section(pve.get<{ State?: string }>("/cluster/config/qdevice", ticket)),
+    Promise.all(data.nodes.map(async (n): Promise<RollingInput> => {
+      if (!n.online) return { name: n.name, online: false, version: null, updates: null, rebootNeeded: false, busy: [] };
+      const base = `/nodes/${encodeURIComponent(n.name)}`;
+      const [status, updates, active] = await Promise.all([
+        section(pve.get<RawStatus>(`${base}/status`, ticket)),
+        section(pve.get<RawUpdate[]>(`${base}/apt/update`, ticket)),
+        section(pve.get<RawTask[]>(`${base}/tasks?source=active`, ticket)),
+      ]);
+      const list = updates.available ? groupUpdates(updates.value) : null;
+      return {
+        name: n.name,
+        online: true,
+        version: status.available ? status.value.pveversion?.split("/")[1] ?? null : null,
+        updates: list ? list.total : null,
+        rebootNeeded: list?.rebootNeeded ?? false,
+        busy: buildRebootPlan(active, { available: false }).busy,
+      };
+    })),
+  ]);
+  const quorate: Section<boolean> = cluster.available
+    ? { available: true, value: cluster.value.find((c) => c.type === "cluster")?.quorate === 1 }
+    : { available: false };
+  return buildRollingPlan(servers, quorate, tieBreaker);
 }
 
 function send(res: http.ServerResponse, status: number, type: string, body: string | Buffer, extra: Record<string, string> = {}) {
@@ -284,7 +317,7 @@ const handler: http.RequestListener = async (req, res) => {
     if (route === "/api/login-info") {
       return json(res, 200, { realms: await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains") });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -314,6 +347,7 @@ const handler: http.RequestListener = async (req, res) => {
           const running = data.vms.find((v) => v.id === Number(id))?.running ?? false;
           return json(res, 200, buildMovePlan(type, name, nodes, raw, running));
         }
+        if (route === "/api/rolling-plan") return json(res, 200, await loadRollingPlan(session.ticket));
         if (route === "/api/reboot-plan") {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });

@@ -228,7 +228,7 @@ function renderServers() {
     return;
   }
   list.innerHTML = S.data.nodes.map((n) => `<button class="row ${n.name === S.server ? "on" : ""}" data-server="${esc(n.name)}">
-    <span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? `${n.cpuPct}% busy, ${n.memPct}% memory` : "Offline"}</small></button>`).join("");
+    <span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? `${n.cpuPct}% busy, ${n.memPct}% memory` : "Offline"}</small></button>`).join("") + (S.data.nodes.length > 1 ? `<button class="btn rollbtn" data-rolling="1">Update all servers</button>` : "");
   if (S.serverTab === "overview") renderServerDetail();
 }
 const noAccess = (what, perm) => `<p class="empty">Your Proxmox account can't see ${what}. It needs ${perm} on this server.</p>`;
@@ -505,11 +505,14 @@ function drawRestart(plan, state, title, note, done) {
   dialog(`<h3>${esc(title)}</h3><p>${esc(note || STAGE_NOTE[stage])}</p><div class="restartlist">
     ${row(plan.server, state.back ? true : done ? false : null, serverWord)}
     ${plan.guests.map(guestRow).join("")}
-    </div><div class="row-end"><button class="btn" data-restartclose="1">${done ? "Close" : "Stop watching"}</button>${done && plan.target && state.back ? `<button class="btn primary" data-moveback="${esc(plan.server)}">Move everything back</button>` : ""}</div>`);
+    </div><div class="row-end"><button class="btn" data-restartclose="1">${done ? "Close" : plan.rolling ? "Stop the update" : "Stop watching"}</button>${done && plan.target && state.back ? `<button class="btn primary" data-moveback="${esc(plan.server)}">Move everything back</button>` : ""}</div>`);
 }
 async function watchRestart() {
   const plan = savedReboot();
   if (!plan || S.watching) return;
+  if (plan.phase === "next") return rollingStep(plan.rolling);
+  if (plan.phase === "installing") return rollingInstall(plan);
+  if (plan.phase === "returning") return rollingReturn(plan);
   S.watching = true;
   const state = { back: false, down: false, lost: false, running: new Set(plan.guests.map((g) => g.id)), where: new Map() };
   let backAt = 0;
@@ -532,13 +535,19 @@ async function watchRestart() {
       if (plan.phase === "moving") {
         const left = plan.guests.filter((g) => state.where.get(g.id) !== plan.target);
         const task = plan.task ? await signal(`api/task?server=${encodeURIComponent(plan.server)}&task=${encodeURIComponent(plan.task)}`).catch(() => null) : null;
+        if (left.length === 0 && plan.rolling) {
+          plan.phase = "installing";
+          saveReboot(plan);
+          return rollingInstall(plan);
+        }
         if (left.length === 0) {
           await sendRestart(plan);
           plan.phase = "restarting";
           plan.startedAt = Date.now();
           saveReboot(plan);
         } else if (task?.finished || Date.now() - plan.startedAt > 30 * 60 * 1000) {
-          drawRestart(plan, state, `${plan.server} was not restarted`, `These didn't move, so the restart was cancelled: ${left.map((g) => g.name).join(", ")}. Anything already moved stays where it is.`, true);
+          if (plan.rolling) keepMoved(plan);
+          drawRestart(plan, state, `${plan.server} was not restarted`, `These didn't move, so the restart was cancelled: ${left.map((g) => g.name).join(", ")}. Anything already moved stays where it is.${plan.rolling ? ` ${notTouched(plan)}` : ""}`, true);
           saveReboot(null);
           S.watching = false;
           return;
@@ -557,11 +566,13 @@ async function watchRestart() {
     const allBack = state.back && waiting.length === 0;
     const gaveUp = backAt && Date.now() - backAt > 5 * 60 * 1000;
     if (plan.phase === "restarting" && (allBack || gaveUp || Date.now() > plan.startedAt + 15 * 60 * 1000)) {
+      if (allBack && plan.rolling) return rollingReturn(plan);
       const off = plan.guests.filter((g) => !g.auto && !state.running.has(g.id));
       const title = allBack ? `${plan.server} is back` : state.back ? `${plan.server} is back, but something's missing` : `${plan.server} hasn't come back`;
-      const note = allBack
+      let note = allBack
         ? plan.target ? `Everything is running. The moved items stay on ${plan.target}. Use Move to bring them back.` : off.length ? "Everything set to start by itself is running. The items marked off need starting by hand." : "Everything is running again."
         : state.back ? "These haven't started yet. Check them before relying on this server." : "It's been 15 minutes. Someone may need to look at the server itself.";
+      if (plan.rolling) note += ` ${notTouched(plan)}`;
       if (plan.target) setMoved(plan.server, { target: plan.target, guests: plan.guests.map((g) => ({ id: g.id, name: g.name })) });
       drawRestart(plan, state, title, note, true);
       saveReboot(null);
@@ -570,10 +581,198 @@ async function watchRestart() {
       loadServer();
       return;
     }
-    drawRestart(plan, state, `Restarting ${plan.server}`, "", false);
+    drawRestart(plan, state, plan.rolling ? rollingTitle(plan) : `Restarting ${plan.server}`, "", false);
     await new Promise((r) => setTimeout(r, 3000));
   }
   S.watching = false;
+}
+
+/*
+ * Updating a whole cluster, one server at a time. This is the guided restart with two extra phases, so a run
+ * lives in the same saved plan and carries on after a reload: installing (a person approves the updater) and
+ * returning (guests go home before the next server starts).
+ */
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+const rollingTitle = (plan) => `Updating ${plan.server}, server ${plan.rolling.index + 1} of ${plan.rolling.servers.length}`;
+const closeRow = `<div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`;
+const notTouched = (plan) => {
+  const rest = plan.rolling.servers.slice(plan.rolling.index + 1);
+  return rest.length ? `The update stopped here, so these weren't touched: ${rest.join(", ")}.` : "The update stopped here.";
+};
+function keepMoved(plan) {
+  if (plan.target && plan.guests.length) setMoved(plan.server, { target: plan.target, guests: plan.guests.map((g) => ({ id: g.id, name: g.name })) });
+}
+function rollingStop(plan, title, line) {
+  keepMoved(plan);
+  saveReboot(null);
+  S.watching = false;
+  S.taskRunning = false;
+  const back = movedGuests(plan.server) ? `<button class="btn primary" data-moveback="${esc(plan.server)}">Move everything back</button>` : "";
+  dialog(`<h3>${esc(title)}</h3><p>${esc(line)} ${esc(notTouched(plan))}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button>${back}</div>`);
+  renderHealth();
+  loadServer();
+}
+async function followTask(server, task) {
+  for (;;) {
+    await wait(1000);
+    const view = await signal(`api/task?server=${encodeURIComponent(server)}&task=${encodeURIComponent(task)}`);
+    if (view.finished) return view;
+  }
+}
+async function startRolling() {
+  const names = (S.data?.nodes ?? []).filter((n) => n.online).map((n) => n.name);
+  S.taskRunning = true;
+  dialog(`<h3>Checking every server for updates</h3><p>This looks for new updates. It doesn't install anything.</p>`);
+  let plan;
+  try {
+    await Promise.all(names.map(async (server) => {
+      const res = await post("api/action/check-updates", { server });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      await followTask(server, body.task);
+    }));
+    plan = await signal("api/rolling-plan");
+  } catch (err) {
+    S.taskRunning = false;
+    if (err.message === "signed out") return closeDialog();
+    return dialog(`<h3>Couldn't prepare the update</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  S.taskRunning = false;
+  if (plan.blocked.length) return dialog(`<h3>Not ready to update</h3>${plan.blocked.map((b) => `<p class="loginerr">${esc(b)}</p>`).join("")}${closeRow}`);
+  if (!plan.servers.length) return dialog(`<h3>Every server is up to date</h3><p>Nothing is waiting to install.</p>${closeRow}`);
+  S.rollingPlan = plan;
+  dialog(`<h3>Update ${plan.servers.length === 1 ? esc(plan.servers[0].name) : `all ${plan.servers.length} servers`}?</h3>
+    <p>BossMox updates one server at a time, in this order. It moves everything off, opens the updater for you to approve, restarts the server, then moves everything back. If any step fails, it stops there.</p>
+    <div class="restartlist">${plan.servers.map((v) => `<div class="snap"><div>${esc(v.name)}<small>Version ${esc(v.version ?? "unknown")}</small></div><span class="state">${v.updates} ${v.updates === 1 ? "update" : "updates"}</span></div>`).join("")}</div>
+    ${plan.keepsMajority ? "" : `<div class="advice" style="margin-top:12px"><div><b>This cluster has only ${plan.votes} votes</b>Everything keeps running, but nothing can be started, stopped or changed while a server restarts.</div></div>`}
+    <label class="field restartname"><span>Type reboot to confirm</span><input id="rname" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-rollinggo="1" disabled>Start updating</button></div>`);
+  $("#rname").focus();
+}
+async function rollingStep(rolling) {
+  const server = rolling.servers[rolling.index];
+  S.watching = true;
+  const plan = { server, target: "", phase: "next", rolling, guests: [], startedAt: Date.now() };
+  saveReboot(plan);
+  dialog(`<h3>${esc(rollingTitle(plan))}</h3><p>Checking that the cluster is healthy before starting.</p><div class="row-end"><button class="btn" data-restartclose="1">Stop the update</button></div>`);
+  let check;
+  try {
+    // A server that just came back can look busy or absent for a moment.
+    for (const until = Date.now() + 3 * 60 * 1000; ; await wait(5000)) {
+      check = await signal("api/rolling-plan");
+      if (!savedReboot()) return;
+      if (!check.blocked.length || Date.now() > until) break;
+    }
+    S.data = await signal("api/overview");
+  } catch (err) {
+    S.watching = false;
+    if (err.message === "signed out") return;
+    return rollingStop(plan, `${server} wasn't updated`, err.message || "BossMox lost contact with Proxmox.");
+  }
+  if (check.blocked.length) return rollingStop(plan, `${server} wasn't updated`, check.blocked.join(" "));
+  if (!check.servers.some((v) => v.name === server)) return rollingNext(plan);
+  const guests = S.data.vms.filter((v) => v.node === server && v.running);
+  plan.guests = guests.map((v) => ({ id: v.id, name: v.name, auto: v.startsAtBoot }));
+  if (guests.length) {
+    const others = S.data.nodes.filter((n) => n.online && n.name !== server).map((n) => n.name);
+    // Finished servers are the newest, and guests should only move to the same version or newer.
+    plan.target = rolling.servers.slice(0, rolling.index).reverse().find((n) => others.includes(n)) ?? others[0] ?? "";
+    if (!plan.target) return rollingStop(plan, `${server} wasn't updated`, "There's no other online server to move its guests to.");
+    plan.phase = "moving";
+    try {
+      const res = await post("api/action/move-all", { server, target: plan.target, guests: guests.map((v) => v.id).join(",") });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      plan.task = body.task;
+      plan.startedAt = Date.now();
+      saveReboot(plan);
+    } catch (err) {
+      return rollingStop({ ...plan, target: "" }, `${server} wasn't updated`, err.message || "BossMox lost contact with Proxmox.");
+    }
+    S.watching = false;
+    return watchRestart();
+  }
+  plan.phase = "installing";
+  saveReboot(plan);
+  rollingInstall(plan);
+}
+function rollingInstall(plan, problem = "") {
+  S.watching = true;
+  dialog(`<h3>${esc(rollingTitle(plan))}</h3>
+    ${problem ? `<p class="loginerr">${esc(problem)}</p>` : ""}
+    <p>${plan.guests.length ? `Everything has moved to ${esc(plan.target)}.` : "Nothing is running on this server."} Open the updater, check the list, then type Y and press Enter. When it finishes, close its window and BossMox restarts ${esc(plan.server)}.</p>
+    <div class="row-end"><button class="btn" data-rollingstop="1">Stop here</button><button class="btn primary" data-rollinginstall="1">Open the updater</button></div>`);
+}
+async function rollingAfterInstall(plan) {
+  dialog(`<h3>${esc(rollingTitle(plan))}</h3><p>Checking that the updates installed.</p>`);
+  let left;
+  try {
+    left = (await signal(`api/server?name=${encodeURIComponent(plan.server)}`)).updates?.total;
+  } catch (err) {
+    if (err.message === "signed out") return;
+  }
+  if (left === undefined) return rollingInstall(plan, `BossMox couldn't confirm the updates installed on ${plan.server}, so it hasn't restarted it.`);
+  if (left > 0) return rollingInstall(plan, `${left} ${left === 1 ? "update is" : "updates are"} still waiting on ${plan.server}, so it hasn't been restarted.`);
+  try {
+    await sendRestart(plan);
+  } catch (err) {
+    return rollingStop(plan, `${plan.server} wasn't restarted`, err.message || "BossMox lost contact with Proxmox.");
+  }
+  plan.phase = "restarting";
+  plan.startedAt = Date.now();
+  saveReboot(plan);
+  S.watching = false;
+  watchRestart();
+}
+async function rollingReturn(plan) {
+  S.watching = true;
+  plan.phase = "returning";
+  saveReboot(plan);
+  if (!plan.target || !plan.guests.length) return rollingNext(plan);
+  const row = (g, home) => `<div class="snap"><div>${esc(g.name)}</div><span class="state"><span class="dot ${home ? "running" : "busy"}"></span>${home ? `Back on ${esc(plan.server)}` : "Moving back"}</span></div>`;
+  const draw = (where) => dialog(`<h3>${esc(rollingTitle(plan))}</h3><p>${esc(plan.server)} is back. Moving everything home before the next step.</p><div class="restartlist">${plan.guests.map((g) => row(g, where.get(g.id) === plan.server)).join("")}</div>`);
+  const started = Date.now();
+  let finishedAt = 0;
+  for (;;) {
+    try {
+      const o = await signal("api/overview");
+      S.data = o;
+      const where = new Map(o.vms.map((v) => [v.id, v.node]));
+      const left = plan.guests.filter((g) => where.get(g.id) !== plan.server);
+      draw(where);
+      if (!left.length) return rollingNext(plan);
+      if (!plan.returnTask) {
+        const res = await post("api/action/move-all", { server: plan.target, target: plan.server, guests: left.map((g) => g.id).join(",") });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error);
+        plan.returnTask = body.task;
+        saveReboot(plan);
+      } else {
+        const task = await signal(`api/task?server=${encodeURIComponent(plan.target)}&task=${encodeURIComponent(plan.returnTask)}`).catch(() => null);
+        if (task?.finished && !finishedAt) finishedAt = Date.now();
+      }
+      if ((finishedAt && Date.now() - finishedAt > 20000) || Date.now() - started > 30 * 60 * 1000) {
+        return rollingStop(plan, `${plan.server} is updated, but guests didn't get home`, `These are still on ${plan.target}: ${left.map((g) => g.name).join(", ")}.`);
+      }
+    } catch (err) {
+      if (err.message === "signed out") {
+        S.watching = false;
+        return;
+      }
+      // A server that has just come back can refuse a move for a few seconds, so keep trying for a minute.
+      if (!plan.returnTask && Date.now() - started > 60 * 1000) return rollingStop(plan, `${plan.server} is updated, but guests didn't get home`, err.message || "BossMox lost contact with Proxmox.");
+    }
+    await wait(3000);
+  }
+}
+function rollingNext(plan) {
+  const rolling = { ...plan.rolling, index: plan.rolling.index + 1 };
+  if (rolling.index < rolling.servers.length) return rollingStep(rolling);
+  saveReboot(null);
+  S.watching = false;
+  dialog(`<h3>${rolling.servers.length === 1 ? `${esc(plan.server)} is updated` : `All ${rolling.servers.length} servers are updated`}</h3><p>Each one restarted, and everything that moved is back where it started.</p>${closeRow}`);
+  renderHealth();
+  loadServer();
 }
 
 /* Moving a VM or container */
@@ -609,6 +808,8 @@ function closeTerminal() {
   }
   renderTasks();
   loadServer();
+  const plan = savedReboot();
+  if (plan?.rolling && plan.phase === "installing") rollingAfterInstall(plan);
 }
 async function openTerminal(server) {
   if (term) return openWin("terminal");
@@ -646,7 +847,7 @@ async function openTerminal(server) {
       recent = (recent + decoder.decode(bytes)).slice(-200);
       if (recent.includes("starting shell") && term) {
         term.done = true;
-        $(".termhelp").textContent = `The updater has finished on ${server}. Check the output, then close this window.`;
+        $(".termhelp").textContent = savedReboot()?.rolling ? `The updater has finished on ${server}. Check the output, then close this window and BossMox restarts ${server}.` : `The updater has finished on ${server}. Check the output, then close this window.`;
       }
     };
     socket.onclose = () => {
@@ -663,6 +864,8 @@ async function openTerminal(server) {
     const ping = setInterval(() => socket.readyState === 1 ? socket.send("2") : clearInterval(ping), 30000);
     term = { socket, xterm, observer, server, done: false };
   } catch (err) {
+    const plan = savedReboot();
+    if (plan?.rolling && plan.phase === "installing") return rollingInstall(plan, err.message || "BossMox lost contact with Proxmox.");
     dialog(`<h3>Couldn't start the install</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
   }
 }
@@ -727,7 +930,24 @@ document.addEventListener("click", (e) => {
     t.disabled = true;
     return doRestart(d.restart);
   }
+  if (d.rolling) return startRolling();
+  if (d.rollinggo) {
+    t.disabled = true;
+    const servers = S.rollingPlan.servers.map((v) => v.name);
+    S.rollingPlan = null;
+    return rollingStep({ servers, index: 0 });
+  }
+  if (d.rollinginstall) {
+    closeDialog();
+    return openTerminal(savedReboot().server);
+  }
+  if (d.rollingstop) {
+    const plan = savedReboot();
+    return rollingStop(plan, `${plan.server} wasn't updated`, `Nothing was installed on ${plan.server}.`);
+  }
   if (d.restartclose) {
+    const plan = savedReboot();
+    if (plan?.rolling) keepMoved(plan);
     saveReboot(null);
     S.watching = false;
     return closeDialog();
@@ -833,6 +1053,7 @@ async function showLogin(message) {
   S.taskRunning = false;
   S.watching = false;
   $("#scrim").classList.remove("on");
+  S.watching = false;
   Object.keys(wins).forEach((k) => {
     wins[k].remove();
     delete wins[k];

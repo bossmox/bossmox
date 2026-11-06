@@ -186,6 +186,47 @@ export function buildMovePlan(type: "qemu" | "lxc", from: string, nodes: string[
   };
 }
 
+export interface RollingInput {
+  name: string;
+  online: boolean;
+  version: string | null;
+  updates: number | null;
+  rebootNeeded: boolean;
+  busy: string[];
+}
+const versionParts = (v: string | null) => (v ?? "").split(/[.-]/).map((p) => Number(p) || 0);
+function olderFirst(a: RollingInput, b: RollingInput): number {
+  const [x, y] = [versionParts(a.version), versionParts(b.version)];
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const diff = (x[i] ?? 0) - (y[i] ?? 0);
+    if (diff) return diff;
+  }
+  return a.name.localeCompare(b.name);
+}
+/**
+ * What has to be true before updating a cluster one server at a time. Oldest goes first, because guests
+ * should only ever move to the same or a newer version. A cluster that keeps fewer than three votes still
+ * works, but can't make changes while a server is down, so that's a warning and not a refusal.
+ */
+export function buildRollingPlan(servers: RollingInput[], quorate: Section<boolean>, tieBreaker: Section<{ State?: string }>) {
+  const blocked: string[] = [];
+  const offline = servers.filter((s) => !s.online).map((s) => s.name);
+  if (offline.length) blocked.push(`Bring these back online first: ${offline.join(", ")}.`);
+  if (!quorate.available) blocked.push("BossMox can't tell whether the cluster is healthy.");
+  else if (!quorate.value) blocked.push("The cluster has lost its majority, so it can't make changes right now.");
+  const unknown = servers.filter((s) => s.online && s.updates === null).map((s) => s.name);
+  if (unknown.length) blocked.push(`BossMox can't read the updates on: ${unknown.join(", ")}.`);
+  for (const s of servers) if (s.busy.length) blocked.push(`${s.name} is busy. Wait for this to finish: ${s.busy.join(", ")}.`);
+  const tieVote = tieBreaker.available && tieBreaker.value.State === "Connected" ? 1 : 0;
+  const votes = servers.length + tieVote;
+  return {
+    blocked,
+    votes,
+    keepsMajority: votes >= 3,
+    servers: [...servers].sort(olderFirst).filter((s) => (s.updates ?? 0) > 0).map(({ name, version, updates, rebootNeeded }) => ({ name, version, updates, rebootNeeded })),
+  };
+}
+
 export function buildServerDetail(
   name: string,
   status: Section<RawStatus>,

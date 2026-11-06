@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildMovePlan, buildRebootPlan, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
+import { buildMovePlan, buildRebootPlan, buildRollingPlan, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
 
 const repo = (uri: string, component: string, enabled = true): RawRepositories => ({
   files: [{ repositories: [{ Enabled: enabled, URIs: [uri], Components: [component] }] }],
@@ -103,4 +103,35 @@ test("a limited account gets empty sections instead of a failure", () => {
   assert.equal(d.summary?.proxmoxVersion, "9.2.2");
   assert.equal(d.updates, null);
   assert.equal(d.channel, null);
+});
+
+const rolling = (name: string, version: string, updates: number | null = 1, more = {}) => ({ name, online: true, version, updates, rebootNeeded: false, busy: [] as string[], ...more });
+const healthy = { available: true as const, value: true };
+const voteOn = { available: true as const, value: { State: "Connected" } };
+
+test("rolling updates start with the oldest server, by number and not by text", () => {
+  const plan = buildRollingPlan([rolling("a", "9.10.1"), rolling("b", "9.2.26"), rolling("c", "9.2.26")], healthy, voteOn);
+  assert.deepEqual(plan.servers.map((s) => s.name), ["b", "c", "a"]);
+});
+
+test("servers with nothing waiting are left out of a rolling update", () => {
+  const plan = buildRollingPlan([rolling("a", "9.2.26", 0), rolling("b", "9.2.26", 3)], healthy, voteOn);
+  assert.deepEqual(plan.servers.map((s) => s.name), ["b"]);
+  assert.deepEqual(plan.blocked, []);
+});
+
+test("a rolling update won't start on an unhealthy cluster", () => {
+  assert.match(buildRollingPlan([rolling("a", "9"), rolling("b", "9", null, { online: false })], healthy, voteOn).blocked.join(), /back online first: b/);
+  assert.match(buildRollingPlan([rolling("a", "9"), rolling("b", "9")], { available: true, value: false }, voteOn).blocked.join(), /lost its majority/);
+  assert.match(buildRollingPlan([rolling("a", "9"), rolling("b", "9")], { available: false }, voteOn).blocked.join(), /can't tell/);
+  assert.match(buildRollingPlan([rolling("a", "9", null), rolling("b", "9")], healthy, voteOn).blocked.join(), /can't read the updates on: a/);
+  assert.match(buildRollingPlan([rolling("a", "9", 1, { busy: ["Backup"] }), rolling("b", "9")], healthy, voteOn).blocked.join(), /a is busy/);
+});
+
+test("two servers keep their majority only with a working tie-breaker", () => {
+  const two = [rolling("a", "9"), rolling("b", "9")];
+  assert.equal(buildRollingPlan(two, healthy, voteOn).keepsMajority, true);
+  assert.equal(buildRollingPlan(two, healthy, { available: false }).keepsMajority, false);
+  assert.equal(buildRollingPlan(two, healthy, { available: true, value: { State: "Disconnected" } }).keepsMajority, false, "a dead tie-breaker casts no vote");
+  assert.equal(buildRollingPlan([...two, rolling("c", "9")], healthy, { available: false }).keepsMajority, true);
 });
