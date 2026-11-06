@@ -306,7 +306,7 @@ function renderDetail() {
       <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
       <div class="actions">${v.template ? `<button class="btn primary" data-clone="${v.id}">New from template</button>` : v.running
         ? `<button class="btn" data-console="${v.id}">Console</button><button class="btn" data-power="shutdown">Shut down</button><button class="btn" data-power="reboot">Restart</button><button class="btn" data-power="stop">Force off</button>`
-        : `<button class="btn primary" data-power="start">Start</button>`}${v.template ? "" : `<button class="btn" data-clone="${v.id}">Clone</button>`}${(S.data?.nodes.length ?? 0) > 1 && !v.template ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${!v.running && !v.template && v.type === "qemu" ? `<button class="btn" data-bootmenu="${v.id}">Boot menu</button>` : ""}${v.running || v.template ? "" : `<button class="btn" data-maketemplate="${v.id}">Make template</button>`}${v.running ? "" : `<button class="btn" data-guestdelete="${v.id}">Delete</button>`}</div></div>
+        : `<button class="btn primary" data-power="start">Start</button>`}${v.template ? "" : `<button class="btn" data-clone="${v.id}">Clone</button>`}${(S.data?.nodes.length ?? 0) > 1 && !v.template ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${!v.running && !v.template && v.type === "qemu" ? `<button class="btn" data-bootmenu="${v.id}">Force BIOS</button>` : ""}${v.running || v.template ? "" : `<button class="btn" data-maketemplate="${v.id}">Make template</button>`}${v.running ? "" : `<button class="btn" data-guestdelete="${v.id}">Delete</button>`}</div></div>
     <div id="vmwaiting">${waitingWords(v)}</div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["hardware", "Hardware"], ...(v.template ? [] : [["snapshots", "Snapshots"]]), ["settings", "Settings"]].map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${TAB[S.tab](v)}</div>`;
@@ -2005,6 +2005,7 @@ function drawConsoleActions() {
     const button = (power, label) => `<button class="btn" data-power="${power}" data-guest="${id}">${label}</button>`;
     const html = `${up || !v.running ? "" : `<button class="btn primary" data-console="${id}">Reconnect</button>`}
       ${v.running ? button("shutdown", "Shut down") + button("reboot", "Restart") + button("stop", "Force off") : button("start", "Start")}
+      ${screen && v.type === "qemu" ? `<button class="btn" data-bootmenu="${id}">Force BIOS</button>` : ""}
       ${screen && up ? `<button class="btn" data-vnccad="1">Send Ctrl+Alt+Del</button>` : ""}`;
     if (el.dataset.drawn !== html) {
       el.dataset.drawn = html;
@@ -2200,6 +2201,23 @@ function drawWaiting(v) {
   const box = $("#vmwaiting");
   if (box) box.innerHTML = waitingWords(v);
 }
+function forceBios(id) {
+  const v = S.data.vms.find((g) => g.id === id);
+  if (!v.running) return startToBootMenu(id);
+  confirmAction(`Restart ${v.name} into its boot menu?`, "It restarts right away, like pressing the reset button. Anything unsaved inside it is lost.", "Restart now", async () => {
+    const state = $("#vncstate");
+    const was = state?.textContent;
+    if (state) state.textContent = "Restarting to the boot menu.";
+    try {
+      const res = await post("api/action/guest-boot-menu", { server: v.node, ...guestBody(v) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+    } catch (err) {
+      failDialog(`${v.name} didn't restart`, err);
+    }
+    if (state?.isConnected) state.textContent = was;
+  }, true);
+}
 /** Goes straight to the console, because the menu is why they pressed the button. */
 async function startToBootMenu(id) {
   const v = S.data.vms.find((g) => g.id === id);
@@ -2338,7 +2356,7 @@ document.addEventListener("click", (e) => {
   if (d.console) return openConsole(+d.console);
   if (d.nodeconsole) return openNodeConsole(d.nodeconsole);
   if (d.vnccad) return vnc?.sendCtrlAltDel();
-  if (d.bootmenu) return startToBootMenu(+d.bootmenu);
+  if (d.bootmenu) return forceBios(+d.bootmenu);
   if (d.setsave) return saveSettings();
   if (d.setundo) return renderDetail();
   if (d.gdisc) return askGuestDisc();

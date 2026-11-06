@@ -415,9 +415,11 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
    */
   "guest-boot-menu": async (name, who, body) => {
     const { path } = guestPath(name, { ...body, type: "qemu" });
-    const task = await pve.post<string>(`${path}/status/start`, who);
-    const taskPath = `/nodes/${encodeURIComponent(name)}/tasks/${encodeURIComponent(task)}/status`;
-    for (let i = 0; i < 60; i++) {
+    // A running VM gets a hard reset, because a soft restart depends on the system inside and can take minutes.
+    const current = await pve.get<{ status?: string }>(`${path}/status/current`, who.ticket);
+    const task = await pve.post<string | null>(`${path}/status/${current.status === "running" ? "reset" : "start"}`, who);
+    const taskPath = `/nodes/${encodeURIComponent(name)}/tasks/${encodeURIComponent(task ?? "")}/status`;
+    for (let i = 0; task && i < 60; i++) {
       const status = await pve.get<RawTaskStatus>(taskPath, who.ticket);
       if (status.status === "stopped") {
         if (status.exitstatus !== "OK") throw new AuthError(400, status.exitstatus ?? "It wouldn't start.");

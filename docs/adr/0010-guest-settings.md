@@ -17,7 +17,7 @@ Date: 2026-11-06. Status: accepted.
 
 ## Boot menu button
 
-Proxmox has no "force BIOS setup on next boot" setting. **Boot menu** on a shut-down VM starts it, presses Esc about once every 1.2 seconds for 8 seconds, then opens the console. Faster presses failed: a VM still starting refuses keys, so refused presses are ignored and it just keeps pressing. Results on nested test VMs: BIOS 5 of 5, UEFI 3 of 4. A miss does no harm, the VM just boots normally. UEFI lands on the boot menu, where EFI Firmware Setup is one of the choices.
+Proxmox has no "force BIOS setup on next boot" setting. **Force BIOS** is on the console bar, and on a shut-down VM's own page. It presses Esc about once every 1.2 seconds for 8 seconds after starting the VM. A running VM gets a hard reset first, after asking, because a soft restart depends on the system inside and can take minutes. The console stays open throughout. Faster presses failed: a VM still starting refuses keys, so refused presses are ignored and it just keeps pressing. Results on nested test VMs: from a shut-down start, BIOS 5 of 5 and UEFI 3 of 4; from a reset at the console, BIOS 3 of 3 and UEFI 3 of 3. A miss does no harm, the VM just boots normally. UEFI lands on the boot menu, where EFI Firmware Setup is one of the choices.
 
 ## Not offered
 
