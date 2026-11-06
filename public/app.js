@@ -20,7 +20,7 @@ const APPS = {
   console: { title: "Console", color: "#20262A", w: 980, h: 680, noIcon: true },
 };
 
-const S = { watching: false, data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", ticks: 0 };
+const S = { watching: false, data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", details: {}, loadRun: 0, ticks: 0 };
 const wins = {};
 
 /* Desktop */
@@ -122,6 +122,7 @@ function openWin(app) {
   drag(el, $(".tbar", el));
   render(app);
   focusWin(app);
+  if (app === "vms" || app === "monitor") loadAhead();
 }
 function focusWin(app) {
   wins[app].style.zIndex = ++S.z;
@@ -256,25 +257,57 @@ const signal = (url) => fetch(url).then(async (res) => {
   if (!res.ok) throw new Error(body.error);
   return body;
 });
-async function loadServer() {
-  const name = S.server;
+async function loadServer(name = S.server) {
   if (!name) return;
+  const run = S.loadRun;
   try {
     const body = await signal(`api/server?name=${encodeURIComponent(name)}`);
+    if (run !== S.loadRun) return;
+    S.details[name] = body;
     if (name !== S.server) return;
     const changed = JSON.stringify(body) !== JSON.stringify(S.detail);
     S.detail = body;
     S.detailError = "";
     if (changed) renderServerDetail();
   } catch (err) {
+    if (run !== S.loadRun || name !== S.server) return;
     S.detailError = err.message || "BossMox couldn't get this node's details.";
     if (!S.detail) renderServerDetail();
+  }
+}
+/**
+ * Keeps every node and guest loaded ahead of time, so switching between them shows the page at once.
+ * One request at a time, so a big cluster doesn't get hit with all of them together, and only while
+ * the window that shows them is open. The first run, at sign-in, covers windows that aren't open yet.
+ */
+async function loadAhead() {
+  if (S.loadingAhead || !S.data) return;
+  S.loadingAhead = true;
+  const run = S.loadRun;
+  const first = !S.loadedAhead;
+  S.loadedAhead = true;
+  try {
+    if (first || wins.monitor) {
+      for (const n of S.data.nodes.filter((x) => x.online)) {
+        if (run !== S.loadRun) return;
+        await loadServer(n.name);
+      }
+    }
+    if (first || wins.vms) {
+      for (const v of S.data?.vms ?? []) {
+        if (run !== S.loadRun) return;
+        if (v.running) await loadAddress(v);
+        if (!v.template) await checkSnapshots(v);
+      }
+    }
+  } finally {
+    S.loadingAhead = false;
   }
 }
 function pickServer(name) {
   if (name !== S.server) {
     S.server = name;
-    S.detail = null;
+    S.detail = S.details[name] ?? null;
     S.detailError = "";
   }
   S.serverTab = "overview";
@@ -940,6 +973,11 @@ async function loadAddress(v) {
   const got = S.addresses?.[v.id];
   if (got && Date.now() - got.at < 20000) return;
   S.addresses = { ...S.addresses, [v.id]: { list: got?.list ?? [], known: got?.known ?? true, at: Date.now() } };
+  if (v.type === "qemu" && !v.agent) {
+    S.addresses[v.id].known = false;
+    if (S.sel === v.id && $("#vmaddr")) $("#vmaddr").textContent = addressWords(v);
+    return;
+  }
   try {
     const r = await signal(`api/guest-addresses?server=${encodeURIComponent(v.node)}&guest=${v.id}&type=${v.type}`);
     S.addresses[v.id] = { list: r.addresses, known: r.known, at: Date.now() };
@@ -1996,6 +2034,12 @@ async function showLogin(message) {
   S.server = null;
   S.detail = null;
   S.detailError = "";
+  S.details = {};
+  S.addresses = {};
+  S.snapSupport = {};
+  S.loadRun += 1;
+  S.loadingAhead = false;
+  S.loadedAhead = false;
   term?.socket?.close();
   term?.xterm?.dispose();
   term?.observer?.disconnect();
@@ -2117,7 +2161,7 @@ async function refresh() {
   if (S.tab !== "settings") renderDetail();
   renderServers();
   drawConsoleActions();
-  if (wins.monitor && ++S.ticks % 3 === 0) loadServer();
+  if (S.ticks++ % 3 === 0) loadAhead();
   render("storage");
 }
 
