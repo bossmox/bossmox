@@ -11,6 +11,25 @@ export interface Config {
   tls?: { cert: Buffer; key: Buffer };
   behindProxy: boolean;
   allowHttp: boolean;
+  /** Proxies whose X-Forwarded-For can be believed. Nobody else's is. */
+  trustedProxies: Set<string>;
+}
+
+const plainAddress = (a: string) => a.trim().toLowerCase().replace(/^::ffff:/, "");
+
+/**
+ * Who's really connecting. Behind a trusted proxy that's the nearest address in X-Forwarded-For that isn't
+ * another trusted proxy. Reading from the right matters: a client can write anything into the left of that header.
+ */
+export function clientAddress(socketAddress: string | undefined, forwarded: string | undefined, trusted: Set<string>): string {
+  const direct = plainAddress(socketAddress ?? "unknown");
+  if (!trusted.has(direct) || !forwarded) return direct;
+  const hops = forwarded.split(",").map(plainAddress).filter(Boolean);
+  for (let i = hops.length - 1; i >= 0; i--) {
+    const hop = hops[i] as string;
+    if (!trusted.has(hop)) return hop;
+  }
+  return direct;
 }
 
 function isLoopback(host: string): boolean {
@@ -34,6 +53,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     allowedHosts: new Set(["localhost", "127.0.0.1", ...extra]),
     behindProxy: env.BOSSMOX_BEHIND_HTTPS_PROXY === "1",
     allowHttp: env.BOSSMOX_ALLOW_HTTP === "1",
+    trustedProxies: new Set((env.BOSSMOX_TRUSTED_PROXY ?? "").split(",").map(plainAddress).filter(Boolean)),
   };
   if (env.PVE_CA_FILE) config.pveCa = readFileSync(env.PVE_CA_FILE);
   if (env.PVE_TLS_NAME) config.pveTlsName = env.PVE_TLS_NAME;

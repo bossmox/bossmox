@@ -4,7 +4,7 @@ import https from "node:https";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AuthError, Sessions, type LoginOutcome, type Session } from "./auth.js";
-import { loadConfig } from "./config.js";
+import { clientAddress, loadConfig } from "./config.js";
 import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
@@ -550,7 +550,8 @@ function finishLogin(res: http.ServerResponse, out: LoginOutcome) {
 
 async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, route: string) {
   if (!sameSite(req)) return json(res, 403, { error: "This request didn't come from BossMox." });
-  const address = req.socket.remoteAddress ?? "unknown";
+  const forwarded = req.headers["x-forwarded-for"];
+  const address = clientAddress(req.socket.remoteAddress, Array.isArray(forwarded) ? forwarded.join(",") : forwarded, config.trustedProxies);
   if (route === "/api/login") {
     const body = await readJson(req);
     const user = text(body.username, 128);
@@ -706,6 +707,9 @@ server.on("upgrade", async (req, socket, head) => {
     refuse();
   }
 });
+if (config.behindProxy && config.trustedProxies.size === 0) {
+  console.warn("BOSSMOX_BEHIND_HTTPS_PROXY is on but BOSSMOX_TRUSTED_PROXY isn't set, so every visitor looks like one address and a few failed sign-ins lock everyone out.");
+}
 server.listen(config.port, config.host, () => {
   console.log(`BossMox is running at ${config.tls ? "https" : "http"}://${config.host}:${config.port}`);
 });

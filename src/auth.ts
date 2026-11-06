@@ -6,6 +6,10 @@ const SESSION_MS = 12 * 60 * 60 * 1000;
 const CHALLENGE_MS = 5 * 60 * 1000;
 const FAIL_WINDOW_MS = 5 * 60 * 1000;
 const MAX_FAILS = 10;
+// One address can't reach this alone, so locking an account out takes many machines, not one.
+const MAX_ACCOUNT_FAILS = 50;
+const MAX_CODE_TRIES = 5;
+const NEVER_REACHED = new Set(["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH"]);
 
 export interface LoginClient {
   login(username: string, password: string, tfaChallenge?: string): Promise<LoginResult>;
@@ -21,6 +25,7 @@ interface Challenge {
   username: string;
   challenge: string;
   expiresAt: number;
+  tries: number;
 }
 export type LoginOutcome = { kind: "ok"; id: string; username: string } | { kind: "code"; id: string };
 
@@ -47,18 +52,23 @@ export class Sessions {
     if (s) this.onEnd(s);
   }
 
-  private checkLimit(address: string) {
-    const f = this.fails.get(address);
-    if (f && this.now() - f.first > FAIL_WINDOW_MS) this.fails.delete(address);
-    else if (f && f.count >= MAX_FAILS) throw new AuthError(429, "Too many failed sign-ins. Wait 5 minutes and try again.");
+  private checkLimit(key: string, max: number) {
+    const f = this.fails.get(key);
+    if (f && this.now() - f.first > FAIL_WINDOW_MS) this.fails.delete(key);
+    else if (f && f.count >= max) throw new AuthError(429, "Too many failed sign-ins. Wait 5 minutes and try again.");
   }
-  private noteFail(address: string) {
-    const f = this.fails.get(address);
+  private count(key: string) {
+    const f = this.fails.get(key);
     if (f) f.count += 1;
-    else this.fails.set(address, { count: 1, first: this.now() });
+    else this.fails.set(key, { count: 1, first: this.now() });
+  }
+  private uncount(key: string) {
+    const f = this.fails.get(key);
+    if (f && --f.count <= 0) this.fails.delete(key);
   }
   private sweep() {
     const t = this.now();
+    for (const [k, f] of this.fails) if (t - f.first > FAIL_WINDOW_MS) this.fails.delete(k);
     for (const [k, s] of this.sessions) if (s.expiresAt <= t) this.drop(k);
     for (const [k, c] of this.challenges) if (c.expiresAt <= t) this.challenges.delete(k);
   }
@@ -68,26 +78,41 @@ export class Sessions {
     this.sessions.set(id, { username: result.username, ticket: result.ticket, csrf: result.csrf, renewedAt: t, expiresAt: t + SESSION_MS });
     return { kind: "ok", id, username: result.username };
   }
-  private async attempt(address: string, run: () => Promise<LoginResult>, wrong: string): Promise<LoginResult> {
-    this.checkLimit(address);
+  /**
+   * Every attempt counts before Proxmox answers, or a burst sent at once would all pass the check.
+   * It's taken back on success, or if it never reached Proxmox and so can't have been a guess.
+   */
+  private async attempt(address: string, account: string, run: () => Promise<LoginResult>, wrong: string): Promise<LoginResult> {
+    const byAddress = `address:${address}`;
+    const byAccount = `account:${account.toLowerCase()}`;
+    this.checkLimit(byAddress, MAX_FAILS);
+    this.checkLimit(byAccount, MAX_ACCOUNT_FAILS);
+    this.count(byAddress);
+    this.count(byAccount);
+    const takeBack = () => {
+      this.uncount(byAddress);
+      this.uncount(byAccount);
+    };
     try {
-      return await run();
+      const result = await run();
+      takeBack();
+      return result;
     } catch (err) {
       if (err instanceof PveError && (err.status === 401 || err.status === 500)) {
         // Proxmox answers a bad second factor with either status.
-        this.noteFail(address);
         throw new AuthError(401, wrong);
       }
+      if (NEVER_REACHED.has((err as NodeJS.ErrnoException).code ?? "")) takeBack();
       throw err;
     }
   }
 
   async login(username: string, password: string, address: string): Promise<LoginOutcome> {
     this.sweep();
-    const result = await this.attempt(address, () => this.client.login(username, password), "Wrong username or password.");
+    const result = await this.attempt(address, username, () => this.client.login(username, password), "Wrong username or password.");
     if (result.needsCode) {
       const id = randomBytes(32).toString("base64url");
-      this.challenges.set(id, { username, challenge: result.ticket, expiresAt: this.now() + CHALLENGE_MS });
+      this.challenges.set(id, { username, challenge: result.ticket, expiresAt: this.now() + CHALLENGE_MS, tries: 0 });
       return { kind: "code", id };
     }
     return this.start(result);
@@ -97,7 +122,12 @@ export class Sessions {
     this.sweep();
     const c = this.challenges.get(challengeId);
     if (!c) throw new AuthError(401, "That sign-in timed out. Start again.");
-    const result = await this.attempt(address, () => this.client.login(c.username, `totp:${code}`, c.challenge), "That code didn't work. Try the next one.");
+    // Counted up front too, so a burst of guesses can't all run against one challenge.
+    if (++c.tries > MAX_CODE_TRIES) {
+      this.challenges.delete(challengeId);
+      throw new AuthError(401, "That sign-in timed out. Start again.");
+    }
+    const result = await this.attempt(address, c.username, () => this.client.login(c.username, `totp:${code}`, c.challenge), "That code didn't work. Try the next one.");
     this.challenges.delete(challengeId);
     return this.start(result);
   }

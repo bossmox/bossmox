@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Terminals } from "../src/terminal.js";
+import { clientAddress } from "../src/config.js";
 import { AuthError, Sessions, type LoginClient } from "../src/auth.js";
 import { PveError, type LoginResult } from "../src/pve.js";
 
 const HOUR = 60 * 60 * 1000;
+const FIVE_MIN = 5 * 60 * 1000;
 const ok = (ticket = "T1"): LoginResult => ({ username: "a@pve", ticket, csrf: `C-${ticket}`, needsCode: false });
 const client = (fn: LoginClient["login"]): LoginClient => ({ login: fn });
 const wrong = async (): Promise<LoginResult> => {
@@ -139,4 +141,77 @@ test("signing out during a ticket renewal still ends the session", async () => {
   sessions.end(out.id);
   release(ok("T2"));
   assert.equal(await pending, undefined);
+});
+
+test("a burst of guesses sent at once can't get past the limit", async () => {
+  let reached = 0;
+  const s = new Sessions(client(async () => {
+    reached += 1;
+    await new Promise((r) => setTimeout(r, 5));
+    throw new PveError(401, "no");
+  }));
+  const out = await Promise.allSettled(Array.from({ length: 50 }, () => s.login("a@pve", "bad", "1.1.1.1")));
+  assert.equal(reached, 10);
+  assert.equal(out.filter((o) => o.status === "rejected" && (o.reason as AuthError).status === 429).length, 40);
+});
+
+test("a success takes its attempt back, and an unreachable Proxmox doesn't count", async () => {
+  const s = new Sessions(client(async () => ok()));
+  for (let i = 0; i < 25; i++) await s.login("a@pve", "pw", "1.1.1.1");
+  const down = new Sessions(client(async () => {
+    throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+  }));
+  for (let i = 0; i < 25; i++) await assert.rejects(down.login("a@pve", "pw", "1.1.1.1"), /refused/);
+});
+
+test("a timeout still counts as a guess", async () => {
+  const s = new Sessions(client(async () => {
+    throw new Error("Proxmox took too long to answer");
+  }));
+  for (let i = 0; i < 10; i++) await assert.rejects(s.login("a@pve", "bad", "1.1.1.1"), /too long/);
+  await assert.rejects(s.login("a@pve", "bad", "1.1.1.1"), (e: AuthError) => e.status === 429);
+});
+
+test("rotating addresses still hits the limit on the account", async () => {
+  const s = new Sessions(client(wrong));
+  for (let i = 0; i < 50; i++) await assert.rejects(s.login("a@pve", "bad", `10.0.0.${i}`), (e: AuthError) => e.status === 401);
+  await assert.rejects(s.login("A@PVE", "bad", "10.0.1.1"), (e: AuthError) => e.status === 429, "case doesn't dodge it");
+  await assert.rejects(s.login("b@pve", "bad", "10.0.1.1"), (e: AuthError) => e.status === 401, "other accounts are fine");
+});
+
+test("a 2FA challenge dies after five wrong codes, even from new addresses", async () => {
+  const s = new Sessions(client(async (_u, _p, ch) => {
+    if (ch) throw new PveError(500, "bad code");
+    return { username: "a@pve", ticket: "CHALLENGE", csrf: "", needsCode: true };
+  }));
+  const first = await s.login("a@pve", "pw", "1.1.1.1");
+  for (let i = 0; i < 5; i++) await assert.rejects(s.submitCode(first.id, "000000", `9.9.9.${i}`), /didn't work/);
+  await assert.rejects(s.submitCode(first.id, "000000", "9.9.8.1"), /timed out/);
+  await assert.rejects(s.submitCode(first.id, "000000", "9.9.8.2"), /timed out/, "and it stays dead");
+});
+
+test("old failure records don't pile up", async () => {
+  let clock = 1000;
+  const s = new Sessions(client(wrong), () => clock);
+  for (let i = 0; i < 40; i++) await assert.rejects(s.login(`u${i}@pve`, "bad", `10.0.0.${i}`), AuthError);
+  const fails = (s as unknown as { fails: Map<string, unknown> }).fails;
+  assert.equal(fails.size, 80);
+  clock += FIVE_MIN + 1;
+  await assert.rejects(s.login("x@pve", "bad", "10.9.9.9"), AuthError);
+  assert.equal(fails.size, 2);
+});
+
+const trusted = new Set(["10.0.0.5"]);
+
+test("X-Forwarded-For is only believed from the trusted proxy", () => {
+  assert.equal(clientAddress("1.2.3.4", "9.9.9.9", trusted), "1.2.3.4", "anyone else can't forge it");
+  assert.equal(clientAddress("10.0.0.5", "1.2.3.4", trusted), "1.2.3.4");
+  assert.equal(clientAddress("::ffff:10.0.0.5", "1.2.3.4", trusted), "1.2.3.4");
+  assert.equal(clientAddress("10.0.0.5", undefined, trusted), "10.0.0.5");
+});
+
+test("a client can't forge its way past the proxy's own entry", () => {
+  assert.equal(clientAddress("10.0.0.5", "9.9.9.9, 1.2.3.4", trusted), "1.2.3.4", "the proxy adds the real one on the right");
+  assert.equal(clientAddress("10.0.0.5", "1.2.3.4, 10.0.0.5", trusted), "1.2.3.4", "skips trusted hops");
+  assert.equal(clientAddress("1.2.3.4", "9.9.9.9", new Set()), "1.2.3.4", "with nothing trusted the header is ignored");
 });
