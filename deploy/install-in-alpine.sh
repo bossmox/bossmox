@@ -124,29 +124,50 @@ rm -f /etc/periodic/15min/bossmox-setup-code
 cat > /usr/local/sbin/bossmox-console <<'EOF'
 #!/bin/sh
 trap '' INT QUIT TSTP
-# Read from across a room or in a small window, so the screen gets a big font. The serial port has its own.
-[ "$(tty)" = /dev/tty1 ] && setfont /usr/share/consolefonts/solar24x32.psfu.gz 2>/dev/null
+# Read from across a room or in a small window, so the screen gets a big font and BossMox's teal.
+# The serial port keeps its own font and shows the nearest standard colour.
+if [ "$(tty)" = /dev/tty1 ]; then
+  setfont /usr/share/consolefonts/solar24x32.psfu.gz 2>/dev/null
+  printf '\033]P60E7EA6'
+fi
+COLS=$(stty size 2>/dev/null | cut -d' ' -f2)
+[ -n "$COLS" ] && [ "$COLS" -gt 0 ] || COLS=80
+BAND='\033[0;1;97;46m'
+PLAIN='\033[0m'
+BRIGHT='\033[1;97m'
+CODE='\033[1;93m'
+GOOD='\033[1;92m'
+BAD='\033[1;91m'
+DIM='\033[0;37m'
+EOL='\033[K'
+printf '\033[2J'
 while :; do
   ADDR=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
-  printf '\033[2J\033[H\n'
-  printf '  BossMox\n  Management app for Proxmox Virtual Environment\n\n\n'
+  # Drawn over the old screen rather than clearing it, so it doesn't flicker every few seconds.
+  printf '\033[H'
+  printf "$BAND"; printf '%*s\n' "$COLS" ''
+  printf "$BAND"; printf '%-*s\n' "$COLS" '  BossMox'
+  printf "$BAND"; printf '%-*s\n' "$COLS" '  Management app for Proxmox VE'
+  printf "$BAND"; printf '%*s\n' "$COLS" ''
+  printf "$PLAIN$EOL\n$EOL\n"
   if [ -z "$ADDR" ]; then
-    printf '  Waiting for a network address.\n'
+    printf "  ${BRIGHT}Waiting for a network address.$PLAIN$EOL\n$EOL\n$EOL\n$EOL\n"
   elif [ -f /var/lib/bossmox/setup.hash ] && [ -f /var/lib/bossmox/setup.code ]; then
-    CODE=$(sed 's/..../&-/g; s/-$//' /var/lib/bossmox/setup.code)
-    printf '  This BossMox isn'"'"'t set up yet.\n\n'
-    printf '  Open:        https://%s\n' "$ADDR"
-    printf '  Setup code:  %s\n' "$CODE"
+    CODE_TEXT=$(sed 's/..../&-/g; s/-$//' /var/lib/bossmox/setup.code)
+    printf "  ${BRIGHT}Ready to set up$PLAIN$EOL\n$EOL\n"
+    printf "  Open         ${BRIGHT}https://%s$PLAIN$EOL\n" "$ADDR"
+    printf "  Setup code   ${CODE}%s$PLAIN$EOL\n" "$CODE_TEXT"
   else
-    if rc-service bossmox status >/dev/null 2>&1; then STATE="Running"; else STATE="Not running"; fi
-    printf '  Manage at:   https://%s\n' "$ADDR"
-    printf '  BossMox:     %s\n' "$STATE"
+    if rc-service bossmox status >/dev/null 2>&1; then STATE="${GOOD}Running"; else STATE="${BAD}Not running"; fi
+    printf "  ${BRIGHT}BossMox is set up$PLAIN$EOL\n$EOL\n"
+    printf "  Manage at    ${BRIGHT}https://%s$PLAIN$EOL\n" "$ADDR"
+    printf "  Status       $STATE$PLAIN$EOL\n"
   fi
-  printf '\n\n  Press L to log in to this machine.\n'
+  printf "$EOL\n$EOL\n$EOL\n  ${DIM}Press L to log in to this machine$PLAIN$EOL\n\033[J"
   KEY=""
   read -r -s -n 1 -t 5 KEY 2>/dev/null || true
   case "$KEY" in
-    l|L) printf '\033[2J\033[H'; /bin/login; ;;
+    l|L) printf '\033[0m\033[2J\033[H'; /bin/login; printf '\033[2J' ;;
   esac
 done
 EOF
