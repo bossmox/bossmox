@@ -16,13 +16,14 @@ const APPS = {
   storage: { title: "Storage", color: "#B9680A", w: 520, h: 420 },
   network: { title: "Network", color: "#2F7A7E", w: 460, h: 250 },
   backups: { title: "Backups", color: "#C43838", w: 460, h: 250 },
+  terminal: { title: "Install updates", color: "#20262A", w: 860, h: 560, noIcon: true },
 };
 
 const S = { data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", ticks: 0 };
 const wins = {};
 
 /* Desktop */
-$("#icons").innerHTML = Object.entries(APPS).map(([k, a]) => `
+$("#icons").innerHTML = Object.entries(APPS).filter(([, a]) => !a.noIcon).map(([k, a]) => `
   <button class="icon" data-open="${k}"><span class="tile" style="background:${a.color}"><svg viewBox="0 0 32 32">${GLYPHS[k]}</svg></span>${a.title}</button>`).join("");
 
 const count = (n) => ["No things", "One thing", "Two things", "Three things"][n] ?? `${n} things`;
@@ -258,10 +259,10 @@ const SERVER_TAB = {
       ${items.map((u) => `<div class="snap"><div>${esc(u.name)}<small>${esc(u.title)}</small></div><code class="ver">${esc(u.from)} to ${esc(u.to)}</code></div>`).join("")}</details>` : "";
     return `
     <div class="head"><div>${d.channel ? `<p class="meta" style="margin-top:0">Update channel: ${esc(d.channel.name)}. ${esc(d.channel.note)}</p>` : ""}</div>
-      <button class="btn" data-check="${esc(d.name)}">Check for updates</button></div>
+      <div class="actions"><button class="btn" data-check="${esc(d.name)}">Check for updates</button>${d.updates.total ? `<button class="btn primary" data-install="${esc(d.name)}">Install updates</button>` : ""}</div></div>
     ${d.updates.total ? `<p style="margin-top:10px"><b>${d.updates.total} waiting.</b> ${d.updates.rebootNeeded ? "The new kernel means a restart afterward." : "No restart should be needed."}</p>
       ${group("Kernel", d.updates.kernel, true)}${group("Proxmox", d.updates.proxmox, true)}${group("Everything else", d.updates.other, false)}
-      <p class="meta">Installing from BossMox comes next. This list is from the server's last check for updates.</p>` : `<p class="empty">This server is up to date as of its last check for updates.</p>`}`;
+      <p class="meta">This list is from the server's last check for updates.</p>` : `<p class="empty">This server is up to date as of its last check for updates.</p>`}`;
   },
   services: (d) => {
     if (!d.services) return noAccess("services", "Sys.Audit");
@@ -350,8 +351,80 @@ async function runAction(action, server, title) {
   }
 }
 
+/* Update terminal */
+let term = null;
+function closeTerminal() {
+  term?.socket?.close();
+  term?.xterm?.dispose();
+  term?.observer?.disconnect();
+  term = null;
+  if (wins.terminal) {
+    wins.terminal.remove();
+    delete wins.terminal;
+  }
+  renderTasks();
+  loadServer();
+}
+async function openTerminal(server) {
+  if (term) return openWin("terminal");
+  try {
+    const res = await post("api/action/install-updates", { server });
+    const body = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) throw new Error(body.error);
+    openWin("terminal");
+    $(".wbody", wins.terminal).innerHTML = `<div class="termwrap"><p class="termhelp">Updating ${esc(server)}. Check the list, then type <b>Y</b> and press Enter to install.</p><div id="termbox"></div></div>`;
+    const dark = { background: "#07161C", foreground: "#CFE6DF" };
+    const xterm = new Terminal({ cursorBlink: true, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 14, theme: dark, scrollback: 10000 });
+    const fit = new FitAddon.FitAddon();
+    xterm.loadAddon(fit);
+    xterm.open($("#termbox"));
+    fit.fit();
+    const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/terminal?id=${encodeURIComponent(body.terminal)}`, "binary");
+    socket.binaryType = "arraybuffer";
+    const utf8 = new TextEncoder();
+    const resize = () => {
+      fit.fit();
+      if (socket.readyState === 1) socket.send(`1:${xterm.cols}:${xterm.rows}:`);
+    };
+    socket.onopen = () => {
+      resize();
+      xterm.focus();
+    };
+    const decoder = new TextDecoder();
+    let recent = "";
+    socket.onmessage = (e) => {
+      const bytes = new Uint8Array(e.data);
+      xterm.write(bytes);
+      if (term?.done) return;
+      // Proxmox prints this when the updater finishes, then leaves a root shell open.
+      recent = (recent + decoder.decode(bytes)).slice(-200);
+      if (recent.includes("starting shell") && term) {
+        term.done = true;
+        $(".termhelp").textContent = `The updater has finished on ${server}. Check the output, then close this window.`;
+      }
+    };
+    socket.onclose = () => {
+      if (term?.socket === socket) {
+        term.done = true;
+        xterm.write("\r\n\r\nThe session has ended. You can close this window.\r\n");
+      }
+    };
+    xterm.onData((d) => {
+      if (socket.readyState === 1) socket.send(`0:${utf8.encode(d).length}:${d}`);
+    });
+    const observer = new ResizeObserver(resize);
+    observer.observe($("#termbox"));
+    const ping = setInterval(() => socket.readyState === 1 ? socket.send("2") : clearInterval(ping), 30000);
+    term = { socket, xterm, observer, server, done: false };
+  } catch (err) {
+    dialog(`<h3>Couldn't start the install</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
+  }
+}
+
 const soon = (t, line) => () => `<div class="soon"><h2>${t}</h2><p>${line}</p></div>`;
 const RENDER = {
+  terminal: () => "",
   vms: vmsShell, monitor: monView, storage: storeView,
   create: soon("Create a VM", "Not built yet."),
   network: soon("Network", "Not built yet."),
@@ -364,6 +437,12 @@ document.addEventListener("click", (e) => {
   if (!t) return;
   const d = t.dataset;
   if (d.open) return openWin(d.open);
+  if (d.close === "terminal") {
+    if (term && !term.done) {
+      return confirmAction("Close this window?", "If updates are installing, closing may interrupt them. Close it only if the install has finished.", "Close anyway", closeTerminal);
+    }
+    return closeTerminal();
+  }
   if (d.close) {
     wins[d.close].remove();
     delete wins[d.close];
@@ -387,6 +466,11 @@ document.addEventListener("click", (e) => {
   if (d.check) {
     const server = d.check;
     return confirmAction(`Check ${server} for updates?`, "This only looks for new updates. It doesn't install anything.", `Check ${server}`, () => runAction("check-updates", server, `Checking ${server} for updates`));
+  }
+  if (d.install) {
+    const server = d.install;
+    const n = S.detail?.updates?.total ?? 0;
+    return confirmAction(`Install ${n} updates on ${server}?`, S.detail?.updates?.rebootNeeded ? "This opens a terminal on the server and installs in the foreground. A restart will be needed afterward. You'll get one more chance to review the list." : "This opens a terminal on the server and installs in the foreground. You'll get one more chance to review the list.", `Open installer for ${server}`, () => openTerminal(server));
   }
   if (d.servertab) {
     S.serverTab = d.servertab;
@@ -464,6 +548,10 @@ async function showLogin(message) {
   S.server = null;
   S.detail = null;
   S.detailError = "";
+  term?.socket?.close();
+  term?.xterm?.dispose();
+  term?.observer?.disconnect();
+  term = null;
   Object.keys(wins).forEach((k) => {
     wins[k].remove();
     delete wins[k];

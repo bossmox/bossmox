@@ -245,3 +245,8 @@ summary{cursor:pointer;font-weight:650}
 #dialog p.loginerr{color:var(--bad)}
 #dialog .row-end{display:flex;justify-content:flex-end;gap:8px;margin-top:20px;flex-wrap:wrap}
 .tasklog{background:#07161C;color:#CFE6DF;border-radius:var(--r-s);padding:12px;margin:14px 0 0;max-height:240px;overflow:auto;font:12.5px/1.5 ui-monospace,Consolas,monospace;white-space:pre-wrap;word-break:break-word}
+
+/* Update terminal */
+.termwrap{display:flex;flex-direction:column;height:100%;background:#07161C}
+.termhelp{margin:0;padding:9px 14px;font-size:14px;background:var(--surface2);color:var(--ink)}
+#termbox{flex:1;min-height:0;padding:8px}

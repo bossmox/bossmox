@@ -10,7 +10,7 @@ PVE_URL=$4
 TLS_NAME=${5:-}
 
 npm test >/dev/null
-tar -czf /tmp/bossmox.tgz dist/src public deploy package.json
+tar -czf /tmp/bossmox.tgz dist/src public deploy package.json node_modules/ws
 scp -q /tmp/bossmox.tgz deploy/install-in-lxc.sh "$HOST:/tmp/"
 rm -f /tmp/bossmox.tgz
 ssh -o BatchMode=yes "$HOST" "pct push $CT /tmp/bossmox.tgz /tmp/bossmox.tgz \

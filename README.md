@@ -8,7 +8,7 @@ BossMox is an independent project. It is not affiliated with or endorsed by Prox
 
 ## Status
 
-Early. Sign in with your normal Proxmox account, including authenticator-app 2FA. You see and do what your Proxmox permissions allow. This version shows servers, VMs, containers, snapshots, storage, updates, services and recent activity, and points out things worth a look. The one thing it can change so far is checking a server for updates.
+Early. Sign in with your normal Proxmox account, including authenticator-app 2FA. You see and do what your Proxmox permissions allow. This version shows servers, VMs, containers, snapshots, storage, updates, services and recent activity, and points out things worth a look. It can check a server for updates and install them in a live terminal. Everything it can change is listed in `ACTIONS` and the install route in `src/server.ts`.
 
 Hardware security keys (WebAuthn) and recovery codes don't work in BossMox yet.
 

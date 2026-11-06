@@ -9,6 +9,8 @@ FROM node:22.22.2-alpine
 WORKDIR /app
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=8080
 COPY --from=build /app/dist ./dist
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 COPY public ./public
 USER node
 EXPOSE 8080

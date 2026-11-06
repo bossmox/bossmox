@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AuthError, Sessions, type LoginOutcome, type Session } from "./auth.js";
 import { loadConfig } from "./config.js";
+import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import {
@@ -26,6 +27,9 @@ const STATIC: Record<string, [string, string]> = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/style.css": ["style.css", "text/css; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
+  "/vendor/xterm.js": ["vendor/xterm.js", "text/javascript; charset=utf-8"],
+  "/vendor/addon-fit.js": ["vendor/addon-fit.js", "text/javascript; charset=utf-8"],
+  "/vendor/xterm.css": ["vendor/xterm.css", "text/css; charset=utf-8"],
 };
 const HEADERS = {
   "Content-Security-Policy":
@@ -40,6 +44,7 @@ const MAX_BODY = 8 * 1024;
 const config = loadConfig();
 const pve = new PveClient(config);
 const sessions = new Sessions(pve);
+const terminals = new Terminals(config);
 const secureCookie = Boolean(config.tls) || config.behindProxy;
 const cache = new WeakMap<Session, { at: number; value: Promise<Overview> }>();
 
@@ -113,9 +118,26 @@ const ACTIONS: Record<string, (name: string, who: Identity) => Promise<string>> 
   "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
 };
 
+async function openUpdateTerminal(res: http.ServerResponse, name: string, session: Session) {
+  const proxy = await pve.post<TermProxy>(`/nodes/${encodeURIComponent(name)}/termproxy`, session, { cmd: "upgrade" });
+  return json(res, 200, { terminal: terminals.prepare(name, session, proxy) });
+}
+
 async function runAction(req: http.IncomingMessage, res: http.ServerResponse, action: string) {
   const session = await sessions.get(cookieId(req));
   if (!session) return json(res, 401, { error: "Sign in to continue." });
+  if (action === "install-updates") {
+    const name = text((await readJson(req)).server, 64);
+    if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+    try {
+      return await openUpdateTerminal(res, name, session);
+    } catch (err) {
+      if (err instanceof PveError && err.status === 403) {
+        return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
+      }
+      throw err;
+    }
+  }
   const run = ACTIONS[action];
   if (!run) return json(res, 404, { error: "BossMox doesn't have that action." });
   const name = text((await readJson(req)).server, 64);
@@ -268,6 +290,25 @@ const handler: http.RequestListener = async (req, res) => {
 };
 
 const server = config.tls ? https.createServer(config.tls, handler) : http.createServer(handler);
+
+server.on("upgrade", async (req, socket, head) => {
+  const refuse = () => {
+    socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+  };
+  try {
+    const url = new URL(req.url ?? "/", "http://local");
+    const origin = req.headers.origin ?? "";
+    // Browsers don't apply same-origin rules to WebSockets, so the Origin check here is required.
+    if (url.pathname !== "/api/terminal" || !hostAllowed(req.headers.host) || !origin || !hostAllowed(new URL(origin).host)) return refuse();
+    const session = await sessions.get(cookieId(req));
+    const term = session && terminals.claim(url.searchParams.get("id") ?? "", session);
+    if (!term) return refuse();
+    terminals.connect(req, socket, head, term);
+  } catch {
+    refuse();
+  }
+});
 server.listen(config.port, config.host, () => {
   console.log(`BossMox is running at ${config.tls ? "https" : "http"}://${config.host}:${config.port}`);
 });
