@@ -20,7 +20,7 @@ const APPS = {
   console: { title: "Console", color: "#20262A", w: 980, h: 680, noIcon: true },
 };
 
-const S = { watching: false, data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", details: {}, loadRun: 0, ticks: 0 };
+const S = { watching: false, data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", details: {}, nets: {}, loadRun: 0, ticks: 0 };
 const wins = {};
 
 /* Desktop */
@@ -122,7 +122,7 @@ function openWin(app) {
   drag(el, $(".tbar", el));
   render(app);
   focusWin(app);
-  if (app === "vms" || app === "monitor") loadAhead();
+  if (app === "vms" || app === "monitor" || app === "network") loadAhead();
 }
 function focusWin(app) {
   wins[app].style.zIndex = ++S.z;
@@ -291,6 +291,16 @@ async function loadAhead() {
       for (const n of S.data.nodes.filter((x) => x.online)) {
         if (run !== S.loadRun) return;
         await loadServer(n.name);
+      }
+    }
+    if (first || wins.network) {
+      for (const n of (S.data?.nodes ?? []).filter((x) => x.online)) {
+        if (run !== S.loadRun) return;
+        const net = await signal(`api/network?server=${encodeURIComponent(n.name)}`).catch(() => null);
+        if (!net || run !== S.loadRun) continue;
+        const changed = JSON.stringify(net) !== JSON.stringify(S.nets[n.name]);
+        S.nets[n.name] = net;
+        if (changed && n.name === S.netServer && $("#netdetail")) drawNetwork(net);
       }
     }
     if (first || wins.vms) {
@@ -934,6 +944,15 @@ function rollingNext(plan) {
 }
 
 /* Network, read only for now: a wrong change here can cut off the server, so editing needs its own design. */
+function drawNetwork(n) {
+  const fact = (label, value) => (value ? `<dt>${label}</dt><dd>${esc(value)}</dd>` : "");
+  const card = (i) => `<article class="netcard"><header><span class="dot ${i.active ? "running" : ""}"></span><b>${esc(i.name)}</b><small>${esc(i.kind)}${i.active ? "" : ", not connected"}</small></header>
+    ${i.note ? `<p class="meta">${esc(i.note)}</p>` : ""}
+    <dl class="plain">${fact("Address", i.address)}${fact("Gateway", i.gateway)}${fact("Uses", i.ports.join(", "))}${fact("Part of", i.partOf)}${i.kind === "Virtual switch" ? `<dt>Guests</dt><dd>${esc(i.guests.join(", ") || "None")}</dd>` : ""}</dl></article>`;
+  $("#netdetail").innerHTML = `<div class="head"><div><h2>${esc(n.server)}</h2><div class="state">${n.dnsServers.length ? `Looks up names with ${esc(n.dnsServers.join(", "))}` : "No name server set"}${n.searchDomain ? `, in ${esc(n.searchDomain)}` : ""}</div></div></div>
+    ${n.interfaces.map(card).join("") || `<p class="empty">This node didn't report any network connections.</p>`}
+    <p class="meta">BossMox shows the network but can't change it yet. A wrong change here can cut off the node, so that's coming with a safety net.</p>`;
+}
 async function loadNetwork() {
   const list = $("#netlist");
   if (!list) return;
@@ -946,16 +965,14 @@ async function loadNetwork() {
     box.innerHTML = `<p class="empty">Waiting for a node to come online.</p>`;
     return;
   }
+  if (S.nets[asked]) drawNetwork(S.nets[asked]);
+  const run = S.loadRun;
   try {
     const n = await signal(`api/network?server=${encodeURIComponent(asked)}`);
-    if (asked !== S.netServer || !$("#netdetail")) return;
-    const fact = (label, value) => (value ? `<dt>${label}</dt><dd>${esc(value)}</dd>` : "");
-    const card = (i) => `<article class="netcard"><header><span class="dot ${i.active ? "running" : ""}"></span><b>${esc(i.name)}</b><small>${esc(i.kind)}${i.active ? "" : ", not connected"}</small></header>
-      ${i.note ? `<p class="meta">${esc(i.note)}</p>` : ""}
-      <dl class="plain">${fact("Address", i.address)}${fact("Gateway", i.gateway)}${fact("Uses", i.ports.join(", "))}${fact("Part of", i.partOf)}${i.kind === "Virtual switch" ? `<dt>Guests</dt><dd>${esc(i.guests.join(", ") || "None")}</dd>` : ""}</dl></article>`;
-    $("#netdetail").innerHTML = `<div class="head"><div><h2>${esc(n.server)}</h2><div class="state">${n.dnsServers.length ? `Looks up names with ${esc(n.dnsServers.join(", "))}` : "No name server set"}${n.searchDomain ? `, in ${esc(n.searchDomain)}` : ""}</div></div></div>
-      ${n.interfaces.map(card).join("") || `<p class="empty">This node didn't report any network connections.</p>`}
-      <p class="meta">BossMox shows the network but can't change it yet. A wrong change here can cut off the node, so that's coming with a safety net.</p>`;
+    if (run !== S.loadRun || asked !== S.netServer || !$("#netdetail")) return;
+    const changed = JSON.stringify(n) !== JSON.stringify(S.nets[asked]);
+    S.nets[asked] = n;
+    if (changed) drawNetwork(n);
   } catch (err) {
     if (err.message !== "signed out" && $("#netdetail")) $("#netdetail").innerHTML = `<p class="empty">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>`;
   }
@@ -2035,6 +2052,7 @@ async function showLogin(message) {
   S.detail = null;
   S.detailError = "";
   S.details = {};
+  S.nets = {};
   S.addresses = {};
   S.snapSupport = {};
   S.loadRun += 1;
