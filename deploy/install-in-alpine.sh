@@ -128,6 +128,8 @@ ADDR=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -
   echo
   echo '# end BossMox setup'
 } >> "$ISSUE"
+# A login prompt only reads that file when it starts, so bring up a fresh one.
+pkill -f getty 2>/dev/null || true
 EOF
 chmod 755 /usr/local/sbin/bossmox-setup-code
 # Setup restarts the service without passing through here, so this clears the console message afterward.
