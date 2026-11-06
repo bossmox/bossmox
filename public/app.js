@@ -307,10 +307,15 @@ function renderDetail() {
       <div class="actions">${v.template ? `<button class="btn primary" data-clone="${v.id}">New from template</button>` : v.running
         ? `<button class="btn" data-console="${v.id}">Console</button><button class="btn" data-power="shutdown">Shut down</button><button class="btn" data-power="reboot">Restart</button><button class="btn" data-power="stop">Force off</button>`
         : `<button class="btn primary" data-power="start">Start</button>`}${v.template ? "" : `<button class="btn" data-clone="${v.id}">Clone</button>`}${(S.data?.nodes.length ?? 0) > 1 && !v.template ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${v.running || v.template ? "" : `<button class="btn" data-maketemplate="${v.id}">Make template</button>`}${v.running ? "" : `<button class="btn" data-guestdelete="${v.id}">Delete</button>`}</div></div>
+    <div id="vmwaiting">${waitingWords(v)}</div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["hardware", "Hardware"], ...(v.template ? [] : [["snapshots", "Snapshots"]]), ["settings", "Settings"]].map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${TAB[S.tab](v)}</div>`;
   if (S.tab === "snapshots") checkSnapshots(v);
   if (S.tab === "overview" && v.running) loadAddress(v);
+  if (S.tab === "settings") {
+    if (!S.cpuTypes) loadCpuTypes(v.node);
+    loadWaiting(v);
+  }
 }
 const when = (t) => (t ? new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Time not recorded");
 const TAB = {
@@ -335,6 +340,7 @@ const TAB = {
     const nic = (n) => `<div class="snap"><div>${esc(n.bridge || "Not connected")}${n.vlan ? `, VLAN ${esc(n.vlan)}` : ""}<small>${esc(n.model)}, ${esc(n.mac)}</small></div>${lock && v.nics.length > 1 ? `<button class="btn" data-nicremove="${esc(n.slot)}">Remove</button>` : ""}</div>`;
     return `${v.configLoaded ? "" : `<p class="meta">Proxmox didn't return this guest's settings.</p>`}
       <div class="hwhead"><h3>Disks</h3>${lock ? `<button class="btn" data-diskadd="1">Add a disk</button>` : ""}</div>${v.disks.map(disk).join("") || `<p class="empty">No disks.</p>`}
+      ${v.type === "qemu" && !v.discLocked ? `<div class="hwhead"><h3>Disc drive</h3><button class="btn" data-gdisc="1">Change disc</button></div><div class="snap"><div>${v.disc ? esc(v.disc.split("/").pop()) : "Empty"}</div></div>` : ""}
       <div class="hwhead"><h3>Network</h3>${lock ? `<button class="btn" data-nicadd="1">Add a network card</button>` : ""}</div>${v.nics.map(nic).join("") || `<p class="empty">Not connected to a network.</p>`}
       ${v.running && lock ? `<p class="meta">It's running. Added disks usually appear right away, but some changes wait until it's shut down and started.</p>` : ""}`;
   },
@@ -344,8 +350,7 @@ const TAB = {
     ${v.snapshots.length
       ? v.snapshots.map((s) => `<div class="snap"><div>${esc(s.name)}<small>${esc(s.description ? `${s.description}, ${when(s.takenAt)}` : when(s.takenAt))}</small></div><div class="actions"><button class="btn" data-snaprestore="${esc(s.name)}">Go back to this</button><button class="btn" data-snapdelete="${esc(s.name)}">Delete</button></div></div>`).join("")
       : S.snapSupport?.[v.id] === false ? "" : `<p class="empty">This VM has no snapshots yet.</p>`}`,
-  settings: (v) => `<div class="row-end" style="margin:0 0 12px"><button class="btn" data-guestedit="${v.id}">Change settings</button></div><div class="raw">${Object.entries(v.tech).map(([k, val]) => `<span>${esc(k)}</span><code>${esc(val)}</code>`).join("")}</div>
-    ${v.configLoaded ? "" : `<p class="meta">Proxmox didn't return this VM's settings.</p>`}`,
+  settings: (v) => settingsPane(v),
 };
 
 /* Servers and Storage */
@@ -384,6 +389,12 @@ async function loadServer(name = S.server) {
  * One request at a time, so a big cluster doesn't get hit with all of them together, and only while
  * the window that shows them is open. The first run, at sign-in, covers windows that aren't open yet.
  */
+async function loadCpuTypes(node) {
+  if (S.cpuTypes || !node) return;
+  try {
+    S.cpuTypes = (await signal(`api/cpu-types?server=${encodeURIComponent(node)}`)).types;
+  } catch { /* the common types are still offered */ }
+}
 async function loadAhead() {
   if (S.loadingAhead || !S.data) return;
   S.loadingAhead = true;
@@ -408,6 +419,7 @@ async function loadAhead() {
         if (changed && n.name === S.netServer && $("#netdetail")) drawNetwork(net);
       }
     }
+    if (first) await loadCpuTypes(onlineNodes()[0]);
     if (first || wins.tasklog) await loadTaskLog();
     if (first || wins.storage) await loadStorage();
     // Disks answer slowly and rarely change, but a failing one should still reach the desktop.
@@ -423,6 +435,7 @@ async function loadAhead() {
       for (const v of S.data?.vms ?? []) {
         if (run !== S.loadRun) return;
         if (v.running) await loadAddress(v);
+        if (!v.template) await loadWaiting(v);
         if (!v.template) await checkSnapshots(v);
       }
     }
@@ -2068,46 +2081,137 @@ async function openConsole(id) {
   }
 }
 
-/* Changing a VM or container's settings */
-async function askGuestEdit(id) {
-  const v = S.data?.vms.find((g) => g.id === id);
-  if (!v) return;
-  let discs = null;
-  if (v.type === "qemu" && !v.discLocked) {
-    try {
-      discs = (await signal(`api/create-plan?server=${encodeURIComponent(v.node)}&kind=qemu`)).installers;
-    } catch (err) {
-      if (err.message === "signed out") return;
-    }
-  }
-  S.editing = v.id;
-  const known = discs?.some((d) => d.volid === v.disc);
-  dialog(`<h3>Change ${esc(v.name)}</h3>${v.running ? `<p>It's running, so new cores and memory apply the next time it's shut down and started.</p>` : ""}
-    <p class="loginerr" id="editerr" hidden></p>
-    <label class="field restartname"><span>Name</span><input id="ename" maxlength="63" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(v.name)}"></label>
-    <div class="createrow"><label class="field"><span>Processor cores</span><input id="ecores" type="number" min="1" max="128" value="${v.cores}"></label>
-    <label class="field"><span>Memory in GB</span><input id="ememory" type="number" min="0.25" step="0.25" value="${v.memoryMb / 1024}"></label></div>
-    ${discs ? `<label class="field"><span>Installer disc</span><select id="edisc"><option value="">No disc</option>${v.disc && !known ? `<option value="${esc(v.disc)}" selected>${esc(v.disc)}</option>` : ""}${discs.map((d) => `<option value="${esc(d.volid)}" ${d.volid === v.disc ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select></label>` : ""}
-    <label class="createcheck"><input id="eboot" type="checkbox" ${v.startsAtBoot ? "checked" : ""}> Start when its node starts</label>
-    ${v.type === "qemu" ? `<label class="createcheck"><input id="eagent" type="checkbox" ${v.agent ? "checked" : ""}> The guest agent is installed inside it</label>` : ""}
-    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-guestsave="1">Save</button></div>`);
+/* Changing a VM or container's settings. The whole tab is the form, and only what changed gets sent. */
+const CPU_COMMON = [["", "Proxmox default (kvm64)"], ["x86-64-v2-AES", "x86-64-v2-AES: moves between most hardware"], ["x86-64-v3", "x86-64-v3: newer, still portable"], ["host", "host: fastest, but needs matching hardware to move"]];
+const OS_WORDS = [["l26", "Linux"], ["win11", "Windows 11 or Server 2022 and later"], ["win10", "Windows 10 or Server 2016 and 2019"], ["win8", "Windows 8 or Server 2012"], ["win7", "Windows 7 or Server 2008 R2"], ["l24", "Older Linux (2.4)"], ["solaris", "Solaris"], ["other", "Something else"]];
+const MACHINE_WORDS = [["", "i440fx (default)"], ["q35", "q35 (newer, needed for PCIe passthrough)"]];
+const CONTROLLER_WORDS = [["virtio-scsi-single", "VirtIO SCSI single (best for Linux)"], ["virtio-scsi-pci", "VirtIO SCSI"], ["lsi", "LSI 53C895A (works without drivers)"], ["lsi53c810", "LSI 53C810"], ["megasas", "MegaRAID SAS"], ["pvscsi", "VMware PVSCSI"]];
+const DISPLAY_WORDS = [["", "Default"], ["std", "Standard VGA"], ["virtio", "VirtIO GPU"], ["qxl", "SPICE (qxl)"], ["vmware", "VMware compatible"], ["serial0", "Serial console"], ["none", "None"]];
+const WAIT_WORDS = { memory: "Memory", cores: "Processor cores", sockets: "Sockets", cpu: "Processor type", balloon: "Memory it can shrink to", machine: "Machine type", scsihw: "Disk controller", vga: "Display", ostype: "Operating system", name: "Name", onboot: "Start at boot", swap: "Swap", agent: "Guest agent", tablet: "Tablet pointer", numa: "NUMA", cpulimit: "Processor limit", hostname: "Name", features: "Features", nameserver: "DNS servers", searchdomain: "Search domain", bios: "Starts with" };
+const pickOne = (id, choices, now) => {
+  const list = choices.some(([k]) => k === now) ? choices : [...choices, [now, now]];
+  return `<select data-set="${id}">${list.map(([k, l]) => `<option value="${esc(k)}" ${k === now ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+};
+const setText = (id, label, now, extra = "") => `<label class="field"><span>${label}</span><input data-set="${id}" value="${esc(now ?? "")}" autocomplete="off" autocapitalize="none" spellcheck="false" ${extra}></label>`;
+const setNumber = (id, label, now, extra = "") => `<label class="field"><span>${label}</span><input data-set="${id}" type="number" value="${now ?? ""}" ${extra}></label>`;
+const setGb = (id, label, mb, extra = "") => `<label class="field"><span>${label}</span><input data-set="${id}" data-gb="1" type="number" min="0" step="0.25" value="${mb === null || mb === undefined ? "" : mb / 1024}" ${extra}></label>`;
+const setCheck = (id, label, on) => `<label class="createcheck"><input data-set="${id}" type="checkbox" ${on ? "checked" : ""}> ${label}</label>`;
+const setPick = (id, label, choices, now) => `<label class="field"><span>${label}</span>${pickOne(id, choices, now)}</label>`;
+function settingsPane(v) {
+  const s = v.settings;
+  if (!s) return `<p class="meta">Proxmox didn't return this guest's settings.</p>`;
+  const cpu = [...CPU_COMMON, ...(S.cpuTypes ?? []).filter((c) => !CPU_COMMON.some(([k]) => k === c)).map((c) => [c, c])];
+  const common = `<h3 class="sethead">General</h3>
+    ${setText("name", "Name", s.name, 'maxlength="63"')}
+    <label class="field"><span>Notes</span><textarea data-set="notes" rows="3" maxlength="8000">${esc(s.notes)}</textarea></label>
+    <div class="createrow">${setText("tags", "Tags, separated by spaces", s.tags)}${setNumber("startOrder", "Start order, if it matters", s.startOrder, 'min="1" max="999"')}</div>
+    ${setCheck("onboot", "Start when its node starts", s.onboot)}
+    ${setCheck("protection", "Protect from being deleted", s.protection)}`;
+  const body = v.type === "qemu" ? `${common}
+    <h3 class="sethead">Processor</h3>
+    <div class="createrow">${setNumber("cores", "Cores", s.cores, 'min="1" max="128"')}${setNumber("sockets", "Sockets", s.sockets, 'min="1" max="4"')}</div>
+    ${setPick("cpu", "Type", cpu, s.cpu)}
+    <div class="createrow">${setNumber("cpuLimit", "Limit in cores, blank for none", s.cpuLimit, 'min="0" max="128" step="0.25"')}</div>
+    ${setCheck("numa", "NUMA, for VMs that span physical processors", s.numa)}
+    <h3 class="sethead">Memory</h3>
+    <div class="createrow">${setGb("memoryMb", "Memory in GB", s.memoryMb, 'min="0.25"')}${setGb("balloonMb", "Can shrink to, in GB. Blank to stay fixed", s.balloonMb)}</div>
+    <h3 class="sethead">System</h3>
+    ${setPick("ostype", "Operating system", OS_WORDS, s.ostype)}
+    ${setPick("bios", "Starts with", [["seabios", "BIOS"], ["ovmf", "UEFI"]], s.bios)}
+    ${setPick("machine", "Machine type", MACHINE_WORDS, s.machine)}
+    ${setPick("scsihw", "Disk controller", CONTROLLER_WORDS, s.scsihw)}
+    ${setPick("display", "Display", DISPLAY_WORDS, s.display)}
+    ${setCheck("agent", "The guest agent is installed inside it", s.agent)}
+    ${setCheck("tablet", "Tablet pointer, so the mouse tracks in the console", s.tablet)}
+    ${setCheck("acpi", "ACPI, so shutting down works from outside", s.acpi)}
+    ${setCheck("kvm", "Hardware virtualization", s.kvm)}` : `${common}
+    <h3 class="sethead">Processor and memory</h3>
+    <div class="createrow">${setNumber("cores", "Cores", s.cores, 'min="1" max="128"')}${setNumber("cpuLimit", "Limit in cores, blank for none", s.cpuLimit, 'min="0" max="128" step="0.25"')}</div>
+    <div class="createrow">${setGb("memoryMb", "Memory in GB", s.memoryMb, 'min="0.25"')}${setGb("swapMb", "Swap in GB", s.swapMb)}</div>
+    <h3 class="sethead">Network names</h3>
+    <div class="createrow">${setText("dns", "DNS servers, blank to copy the node", s.dns)}${setText("searchDomain", "Search domain", s.searchDomain)}</div>
+    <h3 class="sethead">Features</h3>
+    ${setCheck("nesting", "Nesting, needed for Docker and some newer systems", s.nesting)}
+    ${setCheck("keyctl", "Keyctl, also needed for Docker in an unprivileged container", s.keyctl)}
+    ${setCheck("fuse", "FUSE file systems", s.fuse)}
+    <p class="meta">System: ${esc(s.system || "unknown")}. ${s.unprivileged ? "Unprivileged" : "Privileged"} container. These can't be changed after it's made.</p>`;
+  return `<form id="setform" autocomplete="off">${body}<div class="setbar"><button type="button" class="btn" id="setundo" data-setundo="1" disabled>Undo changes</button><button type="button" class="btn primary" id="setsave" data-setsave="1" disabled>Save changes</button></div></form>
+    <details class="upgroup"><summary>Technical details</summary><div class="raw">${Object.entries(v.tech).map(([k, val]) => `<span>${esc(k)}</span><code>${esc(val)}</code>`).join("")}</div></details>`;
 }
-function saveGuestEdit() {
-  const v = S.data.vms.find((g) => g.id === S.editing);
-  const name = $("#ename").value.trim();
-  const memoryMb = Math.round(Number($("#ememory").value) * 1024);
-  const taken = S.data.vms.find((g) => g.id !== v.id && g.name.toLowerCase() === name.toLowerCase());
-  if (taken) {
-    const e = $("#editerr");
-    e.textContent = `${taken.name} already exists. Pick another name.`;
-    e.hidden = false;
-    return;
-  }
-  const disc = $("#edisc") ? $("#edisc").value : undefined;
-  runAction("guest-settings", v.node, `Saving ${name}`, { ...guestBody(v), name, cores: Number($("#ecores").value), memoryMb, startsAtBoot: $("#eboot").checked, ...(v.type === "qemu" ? { agent: $("#eagent").checked } : {}), ...(disc === undefined ? {} : { disc }) }, async () => {
+function settingsChanges(v) {
+  const out = {};
+  document.querySelectorAll("#setform [data-set]").forEach((el) => {
+    const key = el.dataset.set;
+    const now = v.settings[key];
+    let value = el.value;
+    if (el.type === "checkbox") value = el.checked;
+    else if (el.dataset.gb) value = el.value === "" ? null : Math.round(Number(el.value) * 1024);
+    else if (el.type === "number") value = el.value === "" ? null : Number(el.value);
+    else if (key === "tags") value = el.value.split(/[\s,;]+/).filter(Boolean).join(" ");
+    else if (el.tagName === "TEXTAREA" || key === "name") value = el.value.trimEnd();
+    if ((value ?? "") !== (now ?? "")) out[key] = value;
+  });
+  return out;
+}
+function settingsTouched() {
+  const v = selected();
+  if (!v?.settings) return;
+  const n = Object.keys(settingsChanges(v)).length;
+  $("#setsave").disabled = !n;
+  $("#setundo").disabled = !n;
+  $("#setsave").textContent = n ? `Save ${n} ${n === 1 ? "change" : "changes"}` : "Save changes";
+}
+function saveSettings() {
+  const v = selected();
+  const changes = settingsChanges(v);
+  const name = changes.name;
+  const taken = name && S.data.vms.find((g) => g.id !== v.id && g.name.toLowerCase() === name.toLowerCase());
+  const go = () => runAction("guest-settings", v.node, `Saving ${name ?? v.name}`, { ...guestBody(v), changes }, async () => {
     await refresh();
+    await loadWaiting(v);
     renderDetail();
   });
+  if (taken) return dialog(`<h3>That name's taken</h3><p>${esc(taken.name)} already exists. Pick another name.</p>${closeRow}`);
+  // Proxmox saves this happily, then refuses to start the guest, so it's said here instead.
+  const wanted = (changes.cores ?? v.settings.cores) * (changes.sockets ?? v.settings.sockets ?? 1);
+  const has = S.data.nodes.find((n) => n.name === v.node)?.cores ?? 0;
+  if (has && wanted > has) return dialog(`<h3>That's more than ${esc(v.node)} has</h3><p>${wanted} processor cores were asked for, and ${esc(v.node)} has ${has}. Proxmox wouldn't be able to start ${esc(v.name)}.</p>${closeRow}`);
+  const risky = ["bios", "machine", "scsihw"].filter((k) => k in changes);
+  if (risky.length && !v.template) return confirmAction(`Change how ${v.name} starts?`, "Changing the firmware, machine type or disk controller can stop an installed system from starting. If it does, change it back.", "Save changes", go, true);
+  go();
+}
+async function loadWaiting(v) {
+  if (v.type === "lxc" && !v.running) return;
+  try {
+    const { waiting } = await signal(`api/guest-waiting?server=${encodeURIComponent(v.node)}&guest=${v.id}&type=${v.type}`);
+    const had = JSON.stringify(S.waiting?.[v.id] ?? []);
+    S.waiting = { ...S.waiting, [v.id]: waiting };
+    if (S.sel === v.id && had !== JSON.stringify(waiting) && S.tab !== "settings") renderDetail();
+    else if (S.sel === v.id) drawWaiting(v);
+  } catch { /* the next look asks again */ }
+}
+function waitingWords(v) {
+  const list = S.waiting?.[v.id] ?? [];
+  if (!list.length) return "";
+  const said = [...new Set(list.map((w) => (w.key === "memory" ? `Memory, ${Number(w.next) / 1024} GB` : w.key === "cores" ? `Processor cores, ${w.next}` : WAIT_WORDS[w.key] ?? "A hardware change")))];
+  return `<div class="advice"><div><b>Waiting for a restart</b>${esc(said.join(". "))}. ${v.running ? "These apply the next time it's shut down and started." : "These apply when it next starts."}</div></div>`;
+}
+function drawWaiting(v) {
+  const box = $("#vmwaiting");
+  if (box) box.innerHTML = waitingWords(v);
+}
+async function askGuestDisc() {
+  const v = selected();
+  let discs;
+  try {
+    discs = (await planFor(v)).installers;
+  } catch (err) {
+    return failDialog("Couldn't list the discs", err);
+  }
+  const known = discs.some((d) => d.volid === v.disc);
+  dialog(`<h3>Change the disc in ${esc(v.name)}</h3>
+    <label class="field restartname"><span>Installer disc</span><select id="gdisc"><option value="">No disc</option>${v.disc && !known ? `<option value="${esc(v.disc)}" selected>${esc(v.disc)}</option>` : ""}${discs.map((d) => `<option value="${esc(d.volid)}" ${d.volid === v.disc ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-gdiscgo="1">Save</button></div>`);
 }
 
 /* Getting an installer disc onto a server from a web address */
@@ -2218,8 +2322,13 @@ document.addEventListener("click", (e) => {
   if (d.console) return openConsole(+d.console);
   if (d.nodeconsole) return openNodeConsole(d.nodeconsole);
   if (d.vnccad) return vnc?.sendCtrlAltDel();
-  if (d.guestedit) return askGuestEdit(+d.guestedit);
-  if (d.guestsave) return saveGuestEdit();
+  if (d.setsave) return saveSettings();
+  if (d.setundo) return renderDetail();
+  if (d.gdisc) return askGuestDisc();
+  if (d.gdiscgo) {
+    const v = selected();
+    return runAction("guest-disc", v.node, `Changing the disc in ${v.name}`, { ...guestBody(v), disc: $("#gdisc").value }, after);
+  }
   if (d.discadd) return askDisc();
   if (d.discgo) return downloadDisc();
   if (d.taskview) return viewTask(d.tasknode, d.taskview);
@@ -2398,6 +2507,7 @@ document.addEventListener("click", (e) => {
   }
 });
 document.addEventListener("change", (e) => {
+  if (e.target.closest?.("#setform")) settingsTouched();
   if (e.target.id === "stnode") {
     S.storeNode = e.target.value;
     drawStore();
@@ -2415,6 +2525,7 @@ document.addEventListener("input", (e) => {
   if (e.target.id === "rname") {
     $("#rgo").disabled = e.target.value.trim().toLowerCase() !== (e.target.dataset.word ?? "reboot");
   }
+  if (e.target.closest?.("#setform")) settingsTouched();
   if (e.target.id === "tlq") {
     S.tlQ = e.target.value;
     drawTaskLog();
@@ -2475,6 +2586,7 @@ async function showLogin(message) {
   S.taskLog = null;
   S.storeList = null;
   S.diskData = {};
+  S.waiting = {};
   S.scan = null;
   S.addresses = {};
   S.snapSupport = {};

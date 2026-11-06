@@ -8,7 +8,8 @@ import { clientAddress, loadConfig, sameOrigin } from "./config.js";
 import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
-import { containerForm, CreateError, discDownload, installerLabel, settingsForm, vmForm, type CreateInput } from "./create.js";
+import { containerForm, CreateError, discDownload, discForm, installerLabel, vmForm, type CreateInput } from "./create.js";
+import { changesForm, SettingsError, waitingChanges } from "./guest-settings.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
 import { assertCanWipe, buildStorageList, deviceIsValid, diskStorageForm, hostIsValid, networkForm, readHardDisks, StorageError, storageBlockers, usesForm, type RawDisk, type RawStorageConfig } from "./storage.js";
 import { addDiskForm, addNicForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
@@ -396,12 +397,22 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
   },
   "guest-settings": async (name, who, body) => {
     const { path } = guestPath(name, body);
-    const type = body.type === "qemu" ? "qemu" : "lxc";
-    const disc = typeof body.disc === "string" ? body.disc.slice(0, 256) : null;
-    const current = disc === null ? {} : await pve.get<RawConfig>(`${path}/config`, who.ticket);
+    if (typeof body.changes !== "object" || body.changes === null || Array.isArray(body.changes)) throw new AuthError(400, "That request isn't valid.");
+    const [config, status] = await Promise.all([pve.get<RawConfig>(`${path}/config`, who.ticket), pve.get<{ status?: string }>(`${path}/status/current`, who.ticket)]);
     try {
-      const form = settingsForm(type, { name: text(body.name, 63), cores: Number(body.cores), memoryMb: Number(body.memoryMb), startsAtBoot: body.startsAtBoot === true, disc, agent: typeof body.agent === "boolean" ? body.agent : undefined }, { boot: current.boot === undefined ? undefined : String(current.boot), ide2: current.ide2 === undefined ? undefined : String(current.ide2) });
-      await pve.put<null>(`${path}/config`, who, form);
+      await pve.put<null>(`${path}/config`, who, changesForm(kindOf(body), config, body.changes as Record<string, unknown>, status.status === "running"));
+      return null;
+    } catch (err) {
+      if (err instanceof SettingsError) throw new AuthError(400, err.message);
+      throw err;
+    }
+  },
+  "guest-disc": async (name, who, body) => {
+    const { path } = guestPath(name, body);
+    if (typeof body.disc !== "string" || body.disc.length > 256) throw new AuthError(400, "That disc isn't valid.");
+    const current = await pve.get<RawConfig>(`${path}/config`, who.ticket);
+    try {
+      await pve.put<null>(`${path}/config`, who, discForm(body.disc, current as { boot?: string; ide2?: string }));
       return null;
     } catch (err) {
       if (err instanceof CreateError) throw new AuthError(400, err.message);
@@ -813,7 +824,7 @@ const handler: http.RequestListener = async (req, res) => {
       }
       return json(res, 200, { realms });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -850,6 +861,19 @@ const handler: http.RequestListener = async (req, res) => {
         }
         if (route === "/api/rolling-plan") return json(res, 200, await loadRollingPlan(session.ticket));
         if (route === "/api/backups") return json(res, 200, await loadBackups(session.ticket));
+        if (route === "/api/cpu-types") {
+          const name = params.get("server") ?? "";
+          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          const list = await pve.get<{ name?: string }[]>(`/nodes/${encodeURIComponent(name)}/capabilities/qemu/cpu`, session.ticket);
+          return json(res, 200, { types: list.flatMap((c) => (c.name ? [c.name] : [])).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) });
+        }
+        if (route === "/api/guest-waiting") {
+          const name = params.get("server") ?? "";
+          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          const type = params.get("type") === "lxc" ? "lxc" : "qemu";
+          const { path } = guestPath(name, { guest: params.get("guest"), type });
+          return json(res, 200, { waiting: waitingChanges(await pve.get<Parameters<typeof waitingChanges>[0]>(`${path}/pending`, session.ticket)) });
+        }
         if (route === "/api/storage-list") {
           const [config, data] = await Promise.all([pve.get<RawStorageConfig[]>("/storage", session.ticket), overview(session)]);
           // Asked of each node directly: the cluster summary takes a while to notice a storage that was just added.

@@ -1,3 +1,4 @@
+import { readSettings } from "./guest-settings.js";
 import { readDisks, readNics } from "./hardware.js";
 /** Turns raw Proxmox answers into the plain-language view the screens use. */
 
@@ -139,6 +140,7 @@ export function buildOverview(
         diskGb: gb(r.maxdisk),
         os: (Object.hasOwn(OS_NAMES, String(config?.ostype ?? "")) ? OS_NAMES[String(config?.ostype)] : undefined) ?? (config?.ostype ? String(config.ostype) : "Not set"),
         template,
+        settings: config ? readSettings(r.type === "lxc" ? "lxc" : "qemu", config) : null,
         // Everything that would break if a storage went away, disc drives and left-over disks included.
         usesStorage: [...new Set(Object.entries(config ?? {}).filter(([k, v]) => /^(scsi|virtio|sata|ide|mp|unused|efidisk|tpmstate)\d+$|^rootfs$/.test(k) && String(v).includes(":")).map(([, v]) => String(v).split(":")[0] as string))],
         disks: config ? readDisks(r.type === "lxc" ? "lxc" : "qemu", config) : [],
