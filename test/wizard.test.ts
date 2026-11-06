@@ -172,6 +172,14 @@ test("setup won't finish if a node's certificate doesn't verify", async () => {
   assert.equal(existsSync(l.hash), true, "and the code still works to try again");
 });
 
+test("setup waits for a node that only just joined", async () => {
+  let tries = 0;
+  const l = lab({ verifies: async () => { tries += 1; return tries > 4; } });
+  await signedIn(l);
+  await l.wizard.finish("10.0.0.9");
+  assert.equal(l.saved.length, 1);
+});
+
 test("addresses are read forgivingly and strictly", () => {
   assert.deepEqual(parseAddress("10.0.0.5"), { host: "10.0.0.5", port: 8006 });
   assert.deepEqual(parseAddress(" https://PVE1.lan:8007/ "), { host: "pve1.lan", port: 8007 });

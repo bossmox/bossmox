@@ -8,6 +8,7 @@ const MAX_CODE_TRIES = 10;
 const CODE_WINDOW_MS = 5 * 60 * 1000;
 const TOKEN_MS = 60 * 60 * 1000;
 const JOIN_WAIT_MS = 4 * 60 * 1000;
+const VERIFY_WAIT_MS = 60 * 1000;
 const CLUSTER_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,14}$/;
 
 export class WizardError extends Error {
@@ -240,7 +241,18 @@ export class Wizard {
     const hosts = this.nodes.filter((n) => n.address).map((n) => n.address);
     if (!hosts.length) hosts.push(first.host);
     const failed: string[] = [];
-    if (ca) for (const h of hosts) if (!(await this.out.verifies(h, first.port, ca))) failed.push(h);
+    // A node that only just joined can take a few seconds to start using its new certificate.
+    const until = this.out.now() + VERIFY_WAIT_MS;
+    if (ca) {
+      for (const h of hosts) {
+        let good = await this.out.verifies(h, first.port, ca);
+        while (!good && this.out.now() < until) {
+          await this.out.wait(3000);
+          good = await this.out.verifies(h, first.port, ca);
+        }
+        if (!good) failed.push(h);
+      }
+    }
     if (!ca || failed.length) throw new WizardError(502, `BossMox couldn't verify the certificate on ${failed.join(", ") || "this cluster"}. Check that each node's address matches its certificate.`);
     this.out.saveSettings({
       PVE_URL: hosts.map((h) => `https://${h}:${first.port}`).join(","),
