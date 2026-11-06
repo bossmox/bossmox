@@ -48,7 +48,13 @@ const MAX_BODY = 8 * 1024;
 const config = loadConfig();
 const pve = new PveClient(config);
 const sessions = new Sessions(pve);
-const terminals = new Terminals(config);
+const terminals = new Terminals({
+  get pveUrl() {
+    return pve.activeUrl;
+  },
+  pveCa: config.pveCa,
+  pveTlsName: config.pveTlsName,
+} as ConstructorParameters<typeof Terminals>[0]);
 const secureCookie = Boolean(config.tls) || config.behindProxy;
 const cache = new WeakMap<Session, { at: number; value: Promise<Overview> }>();
 
@@ -135,6 +141,12 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
       ? { target, online: "1", "with-local-disks": "1" }
       : { target, restart: "1" };
     return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${type}/${id}/migrate`, who, form);
+  },
+  "move-all": (name, who, body) => {
+    const vms = text(body.guests, 256);
+    const target = text(body.target, 64);
+    if (!/^\d+(,\d+)*$/.test(vms) || !NODE_NAME.test(target) || target === name) throw new AuthError(400, "That move request isn't valid.");
+    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/migrateall`, who, { target, vms, "with-local-disks": "1", maxworkers: "1" });
   },
   "back-up-guests": (name, who, body) => {
     const vmid = text(body.guests, 256);

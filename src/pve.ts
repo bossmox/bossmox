@@ -19,10 +19,37 @@ export interface Identity {
  * permissions. Writes go through named actions in server.ts, never a general pass-through.
  */
 export class PveClient {
-  constructor(private readonly config: Pick<Config, "pveUrl" | "pveCa" | "pveTlsName">) {}
+  private current = 0;
 
-  private request<T>(method: "GET" | "POST", path: string, ticket?: string, body?: string, csrf?: string): Promise<T> {
-    const url = new URL("/api2/json" + path, this.config.pveUrl);
+  constructor(private readonly config: Pick<Config, "pveUrl" | "pveUrls" | "pveCa" | "pveTlsName">) {}
+
+  /** The address that last answered. Terminals use it too. */
+  get activeUrl(): URL {
+    return this.config.pveUrls[this.current] ?? this.config.pveUrl;
+  }
+
+  /**
+   * Tries each Proxmox address until one answers. Only a failed connection moves to the next
+   * address, because then the request never reached Proxmox and can't have run twice.
+   */
+  private async request<T>(method: "GET" | "POST", path: string, ticket?: string, body?: string, csrf?: string): Promise<T> {
+    const urls = this.config.pveUrls;
+    for (let i = 0; ; i++) {
+      const index = (this.current + i) % urls.length;
+      try {
+        const out = await this.attempt<T>(urls[index] as URL, method, path, ticket, body, csrf);
+        this.current = index;
+        return out;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code ?? "";
+        const unreachable = ["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ECONNRESET"].includes(code) || (method === "GET" && err instanceof Error && !(err instanceof PveError));
+        if (!unreachable || i >= urls.length - 1) throw err;
+      }
+    }
+  }
+
+  private attempt<T>(base: URL, method: "GET" | "POST", path: string, ticket?: string, body?: string, csrf?: string): Promise<T> {
+    const url = new URL("/api2/json" + path, base);
     const secure = url.protocol === "https:";
     const headers: Record<string, string> = {};
     if (ticket) headers.Cookie = `PVEAuthCookie=${encodeURIComponent(ticket)}`;

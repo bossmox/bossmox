@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 export interface Config {
   pveUrl: URL;
+  pveUrls: URL[];
   pveCa?: Buffer;
   pveTlsName?: string;
   host: string;
@@ -19,13 +20,15 @@ function isLoopback(host: string): boolean {
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const url = env.PVE_URL;
   if (!url) throw new Error("PVE_URL is not set. Copy .env.example to .env and fill it in.");
-  const pveUrl = new URL(url);
-  if (pveUrl.protocol !== "https:" && !isLoopback(pveUrl.hostname)) {
+  const pveUrls = url.split(",").map((u) => new URL(u.trim()));
+  const pveUrl = pveUrls[0] as URL;
+  if (pveUrls.some((u) => u.protocol !== "https:" && !isLoopback(u.hostname))) {
     throw new Error("PVE_URL must use https, so passwords are never sent in the clear.");
   }
   const extra = (env.BOSSMOX_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
   const config: Config = {
     pveUrl,
+    pveUrls,
     host: env.HOST ?? "127.0.0.1",
     port: Number(env.PORT ?? 8080),
     allowedHosts: new Set(["localhost", "127.0.0.1", ...extra]),

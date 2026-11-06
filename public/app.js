@@ -373,6 +373,8 @@ function saveReboot(value) {
     else localStorage.removeItem(REBOOT_KEY);
   } catch { /* memory copy still works */ }
 }
+const MOVE_WORDS = "Everything below moves to the server you pick. If anything can't move, the restart is cancelled. If BossMox is one of them, it reconnects after the move and you'll sign in again.";
+const STOP_WORDS = "Proxmox shuts down everything below first, waits for it all to stop, then restarts the server. This usually takes a few minutes. If BossMox runs on this server, it goes down too and this page will wait for it.";
 async function startRestart(server) {
   let plan;
   try {
@@ -382,25 +384,42 @@ async function startRestart(server) {
   }
   const guests = (S.data?.vms ?? []).filter((v) => v.node === server && v.running);
   const blocked = plan.busy.length > 0;
+  const others = (S.data?.nodes ?? []).filter((n) => n.online && n.name !== server).map((n) => n.name);
+  const canMove = guests.length > 0 && others.length > 0;
   S.restart = { server, guests };
   dialog(`<h3>Restart ${esc(server)}?</h3>
-    <p>${guests.length ? "Proxmox shuts down everything below first, waits for it all to stop, then restarts the server. This usually takes a few minutes." : "Nothing is running on this server."} If BossMox runs on this server, it goes down too and this page will wait for it.</p>
+    <p id="rwords">${guests.length ? (canMove ? MOVE_WORDS : STOP_WORDS) : "Nothing is running on this server."}</p>
     ${blocked ? `<p class="loginerr" style="margin-top:12px">Wait for this to finish first: ${esc(plan.busy.join(", "))}.</p>` : ""}
     ${plan.busyKnown ? "" : `<p class="loginerr" style="margin-top:12px">BossMox can't tell whether jobs are running on this server.</p>`}
     ${guests.length ? `<div class="restartlist">${guests.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state">${v.startsAtBoot ? "Starts again by itself" : "Stays off until started"}</span></div>`).join("")}</div>` : ""}
+    ${canMove ? `<label class="field restartname"><span>Before restarting</span><select id="rmove"><option value="">Shut them down, don't move them</option>${others.map((n) => `<option value="${esc(n)}" selected>Move everything to ${esc(n)}</option>`).join("")}</select></label>` : ""}
     ${guests.length && plan.backupStorages.length ? `<div class="restartbackup"><select id="rstore" aria-label="Backup storage">${plan.backupStorages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select><button class="btn" data-backup="${esc(server)}">Back up first</button></div>` : ""}
     <label class="field restartname"><span>Type reboot to confirm</span><input id="rname" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-restart="${esc(server)}" disabled>Restart ${esc(server)}</button></div>`);
   $("#rname").focus();
 }
+async function sendRestart(plan) {
+  const res = await post("api/action/restart-server", { server: plan.server, confirm: "reboot" });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.error);
+}
 async function doRestart(server) {
   const guests = S.restart?.guests ?? [];
+  const target = $("#rmove")?.value || "";
   S.restart = null;
-  saveReboot({ server, startedAt: Date.now(), guests: guests.map((v) => ({ id: v.id, name: v.name, auto: v.startsAtBoot })) });
+  const plan = { server, target, phase: target ? "moving" : "restarting", startedAt: Date.now(), guests: guests.map((v) => ({ id: v.id, name: v.name, auto: v.startsAtBoot })) };
+  saveReboot(plan);
   try {
-    const res = await post("api/action/restart-server", { server, confirm: "reboot" });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.error);
+    if (target) {
+      const res = await post("api/action/move-all", { server, target, guests: guests.map((v) => v.id).join(",") });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      plan.task = body.task;
+      plan.movedAt = Date.now();
+      saveReboot(plan);
+    } else {
+      await sendRestart(plan);
+    }
   } catch (err) {
     saveReboot(null);
     return dialog(`<h3>The restart didn't start</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
@@ -408,21 +427,26 @@ async function doRestart(server) {
   watchRestart();
 }
 function restartStage(plan, state) {
+  if (plan.phase === "moving") return "moving";
   if (state.back) return "starting";
+  if (plan.target) return "rebooting";
   if (state.lost || state.down) return "rebooting";
   return plan.guests.some((g) => state.running.has(g.id)) ? "stopping" : "rebooting";
 }
 const STAGE_NOTE = {
+  moving: "Moving everything off this server. It restarts only after all of it has moved. Keep this page open.",
   stopping: "Shutting down what's running. Proxmox waits for all of it to stop before it restarts the server.",
-  rebooting: "BossMox can't reach the server right now. That's expected: Proxmox finishes stopping everything, restarts, then starts things back up. Keep this page open.",
+  rebooting: "The server is restarting. If BossMox can't reach it for a while, that's expected. Keep this page open.",
   starting: "The server is back. Waiting for everything to start.",
 };
 function drawRestart(plan, state, title, note, done) {
   const stage = restartStage(plan, state);
   const row = (name, ok, word) => `<div class="snap"><div>${esc(name)}</div><span class="state"><span class="dot ${ok === null ? "busy" : ok ? "running" : "warn"}"></span>${esc(word)}</span></div>`;
-  const serverWord = { stopping: "Waiting for VMs to stop", rebooting: "Restarting", starting: "Back" }[stage];
+  const serverWord = { moving: done ? "Not restarted" : "Waiting for moves to finish", stopping: "Waiting for VMs to stop", rebooting: "Restarting", starting: "Back" }[stage];
   const guestRow = (g) => {
     const on = state.running.has(g.id);
+    if (stage === "moving") return state.where.get(g.id) === plan.target ? row(g.name, true, `Moved to ${plan.target}`) : done ? row(g.name, false, "Didn't move") : row(g.name, null, "Moving");
+    if (plan.target) return on ? row(g.name, true, `Running on ${state.where.get(g.id) ?? plan.target}`) : row(g.name, null, "Waiting");
     if (stage === "stopping") return on ? row(g.name, null, "Shutting down") : row(g.name, true, "Stopped");
     if (stage === "rebooting") return row(g.name, null, "Shutting down or waiting");
     if (on) return row(g.name, true, "Running");
@@ -430,7 +454,7 @@ function drawRestart(plan, state, title, note, done) {
     return done ? row(g.name, false, "Not running") : row(g.name, null, "Starting");
   };
   dialog(`<h3>${esc(title)}</h3><p>${esc(note || STAGE_NOTE[stage])}</p><div class="restartlist">
-    ${row(plan.server, state.back ? true : null, serverWord)}
+    ${row(plan.server, state.back ? true : done ? false : null, serverWord)}
     ${plan.guests.map(guestRow).join("")}
     </div><div class="row-end"><button class="btn" data-restartclose="1">${done ? "Close" : "Stop watching"}</button></div>`);
 }
@@ -438,21 +462,39 @@ async function watchRestart() {
   const plan = savedReboot();
   if (!plan || S.watching) return;
   S.watching = true;
-  const deadline = plan.startedAt + 15 * 60 * 1000;
-  const state = { back: false, down: false, lost: false, running: new Set(plan.guests.map((g) => g.id)) };
+  const state = { back: false, down: false, lost: false, running: new Set(plan.guests.map((g) => g.id)), where: new Map() };
   let backAt = 0;
   for (;;) {
     if (!savedReboot()) break;
     try {
-      const d = await signal(`api/server?name=${encodeURIComponent(plan.server)}`);
       const o = await signal("api/overview");
+      const d = await signal(`api/server?name=${encodeURIComponent(plan.server)}`).catch((err) => {
+        if (err.message === "signed out") throw err;
+        return {};
+      });
       const up = d.summary?.uptimeSeconds;
-      const restarted = up !== undefined && up * 1000 < Date.now() - plan.startedAt + 5000;
+      const restarted = plan.phase === "restarting" && up !== undefined && up * 1000 < Date.now() - plan.startedAt + 5000;
       state.back = restarted && o.nodes.some((n) => n.name === plan.server && n.online);
       state.down ||= restarted;
       state.running = new Set(o.vms.filter((v) => v.running).map((v) => v.id));
+      state.where = new Map(o.vms.map((v) => [v.id, v.node]));
       state.lost = false;
       S.data = o;
+      if (plan.phase === "moving") {
+        const left = plan.guests.filter((g) => state.where.get(g.id) !== plan.target);
+        const task = plan.task ? await signal(`api/task?server=${encodeURIComponent(plan.server)}&task=${encodeURIComponent(plan.task)}`).catch(() => null) : null;
+        if (left.length === 0) {
+          await sendRestart(plan);
+          plan.phase = "restarting";
+          plan.startedAt = Date.now();
+          saveReboot(plan);
+        } else if (task?.finished || Date.now() - plan.startedAt > 30 * 60 * 1000) {
+          drawRestart(plan, state, `${plan.server} was not restarted`, `These didn't move, so the restart was cancelled: ${left.map((g) => g.name).join(", ")}. Anything already moved stays where it is.`, true);
+          saveReboot(null);
+          S.watching = false;
+          return;
+        }
+      }
     } catch (err) {
       if (err.message === "signed out") {
         S.watching = false;
@@ -461,15 +503,15 @@ async function watchRestart() {
       state.lost = true;
       state.back = false;
     }
-    const waiting = plan.guests.filter((g) => g.auto && !state.running.has(g.id));
+    const waiting = plan.target ? plan.guests.filter((g) => !state.running.has(g.id)) : plan.guests.filter((g) => g.auto && !state.running.has(g.id));
     if (state.back && !backAt) backAt = Date.now();
     const allBack = state.back && waiting.length === 0;
     const gaveUp = backAt && Date.now() - backAt > 5 * 60 * 1000;
-    if (allBack || gaveUp || Date.now() > deadline) {
+    if (plan.phase === "restarting" && (allBack || gaveUp || Date.now() > plan.startedAt + 15 * 60 * 1000)) {
       const off = plan.guests.filter((g) => !g.auto && !state.running.has(g.id));
       const title = allBack ? `${plan.server} is back` : state.back ? `${plan.server} is back, but something's missing` : `${plan.server} hasn't come back`;
       const note = allBack
-        ? off.length ? "Everything set to start by itself is running. The items marked off need starting by hand." : "Everything is running again."
+        ? plan.target ? `Everything is running. The moved items stay on ${plan.target}. Use Move to bring them back.` : off.length ? "Everything set to start by itself is running. The items marked off need starting by hand." : "Everything is running again."
         : state.back ? "These haven't started yet. Check them before relying on this server." : "It's been 15 minutes. Someone may need to look at the server itself.";
       drawRestart(plan, state, title, note, true);
       saveReboot(null);

@@ -47,6 +47,12 @@ test("refuses to send passwords to Proxmox over plain http", () => {
   assert.equal(loadConfig({ PVE_URL: "http://127.0.0.1:9" }).pveUrl.port, "9");
 });
 
+test("accepts several Proxmox addresses and checks each one", () => {
+  const c = loadConfig({ PVE_URL: "https://192.0.2.1:8006, https://192.0.2.2:8006" });
+  assert.deepEqual(c.pveUrls.map((u) => u.hostname), ["192.0.2.1", "192.0.2.2"]);
+  assert.throws(() => loadConfig({ PVE_URL: "https://192.0.2.1:8006,http://192.0.2.2:8006" }), /https/);
+});
+
 test("refuses to serve a network without HTTPS", () => {
   const base = { PVE_URL: "https://192.0.2.1:8006", HOST: "0.0.0.0" };
   assert.throws(() => loadConfig(base), /plain HTTP/);

@@ -25,7 +25,7 @@ export class Terminals {
   private readonly pending = new Map<string, Pending>();
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
-  constructor(private readonly config: Pick<Config, "pveUrl" | "pveCa" | "pveTlsName">) {}
+  constructor(private readonly config: Pick<Config, "pveCa" | "pveTlsName"> & { readonly pveUrl: URL }) {}
 
   /** One-time ID: valid once, only for the session that asked, and only for 30 seconds. */
   prepare(server: string, session: Session, proxy: TermProxy): string {
