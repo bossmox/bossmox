@@ -233,6 +233,10 @@ summary{cursor:pointer;font-weight:650}
 .rollbtn{width:calc(100% - 16px);margin:12px 8px 0}
 .bkbox{height:100%;overflow:auto;padding:14px 22px 22px}
 .bkhead{font-size:15px;margin:20px 0 6px}
+.linkbtn{background:none;border:0;padding:0;color:var(--accent);font:inherit;font-weight:650;cursor:pointer;text-decoration:underline}
+.vncwrap{display:flex;flex-direction:column;height:100%;background:#07161C}
+.vnctools{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 12px;background:var(--surface);color:var(--muted);flex-wrap:wrap}
+#vncbox{flex:1;min-height:0;position:relative;overflow:hidden}
 #netlist{padding:10px 8px;overflow:auto}
 #netdetail{overflow:auto;padding:24px 26px;min-width:0}
 .netcard{border-top:1px solid var(--line);padding:14px 0}

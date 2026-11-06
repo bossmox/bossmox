@@ -18,6 +18,10 @@ interface Pending extends TermProxy {
   server: string;
   session: Session;
   expiresAt: number;
+  /** The Proxmox path this session belongs to: a server, or one VM or container on it. */
+  path: string;
+  /** A VM's screen is plain binary VNC, with none of the terminal's login line or text framing. */
+  raw: boolean;
 }
 
 /** Connects the browser's terminal to Proxmox. The browser never sees either Proxmox ticket. */
@@ -28,11 +32,12 @@ export class Terminals {
   constructor(private readonly config: Pick<Config, "pveCa" | "pveTlsName"> & { readonly pveUrl: URL }) {}
 
   /** One-time ID: valid once, only for the session that asked, and only for 30 seconds. */
-  prepare(server: string, session: Session, proxy: TermProxy): string {
+  prepare(server: string, session: Session, proxy: TermProxy, target: { path?: string; raw?: boolean } = {}): string {
     const now = Date.now();
     for (const [k, p] of this.pending) if (p.expiresAt <= now) this.pending.delete(k);
     const id = randomBytes(32).toString("base64url");
-    this.pending.set(id, { ...proxy, server, session, expiresAt: now + TTL_MS });
+    const path = target.path ?? `/nodes/${encodeURIComponent(server)}`;
+    this.pending.set(id, { ...proxy, server, session, expiresAt: now + TTL_MS, path, raw: target.raw === true });
     return id;
   }
 
@@ -48,7 +53,7 @@ export class Terminals {
   }
 
   private bridge(browser: WebSocket, term: Pending) {
-    const url = new URL(`/api2/json/nodes/${encodeURIComponent(term.server)}/vncwebsocket`, this.config.pveUrl);
+    const url = new URL(`/api2/json${term.path}/vncwebsocket`, this.config.pveUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("port", String(term.port));
     url.searchParams.set("vncticket", term.ticket);
@@ -61,6 +66,12 @@ export class Terminals {
 
     let ready = false;
     const queue: RawData[] = [];
+    const forward = (m: RawData) => (term.raw ? upstream.send(m, { binary: true }) : upstream.send(m.toString()));
+    const flush = () => {
+      ready = true;
+      for (const m of queue) forward(m);
+      queue.length = 0;
+    };
     let idle: NodeJS.Timeout;
     const closeBoth = () => {
       clearTimeout(idle);
@@ -73,22 +84,19 @@ export class Terminals {
     };
     touch();
 
-    upstream.on("open", () => upstream.send(`${term.user}:${term.ticket}\n`));
+    upstream.on("open", () => (term.raw ? flush() : upstream.send(`${term.user}:${term.ticket}\n`)));
     upstream.on("message", (data: RawData) => {
       touch();
       if (!ready) {
         if (!data.toString().startsWith("OK")) return closeBoth();
-        ready = true;
-        for (const m of queue) upstream.send(m.toString());
-        queue.length = 0;
-        return;
+        return flush();
       }
       if (browser.readyState === WebSocket.OPEN) browser.send(data, { binary: true });
     });
     browser.on("message", (data: RawData) => {
       touch();
       if (!ready) queue.push(data);
-      else if (upstream.readyState === WebSocket.OPEN) upstream.send(data.toString());
+      else if (upstream.readyState === WebSocket.OPEN) forward(data);
     });
     upstream.on("close", closeBoth);
     upstream.on("error", (err) => {

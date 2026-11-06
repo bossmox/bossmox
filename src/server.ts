@@ -8,7 +8,7 @@ import { loadConfig } from "./config.js";
 import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
-import { containerForm, CreateError, installerLabel, vmForm, type CreateInput } from "./create.js";
+import { containerForm, CreateError, discDownload, installerLabel, settingsForm, vmForm, type CreateInput } from "./create.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import {
@@ -40,6 +40,7 @@ const STATIC: Record<string, [string, string]> = {
   "/vendor/xterm.js": ["vendor/xterm.js", "text/javascript; charset=utf-8"],
   "/vendor/addon-fit.js": ["vendor/addon-fit.js", "text/javascript; charset=utf-8"],
   "/vendor/xterm.css": ["vendor/xterm.css", "text/css; charset=utf-8"],
+  "/vendor/novnc.js": ["vendor/novnc.js", "text/javascript; charset=utf-8"],
 };
 const HEADERS = {
   "Content-Security-Policy":
@@ -190,6 +191,7 @@ async function loadCreatePlan(name: string, kind: "qemu" | "lxc", ticket: string
     nextId: String(nextId),
     storages: disks.filter(usable).map((s) => ({ name: s.storage, freeGb: Math.round((s.avail ?? 0) / 1024 ** 3) })),
     installers: files.flat().map((f) => ({ volid: f.volid, label: installerLabel(f.volid) })),
+    mediaStorages: media.filter(usable).map((s) => s.storage),
     bridges: bridges.map((b) => b.iface),
     cores: status.cpuinfo?.cpus ?? 0,
     memoryGb: Math.floor((status.memory?.total ?? 0) / 1024 ** 3),
@@ -331,6 +333,31 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
       throw err;
     }
   },
+  "guest-settings": async (name, who, body) => {
+    const { path } = guestPath(name, body);
+    const type = body.type === "qemu" ? "qemu" : "lxc";
+    const disc = typeof body.disc === "string" ? body.disc.slice(0, 256) : null;
+    const current = disc === null ? {} : await pve.get<RawConfig>(`${path}/config`, who.ticket);
+    try {
+      const form = settingsForm(type, { name: text(body.name, 63), cores: Number(body.cores), memoryMb: Number(body.memoryMb), startsAtBoot: body.startsAtBoot === true, disc }, { boot: current.boot === undefined ? undefined : String(current.boot), ide2: current.ide2 === undefined ? undefined : String(current.ide2) });
+      await pve.put<null>(`${path}/config`, who, form);
+      return null;
+    } catch (err) {
+      if (err instanceof CreateError) throw new AuthError(400, err.message);
+      throw err;
+    }
+  },
+  "disc-download": (name, who, body) => {
+    const storage = text(body.storage, 64);
+    if (!STORAGE.test(storage)) throw new AuthError(400, "That request isn't valid.");
+    try {
+      const { url, filename } = discDownload(text(body.url, 1024));
+      return pve.post<string>(`/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}/download-url`, who, { content: "iso", url, filename });
+    } catch (err) {
+      if (err instanceof CreateError) throw new AuthError(400, err.message);
+      throw err;
+    }
+  },
   "guest-delete": (name, who, body) => {
     const { id, path } = guestPath(name, body);
     if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
@@ -396,9 +423,32 @@ async function openUpdateTerminal(res: http.ServerResponse, name: string, sessio
   return json(res, 200, { terminal: terminals.prepare(name, session, proxy) });
 }
 
+async function openConsole(res: http.ServerResponse, body: Record<string, unknown>, session: Session) {
+  const name = text(body.server, 64);
+  if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+  const { path } = guestPath(name, body);
+  if (body.type === "lxc") {
+    const proxy = await pve.post<TermProxy>(`${path}/termproxy`, session);
+    return json(res, 200, { terminal: terminals.prepare(name, session, proxy, { path }) });
+  }
+  // The VNC ticket is the one Proxmox secret the browser sees: noVNC needs it as the screen's password. It works
+  // only with this session's cookie, for this VM, and expires in seconds.
+  const proxy = await pve.post<TermProxy>(`${path}/vncproxy`, session, { websocket: "1" });
+  return json(res, 200, { screen: terminals.prepare(name, session, proxy, { path, raw: true }), password: proxy.ticket });
+}
+
 async function runAction(req: http.IncomingMessage, res: http.ServerResponse, action: string) {
   const session = await sessions.get(cookieId(req));
   if (!session) return json(res, 401, { error: "Sign in to continue." });
+  if (action === "guest-console") {
+    try {
+      return await openConsole(res, await readJson(req), session);
+    } catch (err) {
+      if (err instanceof PveError && err.status === 403) return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
+      if (err instanceof PveError && err.status !== 401 && err.reason) return json(res, 400, { error: `Proxmox refused: ${err.reason}` });
+      throw err;
+    }
+  }
   if (action === "install-updates") {
     const name = text((await readJson(req)).server, 64);
     if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });

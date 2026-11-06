@@ -81,5 +81,47 @@ export function containerForm(v: CreateInput): Record<string, string> {
   return form;
 }
 
+export interface SettingsInput {
+  name: string;
+  cores: number;
+  memoryMb: number;
+  startsAtBoot: boolean;
+  /** A VM's installer disc: a volume, "" for none, or null to leave it alone. */
+  disc: string | null;
+}
+
+/** What to change on an existing guest. A disc added to a VM goes on its boot list, or the VM would never start from it. */
+export function settingsForm(kind: "qemu" | "lxc", v: SettingsInput, current: { boot?: string; ide2?: string } = {}): Record<string, string> {
+  if (!NAME.test(v.name)) throw new CreateError("A name uses letters, numbers, dots and dashes, and starts and ends with a letter or number.");
+  if (!Number.isInteger(v.cores) || v.cores < 1 || v.cores > 128) throw new CreateError("Pick between 1 and 128 processor cores.");
+  if (!Number.isInteger(v.memoryMb) || v.memoryMb < 64) throw new CreateError("Give it at least 64 MB of memory.");
+  const form: Record<string, string> = { [kind === "qemu" ? "name" : "hostname"]: v.name, cores: String(v.cores), memory: String(v.memoryMb), onboot: v.startsAtBoot ? "1" : "0" };
+  if (kind === "qemu" && v.disc !== null) {
+    if (current.ide2?.includes("cloudinit")) throw new CreateError("This VM uses that drive for its setup disk, so a disc can't go there.");
+    if (v.disc === "") form.ide2 = "none,media=cdrom";
+    else {
+      if (!VOLUME.test(v.disc)) throw new CreateError("That disc isn't valid.");
+      form.ide2 = `${v.disc},media=cdrom`;
+      if (current.boot?.startsWith("order=") && !current.boot.includes("ide2")) form.boot = `${current.boot};ide2`;
+    }
+  }
+  return form;
+}
+
+/** Only disc images, from an ordinary web address, with a plain file name. */
+export function discDownload(url: string): { url: string; filename: string } {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new CreateError("That doesn't look like a web address.");
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") throw new CreateError("Use an address that starts with https.");
+  // Taken as written, so an encoded slash or a stray % can only fail this check.
+  const filename = parsed.pathname.split("/").pop() ?? "";
+  if (!/^[\w.-]+\.iso$/i.test(filename)) throw new CreateError("The address has to end in a file name ending in .iso.");
+  return { url: parsed.href, filename };
+}
+
 /** "local:iso/alpine-virt-3.24.iso" reads better as its file name. */
 export const installerLabel = (volid: string) => volid.split("/").pop() ?? volid;

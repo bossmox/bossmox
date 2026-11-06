@@ -1,0 +1,5 @@
+novnc.js is noVNC 1.6.0 (@novnc/novnc, MPL-2.0; see novnc-LICENSE.txt), bundled with esbuild 0.25.12:
+  esbuild lib/rfb.js --bundle --format=iife --global-name=NoVNC --minify --target=es2020
+One change before bundling: lib/util/browser.js line 179, the optional H.264 decode check, is set to false.
+Its top-level await can't be bundled, and Proxmox's VNC doesn't use H.264.
+Source: https://github.com/novnc/noVNC/tree/v1.6.0

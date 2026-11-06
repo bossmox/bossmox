@@ -133,6 +133,9 @@ export function buildOverview(
         diskGb: gb(r.maxdisk),
         os: OS_NAMES[String(config?.ostype ?? "")] ?? (config?.ostype ? String(config.ostype) : "Not set"),
         startsAtBoot: config?.onboot === 1,
+        memoryMb: Number(config?.memory ?? Math.round((r.maxmem ?? 0) / 1024 ** 2)),
+        disc: String(config?.ide2 ?? "").startsWith("none") ? "" : String(config?.ide2 ?? "").split(",")[0],
+        discLocked: String(config?.ide2 ?? "").includes("cloudinit"),
         bridges: [...new Set(Object.entries(config ?? {}).filter(([k]) => /^net\d+$/.test(k)).map(([, v]) => String(v).match(/bridge=([^,]+)/)?.[1]).filter((b): b is string => Boolean(b)))],
         configLoaded: config !== undefined,
         tech: {

@@ -17,6 +17,7 @@ const APPS = {
   network: { title: "Network", color: "#2F7A7E", w: 860, h: 580 },
   backups: { title: "Backups", color: "#C43838", w: 860, h: 610 },
   terminal: { title: "Install updates", color: "#20262A", w: 860, h: 560, noIcon: true },
+  console: { title: "Console", color: "#20262A", w: 980, h: 680, noIcon: true },
 };
 
 const S = { watching: false, data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", ticks: 0 };
@@ -154,7 +155,7 @@ function renderDetail() {
     <div class="head"><div><h2>${esc(v.name)}</h2>
       <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
       <div class="actions">${v.running
-        ? `<button class="btn" data-power="shutdown">Shut down</button><button class="btn" data-power="reboot">Restart</button><button class="btn" data-power="stop">Force off</button>`
+        ? `<button class="btn" data-console="${v.id}">Console</button><button class="btn" data-power="shutdown">Shut down</button><button class="btn" data-power="reboot">Restart</button><button class="btn" data-power="stop">Force off</button>`
         : `<button class="btn primary" data-power="start">Start</button>`}${(S.data?.nodes.length ?? 0) > 1 ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${v.running ? "" : `<button class="btn" data-guestdelete="${v.id}">Delete</button>`}</div></div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["snapshots", "Snapshots"], ["settings", "Settings"]].map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${TAB[S.tab](v)}</div>`;
@@ -182,7 +183,7 @@ const TAB = {
     ${v.snapshots.length
       ? v.snapshots.map((s) => `<div class="snap"><div>${esc(s.name)}<small>${esc(s.description ? `${s.description}, ${when(s.takenAt)}` : when(s.takenAt))}</small></div><div class="actions"><button class="btn" data-snaprestore="${esc(s.name)}">Go back to this</button><button class="btn" data-snapdelete="${esc(s.name)}">Delete</button></div></div>`).join("")
       : S.snapSupport?.[v.id] === false ? "" : `<p class="empty">This VM has no snapshots yet.</p>`}`,
-  settings: (v) => `<div class="raw">${Object.entries(v.tech).map(([k, val]) => `<span>${esc(k)}</span><code>${esc(val)}</code>`).join("")}</div>
+  settings: (v) => `<div class="row-end" style="margin:0 0 12px"><button class="btn" data-guestedit="${v.id}">Change settings</button></div><div class="raw">${Object.entries(v.tech).map(([k, val]) => `<span>${esc(k)}</span><code>${esc(val)}</code>`).join("")}</div>
     ${v.configLoaded ? "" : `<p class="meta">Proxmox didn't return this VM's settings.</p>`}`,
 };
 
@@ -847,7 +848,7 @@ async function loadCreate(server, kind) {
     ${vm ? field("Operating system", `<select id="cos"><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Something else</option></select>`) : ""}
     ${field(vm ? "Install from" : "Template", `<select id="cinstaller">${vm ? `<option value="">Nothing yet, I'll add a disc later</option>` : ""}${p.installers.map((i) => `<option value="${esc(i.volid)}">${esc(i.label)}</option>`).join("")}</select>`)}
     ${!vm && !p.installers.length ? `<p class="meta">This server has no templates yet, so a container can't be made here.</p>` : ""}
-    ${vm && !p.installers.length ? `<p class="meta">This server has no installer discs yet.</p>` : ""}
+    ${vm ? `<p class="meta" style="margin:-8px 0 14px">${p.installers.length ? "" : "This server has no installer discs yet. "}<button class="linkbtn" data-discadd="1">Add a disc from a web address</button></p>` : ""}
     ${vm ? "" : field("Password for root", `<input id="cpassword" type="password" autocomplete="new-password">`)}
     <div class="createrow">
       ${field(`Processor cores (${p.cores} here)`, `<input id="ccores" type="number" min="1" max="128" value="${esc(kept.cores)}">`)}
@@ -1186,15 +1187,25 @@ async function openTerminal(server) {
     const body = await res.json();
     if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
     if (!res.ok) throw new Error(body.error);
+    showTerminal(server, body.terminal, "Install updates", `Updating ${esc(server)}. Check the list, then type <b>Y</b> and press Enter to install.`, false);
+  } catch (err) {
+    const plan = savedReboot();
+    if (plan?.rolling && plan.phase === "installing") return rollingInstall(plan, err.message || "BossMox lost contact with Proxmox.");
+    dialog(`<h3>Couldn't start the install</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
+  }
+}
+function showTerminal(server, id, title, help, isConsole) {
+  APPS.terminal.title = title;
+  {
     openWin("terminal");
-    $(".wbody", wins.terminal).innerHTML = `<div class="termwrap"><p class="termhelp">Updating ${esc(server)}. Check the list, then type <b>Y</b> and press Enter to install.</p><div id="termbox"></div></div>`;
+    $(".wbody", wins.terminal).innerHTML = `<div class="termwrap"><p class="termhelp">${help}</p><div id="termbox"></div></div>`;
     const dark = { background: "#07161C", foreground: "#CFE6DF" };
     const xterm = new Terminal({ cursorBlink: true, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 14, theme: dark, scrollback: 10000 });
     const fit = new FitAddon.FitAddon();
     xterm.loadAddon(fit);
     xterm.open($("#termbox"));
     fit.fit();
-    const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/terminal?id=${encodeURIComponent(body.terminal)}`, "binary");
+    const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/terminal?id=${encodeURIComponent(id)}`, "binary");
     socket.binaryType = "arraybuffer";
     const utf8 = new TextEncoder();
     const resize = () => {
@@ -1210,7 +1221,7 @@ async function openTerminal(server) {
     socket.onmessage = (e) => {
       const bytes = new Uint8Array(e.data);
       xterm.write(bytes);
-      if (term?.done) return;
+      if (term?.done || isConsole) return;
       // Proxmox prints this when the updater finishes, then leaves a root shell open.
       recent = (recent + decoder.decode(bytes)).slice(-200);
       if (recent.includes("starting shell") && term) {
@@ -1230,16 +1241,129 @@ async function openTerminal(server) {
     const observer = new ResizeObserver(resize);
     observer.observe($("#termbox"));
     const ping = setInterval(() => socket.readyState === 1 ? socket.send("2") : clearInterval(ping), 30000);
-    term = { socket, xterm, observer, server, done: false };
-  } catch (err) {
-    const plan = savedReboot();
-    if (plan?.rolling && plan.phase === "installing") return rollingInstall(plan, err.message || "BossMox lost contact with Proxmox.");
-    dialog(`<h3>Couldn't start the install</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
+    term = { socket, xterm, observer, server, done: isConsole };
   }
+}
+
+/* Console: a container gets a terminal, and a VM shows its screen */
+let vnc = null;
+function closeVnc() {
+  vnc?.disconnect();
+  vnc = null;
+}
+function loadNoVnc() {
+  if (window.NoVNC) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "vendor/novnc.js";
+    s.onload = resolve;
+    s.onerror = () => reject(new Error("BossMox couldn't load the console."));
+    document.head.append(s);
+  });
+}
+async function openConsole(id) {
+  const v = S.data?.vms.find((g) => g.id === id);
+  if (!v) return;
+  if (v.type === "lxc" && term) return dialog(`<h3>A terminal is already open</h3><p>Close it first, then open this console.</p>${closeRow}`);
+  try {
+    const res = await post("api/action/guest-console", { server: v.node, ...guestBody(v) });
+    const body = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) throw new Error(body.error);
+    if (body.terminal) return showTerminal(v.node, body.terminal, `Console: ${v.name}`, `Console for ${esc(v.name)}. Log in with its own account.`, true);
+    await loadNoVnc();
+    closeVnc();
+    if (wins.console) {
+      wins.console.remove();
+      delete wins.console;
+    }
+    APPS.console.title = `Console: ${v.name}`;
+    openWin("console");
+    const state = (t) => { if ($("#vncstate")) $("#vncstate").textContent = t; };
+    const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/terminal?id=${encodeURIComponent(body.screen)}`;
+    const rfb = new NoVNC.default($("#vncbox"), url, { credentials: { password: body.password }, wsProtocols: ["binary"] });
+    rfb.scaleViewport = true;
+    rfb.addEventListener("connect", () => {
+      state(`Connected to ${v.name}. Click the screen to type.`);
+      rfb.focus();
+    });
+    rfb.addEventListener("disconnect", () => state(`The console for ${v.name} has closed.`));
+    rfb.addEventListener("credentialsrequired", () => rfb.sendCredentials({ password: body.password }));
+    vnc = rfb;
+  } catch (err) {
+    dialog(`<h3>Couldn't open the console</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+}
+
+/* Changing a VM or container's settings */
+async function askGuestEdit(id) {
+  const v = S.data?.vms.find((g) => g.id === id);
+  if (!v) return;
+  let discs = null;
+  if (v.type === "qemu" && !v.discLocked) {
+    try {
+      discs = (await signal(`api/create-plan?server=${encodeURIComponent(v.node)}&kind=qemu`)).installers;
+    } catch (err) {
+      if (err.message === "signed out") return;
+    }
+  }
+  S.editing = v.id;
+  const known = discs?.some((d) => d.volid === v.disc);
+  dialog(`<h3>Change ${esc(v.name)}</h3>${v.running ? `<p>It's running, so new cores and memory apply the next time it's shut down and started.</p>` : ""}
+    <p class="loginerr" id="editerr" hidden></p>
+    <label class="field restartname"><span>Name</span><input id="ename" maxlength="63" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(v.name)}"></label>
+    <div class="createrow"><label class="field"><span>Processor cores</span><input id="ecores" type="number" min="1" max="128" value="${v.cores}"></label>
+    <label class="field"><span>Memory in GB</span><input id="ememory" type="number" min="0.25" step="0.25" value="${v.memoryMb / 1024}"></label></div>
+    ${discs ? `<label class="field"><span>Installer disc</span><select id="edisc"><option value="">No disc</option>${v.disc && !known ? `<option value="${esc(v.disc)}" selected>${esc(v.disc)}</option>` : ""}${discs.map((d) => `<option value="${esc(d.volid)}" ${d.volid === v.disc ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select></label>` : ""}
+    <label class="createcheck"><input id="eboot" type="checkbox" ${v.startsAtBoot ? "checked" : ""}> Start when the server starts</label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-guestsave="1">Save</button></div>`);
+}
+function saveGuestEdit() {
+  const v = S.data.vms.find((g) => g.id === S.editing);
+  const name = $("#ename").value.trim();
+  const memoryMb = Math.round(Number($("#ememory").value) * 1024);
+  const taken = S.data.vms.find((g) => g.id !== v.id && g.name.toLowerCase() === name.toLowerCase());
+  if (taken) {
+    const e = $("#editerr");
+    e.textContent = `${taken.name} already exists. Pick another name.`;
+    e.hidden = false;
+    return;
+  }
+  const disc = $("#edisc") ? $("#edisc").value : undefined;
+  runAction("guest-settings", v.node, `Saving ${name}`, { ...guestBody(v), name, cores: Number($("#ecores").value), memoryMb, startsAtBoot: $("#eboot").checked, ...(disc === undefined ? {} : { disc }) }, async () => {
+    await refresh();
+    renderDetail();
+  });
+}
+
+/* Getting an installer disc onto a server from a web address */
+function askDisc() {
+  const server = $("#cserver").value;
+  const stores = S.createPlan?.mediaStorages ?? [];
+  if (!stores.length) return dialog(`<h3>Nowhere to keep a disc</h3><p>${esc(server)} has no storage set up for installer discs.</p>${closeRow}`);
+  dialog(`<h3>Add an installer disc</h3><p>${esc(server)} downloads it directly, so this doesn't use your own connection. Paste the address of an .iso file.</p>
+    <p class="loginerr" id="discerr" hidden></p>
+    <label class="field restartname"><span>Web address</span><input id="discurl" type="url" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <label class="field restartname"><span>Keep it on</span><select id="discstore">${stores.map((s) => `<option>${esc(s)}</option>`).join("")}</select></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-discgo="1">Download</button></div>`);
+  $("#discurl").focus();
+}
+function downloadDisc() {
+  const url = $("#discurl").value.trim();
+  const server = $("#cserver").value;
+  if (!/^https?:\/\/\S+\.iso$/i.test(url)) {
+    const e = $("#discerr");
+    e.textContent = "Use an address that starts with https and ends in .iso.";
+    e.hidden = false;
+    return;
+  }
+  const kind = $("#ckind").value;
+  runAction("disc-download", server, "Downloading the disc", { url, storage: $("#discstore").value }, () => loadCreate(server, kind));
 }
 
 const RENDER = {
   terminal: () => "",
+  console: () => `<div class="vncwrap"><div class="vnctools"><span id="vncstate">Connecting.</span><button class="btn" data-vnccad="1">Send Ctrl+Alt+Del</button></div><div id="vncbox"></div></div>`,
   vms: vmsShell, monitor: monView, storage: storeView,
   create: () => `<div id="newbox" class="bkbox"></div>`,
   network: () => `<div class="vms"><aside><div id="netlist"></div></aside><div id="netdetail"></div></div>`,
@@ -1258,6 +1382,7 @@ document.addEventListener("click", (e) => {
     }
     return closeTerminal();
   }
+  if (d.close === "console") closeVnc();
   if (d.close) {
     wins[d.close].remove();
     delete wins[d.close];
@@ -1292,6 +1417,12 @@ document.addEventListener("click", (e) => {
     return guestDelete(+d.guestdeletego);
   }
   if (d.createnew) return createGuest();
+  if (d.console) return openConsole(+d.console);
+  if (d.vnccad) return vnc?.sendCtrlAltDel();
+  if (d.guestedit) return askGuestEdit(+d.guestedit);
+  if (d.guestsave) return saveGuestEdit();
+  if (d.discadd) return askDisc();
+  if (d.discgo) return downloadDisc();
   if (d.netserver) {
     S.netServer = d.netserver;
     return loadNetwork();
