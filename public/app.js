@@ -43,7 +43,7 @@ function renderHealth() {
   const freeText = free >= 1024 ? `${(free / 1024).toFixed(1)} TB` : `${Math.round(free)} GB`;
   h.innerHTML = `
     <h1>${issues.length ? `${count(issues.length)} worth a look` : "Everything looks good"}</h1>
-    <p class="sub">${up} of ${nodes.length} ${nodes.length === 1 ? "server" : "servers"} online. ${run} of ${vms.length} ${vms.length === 1 ? "VM" : "VMs"} running, and ${freeText} free.</p>
+    <p class="sub">${up} of ${nodes.length} ${nodes.length === 1 ? "node" : "nodes"} online. ${run} of ${vms.length} ${vms.length === 1 ? "VM" : "VMs"} running, and ${freeText} free.</p>
     <div class="rack">${nodes.map((n) => {
       const on = vms.filter((v) => v.node === n.name);
       return `<button class="ru" data-server="${esc(n.name)}"><span>${esc(n.name)}</span>

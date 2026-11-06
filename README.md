@@ -8,7 +8,7 @@ BossMox is an independent project. It is not affiliated with or endorsed by Prox
 
 ## Status
 
-Early. Sign in with your normal Proxmox account, including authenticator-app 2FA. You see and do what your Proxmox permissions allow. You can start, stop, create, change, delete and open a console on VMs and containers, take snapshots, back up and restore on a schedule, and update a whole cluster one server at a time. It also shows servers, storage, network, services and recent activity, and points out things worth a look. It can check a server for updates and install them in a live terminal. Everything it can change is listed in `ACTIONS` and the install route in `src/server.ts`.
+Early. Sign in with your normal Proxmox account, including authenticator-app 2FA. You see and do what your Proxmox permissions allow. You can start, stop, create, change, delete and open a console on VMs and containers, take snapshots, back up and restore on a schedule, and update a whole cluster one node at a time. It also shows nodes, storage, network, services and recent activity, and points out things worth a look. It can check a server for updates and install them in a live terminal. Everything it can change is listed in `ACTIONS` and the install route in `src/server.ts`.
 
 Hardware security keys (WebAuthn) and recovery codes don't work in BossMox yet.
 
@@ -28,7 +28,7 @@ Then open http://localhost:8080.
 
 On a Proxmox cluster, the smallest setup is the Alpine VM in `deploy/`: 256 MB of memory and 1 GB of disk. A VM can move between servers while it runs, so BossMox stays online. List every server in `PVE_URL`, comma separated.
 
-Running BossMox outside the cluster is the most robust choice, because it keeps working when a server restarts.
+Running BossMox outside the cluster is the most robust choice, because it keeps working when a node restarts.
 
 To use it from other machines, it needs HTTPS because passwords pass through it. Set `TLS_CERT_FILE` and `TLS_KEY_FILE`, or put it behind an HTTPS proxy and set `BOSSMOX_BEHIND_HTTPS_PROXY=1`. List the host names you use in `BOSSMOX_ALLOWED_HOSTS`. BossMox refuses to start on a network address without one of those, or `BOSSMOX_ALLOW_HTTP=1`, which is only for a port published to `127.0.0.1` as above.
 

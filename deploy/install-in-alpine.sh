@@ -11,6 +11,10 @@ apk update -q
 apk upgrade -q
 apk add -q nodejs openssl
 
+# Alpine ignores Proxmox's shutdown request unless this is running, so the VM couldn't shut down cleanly.
+rc-update add acpid default >/dev/null
+rc-service acpid start >/dev/null
+
 if id bossmox >/dev/null 2>&1 && [ "$(id -gn bossmox)" != bossmox ]; then deluser bossmox; fi
 grep -q "^bossmox:" /etc/group || addgroup -S bossmox
 id bossmox >/dev/null 2>&1 || adduser -S -D -H -h /opt/bossmox -s /sbin/nologin -G bossmox bossmox
