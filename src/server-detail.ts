@@ -198,9 +198,9 @@ export interface RollingInput {
 }
 /** Why a running VM can't move, in plain words, or null if nothing stands in its way. */
 export function moveProblem(name: string, raw: RawMovePrecondition, hasSnapshots: boolean): string | null {
-  if ((raw.local_resources ?? []).length > 0) return `${name} uses hardware attached to its server, so it can't move.`;
+  if ((raw.local_resources ?? []).length > 0) return `${name} uses hardware attached to its node, so it can't move.`;
   const disks = (raw.local_disks ?? []).filter((d) => (d as { cdrom?: number }).cdrom !== 1);
-  if (hasSnapshots && disks.length > 0) return `${name} has a snapshot on its server's own storage, so it can't move while running. Delete the snapshot or shut it down first.`;
+  if (hasSnapshots && disks.length > 0) return `${name} has a snapshot on its node's own storage, so it can't move while running. Delete the snapshot or shut it down first.`;
   return null;
 }
 const versionParts = (v: string | null) => (v ?? "").split(/[.-]/).map((p) => Number(p) || 0);

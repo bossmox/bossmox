@@ -301,7 +301,8 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     const power = text(body.power, 16);
     if (!POWER.has(power)) throw new AuthError(400, "That request isn't valid.");
     if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
-    return pve.post<string>(`${path}/status/${power}`, who);
+    // Force off has to win over a shutdown that's stuck waiting for the guest.
+    return pve.post<string>(`${path}/status/${power}`, who, power === "stop" ? { "overrule-shutdown": "1" } : {});
   },
   "snapshot-take": (name, who, body) => {
     const { path } = guestPath(name, body);
@@ -660,7 +661,7 @@ const handler: http.RequestListener = async (req, res) => {
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
           const detail = await loadServerDetail(name, session.ticket);
           const known = detail.summary || detail.updates || detail.services || detail.tasks;
-          return known ? json(res, 200, detail) : json(res, 404, { error: "BossMox can't find that server, or your account can't see it." });
+          return known ? json(res, 200, detail) : json(res, 404, { error: "BossMox can't find that node, or your account can't see it." });
         }
         return json(res, 200, { ...(await overview(session)), username: session.username });
       } catch (err) {

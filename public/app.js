@@ -12,7 +12,7 @@ const GLYPHS = {
 const APPS = {
   vms: { title: "Virtual Machines", color: "#0E7EA6", w: 920, h: 610 },
   create: { title: "Create a VM", color: "#178A5F", w: 560, h: 640 },
-  monitor: { title: "Servers", color: "#7A5AC8", w: 900, h: 620 },
+  monitor: { title: "Nodes", color: "#7A5AC8", w: 900, h: 620 },
   storage: { title: "Storage", color: "#B9680A", w: 520, h: 420 },
   network: { title: "Network", color: "#2F7A7E", w: 860, h: 580 },
   backups: { title: "Backups", color: "#C43838", w: 860, h: 610 },
@@ -148,7 +148,7 @@ function renderDetail() {
   if (!box) return;
   const v = selected();
   if (!v) {
-    box.innerHTML = `<p class="empty">${S.data?.vms.length ? "Pick a VM to see its details." : "There are no VMs on this server yet."}</p>`;
+    box.innerHTML = `<p class="empty">${S.data?.vms.length ? "Pick a VM to see its details." : "There are no VMs on this node yet."}</p>`;
     return;
   }
   box.innerHTML = `
@@ -194,7 +194,7 @@ function monView() {
 const signal = (url) => fetch(url).then(async (res) => {
   const body = await res.json();
   if (res.status === 401) {
-    showLogin(savedReboot() ? "BossMox restarted too. Sign in to finish checking the server." : "You've been signed out. Sign in again to continue.");
+    showLogin(savedReboot() ? "BossMox restarted too. Sign in to finish checking the node." : "You've been signed out. Sign in again to continue.");
     throw new Error("signed out");
   }
   if (!res.ok) throw new Error(body.error);
@@ -211,7 +211,7 @@ async function loadServer() {
     S.detailError = "";
     if (changed) renderServerDetail();
   } catch (err) {
-    S.detailError = err.message || "BossMox couldn't get this server's details.";
+    S.detailError = err.message || "BossMox couldn't get this node's details.";
     if (!S.detail) renderServerDetail();
   }
 }
@@ -238,10 +238,10 @@ function renderServers() {
     return;
   }
   list.innerHTML = S.data.nodes.map((n) => `<button class="row ${n.name === S.server ? "on" : ""}" data-server="${esc(n.name)}">
-    <span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? `${n.cpuPct}% busy, ${n.memPct}% memory` : "Offline"}</small></button>`).join("") + (S.data.nodes.length > 1 ? `<button class="btn rollbtn" data-rolling="1">Update all servers</button>` : "");
+    <span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? `${n.cpuPct}% busy, ${n.memPct}% memory` : "Offline"}</small></button>`).join("") + (S.data.nodes.length > 1 ? `<button class="btn rollbtn" data-rolling="1">Update all nodes</button>` : "");
   if (S.serverTab === "overview") renderServerDetail();
 }
-const noAccess = (what, perm) => `<p class="empty">Your Proxmox account can't see ${what}. It needs ${perm} on this server.</p>`;
+const noAccess = (what, perm) => `<p class="empty">Your Proxmox account can't see ${what}. It needs ${perm} on this node.</p>`;
 const SERVER_TAB = {
   overview: (d, node) => {
     const on = S.data?.vms.filter((v) => v.node === d.name) ?? [];
@@ -252,7 +252,7 @@ const SERVER_TAB = {
       return m ? `<div class="advice"><div><b>${m.guests.length} moved to ${esc(m.target)} for a restart</b>${esc(m.guests.map((g) => g.name).join(", "))}</div><button class="btn" data-moveback="${esc(d.name)}">Move everything back</button></div>` : "";
     })()}
     ${d.channel && !d.channel.ok ? `<div class="advice"><div><b>Updates can't download</b>${esc(d.channel.note)}</div></div>` : ""}
-    ${d.updates?.total ? `<div class="advice"><div><b>${d.updates.total} ${d.updates.total === 1 ? "update is" : "updates are"} waiting</b>${d.updates.rebootNeeded ? "This includes a new kernel, so the server will need a restart." : "No restart should be needed."}</div><button class="btn" data-servertab="updates">See updates</button></div>` : ""}
+    ${d.updates?.total ? `<div class="advice"><div><b>${d.updates.total} ${d.updates.total === 1 ? "update is" : "updates are"} waiting</b>${d.updates.rebootNeeded ? "This includes a new kernel, so the node will need a restart." : "No restart should be needed."}</div><button class="btn" data-servertab="updates">See updates</button></div>` : ""}
     ${a ? `<div class="facts">
       <div class="fact"><label>Processor</label><b>${node?.cpuPct ?? 0}% busy</b><div class="meter"><i style="width:${Math.min(node?.cpuPct ?? 0, 100)}%"></i></div></div>
       <div class="fact"><label>Memory</label><b>${a.memUsedGb} of ${a.memTotalGb} GB</b><div class="meter"><i style="width:${a.memTotalGb ? (a.memUsedGb / a.memTotalGb) * 100 : 0}%"></i></div></div>
@@ -264,7 +264,7 @@ const SERVER_TAB = {
       <dt>Running for</dt><dd>${esc(a.uptime)}</dd>
       <dt>Processor</dt><dd>${esc(a.processor)}, ${a.cpus} threads</dd>
       ${d.channel ? `<dt>Update channel</dt><dd>${esc(d.channel.name)}</dd>` : ""}
-    </dl>` : noAccess("this server's status", "Sys.Audit")}
+    </dl>` : noAccess("this node's status", "Sys.Audit")}
     <article class="server" style="margin-top:20px"><header><span>Running here</span><small>${on.filter((v) => v.running).length} of ${on.length}</small></header>
       <div class="bays">${on.map((v) => `<button class="bay ${v.running ? "" : "stopped"} ${v.issues.length ? "warn" : ""}" data-vm="${v.id}"><i></i>${esc(v.name)}</button>`).join("")}<span class="spare"></span></div></article>`;
   },
@@ -277,7 +277,7 @@ const SERVER_TAB = {
       <div class="actions"><button class="btn" data-check="${esc(d.name)}">Check for updates</button>${d.updates.total ? `<button class="btn primary" data-install="${esc(d.name)}">Install updates</button>` : ""}</div></div>
     ${d.updates.total ? `<p style="margin-top:10px"><b>${d.updates.total} waiting.</b> ${d.updates.rebootNeeded ? "The new kernel means a restart afterward." : "No restart should be needed."}</p>
       ${group("Kernel", d.updates.kernel, true)}${group("Proxmox", d.updates.proxmox, true)}${group("Everything else", d.updates.other, false)}
-      <p class="meta">This list is from the server's last check for updates.</p>` : `<p class="empty">This server is up to date as of its last check for updates.</p>`}`;
+      <p class="meta">This list is from the node's last check for updates.</p>` : `<p class="empty">This node is up to date as of its last check for updates.</p>`}`;
   },
   services: (d) => {
     if (!d.services) return noAccess("services", "Sys.Audit");
@@ -287,7 +287,7 @@ const SERVER_TAB = {
   },
   activity: (d) => {
     if (!d.tasks) return noAccess("recent activity", "Sys.Audit");
-    if (!d.tasks.length) return `<p class="empty">No recent activity on this server.</p>`;
+    if (!d.tasks.length) return `<p class="empty">No recent activity on this node.</p>`;
     const words = { running: "Running", ok: "Finished", warning: "Finished with warnings", failed: "Failed" };
     const dots = { running: "busy", ok: "running", warning: "warn", failed: "warn" };
     return d.tasks.map((t) => `<div class="snap"><div>${esc(t.what)}${t.target ? ` on ${esc(t.target)}` : ""}<small>${esc(when(t.startedAt))}, by ${esc(t.who)}</small></div><span class="state"><span class="dot ${dots[t.result]}"></span>${words[t.result]}</span></div>`).join("");
@@ -297,12 +297,12 @@ function renderServerDetail() {
   const box = $("#srvdetail");
   if (!box) return;
   if (!S.server) {
-    box.innerHTML = `<p class="empty">Pick a server to see its details.</p>`;
+    box.innerHTML = `<p class="empty">Pick a node to see its details.</p>`;
     return;
   }
   const node = S.data?.nodes.find((n) => n.name === S.server);
   const d = S.detail;
-  const body = d ? SERVER_TAB[S.serverTab](d, node) : S.detailError ? `<p class="empty">${esc(S.detailError)}</p>` : `<p class="empty">Loading this server's details.</p>`;
+  const body = d ? SERVER_TAB[S.serverTab](d, node) : S.detailError ? `<p class="empty">${esc(S.detailError)}</p>` : `<p class="empty">Loading this node's details.</p>`;
   const top = box.scrollTop;
   box.innerHTML = `
     <div class="head"><div><h2>${esc(S.server)}</h2>
@@ -333,16 +333,23 @@ function confirmAction(title, line, label, run, danger = false) {
 }
 function drawTask(title, view, error) {
   const running = !error && !view?.finished;
-  const words = error || (running ? "Working on it." : { ok: "Finished.", warning: "Finished with warnings.", failed: `It failed. ${view.message}` }[view.result]);
+  const slow = running && Date.now() - S.taskStarted > 10000;
+  const help = S.taskHelp;
+  const noAnswer = help && view?.result === "failed" && /timeout/i.test(view.message ?? "");
+  const words = error || (noAnswer ? help.failed : slow ? help?.waiting ?? "This is taking a while. It carries on in Proxmox even if you stop watching." : running ? "Working on it." : { ok: "Finished.", warning: "Finished with warnings.", failed: `It failed. ${view.message}` }[view.result]);
+  const force = help && (slow || noAnswer) ? `<button class="btn danger" data-forceoff="${help.guest}">Force off</button>` : "";
   dialog(`<h3>${esc(title)}</h3><p class="${error || view?.result === "failed" ? "loginerr" : ""}">${esc(words)}</p>
     ${view?.lines?.length ? `<pre class="tasklog">${esc(view.lines.join("\n"))}</pre>` : ""}
-    <div class="row-end"><button class="btn" data-dlg="cancel" ${running ? "disabled" : ""}>Close</button></div>`);
+    <div class="row-end">${slow ? `<button class="btn" data-taskleave="1">Stop watching</button>` : `<button class="btn" data-dlg="cancel" ${running ? "disabled" : ""}>Close</button>`}${force}</div>`);
   const log = $("#dialog .tasklog");
   if (log) log.scrollTop = log.scrollHeight;
 }
-async function runAction(action, server, title, extra = {}, after = null) {
+async function runAction(action, server, title, extra = {}, after = null, help = null) {
   S.taskRunning = true;
   S.afterTask = after;
+  S.taskStarted = Date.now();
+  S.taskHelp = help;
+  const me = S.taskToken = (S.taskToken ?? 0) + 1;
   drawTask(title);
   try {
     const res = await post(`api/action/${action}`, { server, ...extra });
@@ -361,12 +368,14 @@ async function runAction(action, server, title, extra = {}, after = null) {
     for (;;) {
       await new Promise((r) => setTimeout(r, 1000));
       const view = await signal(url);
+      if (me !== S.taskToken) return;
       drawTask(title, view);
       if (view.finished) break;
     }
     S.taskRunning = false;
     loadServer();
   } catch (err) {
+    if (me !== S.taskToken) return;
     S.taskRunning = false;
     drawTask(title, null, err.message || "BossMox lost contact with Proxmox.");
   }
@@ -391,8 +400,8 @@ function saveReboot(value) {
     else localStorage.removeItem(REBOOT_KEY);
   } catch { /* memory copy still works */ }
 }
-const MOVE_WORDS = "Everything below moves to the server you pick. If anything can't move, the restart is cancelled. If BossMox is one of them, it reconnects after the move and you'll sign in again.";
-const STOP_WORDS = "Proxmox shuts down everything below first, waits for it all to stop, then restarts the server. This usually takes a few minutes. If BossMox runs on this server, it goes down too and this page will wait for it.";
+const MOVE_WORDS = "Everything below moves to the node you pick. If anything can't move, the restart is cancelled. If BossMox is one of them, it reconnects after the move and you'll sign in again.";
+const STOP_WORDS = "Proxmox shuts down everything below first, waits for it all to stop, then restarts the node. This usually takes a few minutes. If BossMox runs on this node, it goes down too and this page will wait for it.";
 /* Guests moved off for a restart, remembered in this browser so they can be sent home. */
 const MOVED_KEY = "bossmox-moved";
 let movedMemory = {};
@@ -451,9 +460,9 @@ async function startRestart(server) {
   const canMove = guests.length > 0 && others.length > 0;
   S.restart = { server, guests };
   dialog(`<h3>Restart ${esc(server)}?</h3>
-    <p id="rwords">${guests.length ? (canMove ? MOVE_WORDS : STOP_WORDS) : "Nothing is running on this server."}</p>
+    <p id="rwords">${guests.length ? (canMove ? MOVE_WORDS : STOP_WORDS) : "Nothing is running on this node."}</p>
     ${blocked ? `<p class="loginerr" style="margin-top:12px">Wait for this to finish first: ${esc(plan.busy.join(", "))}.</p>` : ""}
-    ${plan.busyKnown ? "" : `<p class="loginerr" style="margin-top:12px">BossMox can't tell whether jobs are running on this server.</p>`}
+    ${plan.busyKnown ? "" : `<p class="loginerr" style="margin-top:12px">BossMox can't tell whether jobs are running on this node.</p>`}
     ${canMove ? plan.cantMove.map((m) => `<p class="loginerr" style="margin-top:12px">${esc(m)}</p>`).join("") : ""}
     ${guests.length ? `<div class="restartlist">${guests.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state">${v.startsAtBoot ? "Starts again by itself" : "Stays off until started"}</span></div>`).join("")}</div>` : ""}
     ${canMove ? `<label class="field restartname"><span>Before restarting</span><select id="rmove"><option value="">Shut them down, don't move them</option>${others.map((n) => `<option value="${esc(n)}" selected>Move everything to ${esc(n)}</option>`).join("")}</select></label>` : ""}
@@ -498,10 +507,10 @@ function restartStage(plan, state) {
   return plan.guests.some((g) => state.running.has(g.id)) ? "stopping" : "rebooting";
 }
 const STAGE_NOTE = {
-  moving: "Moving everything off this server. It restarts only after all of it has moved. Keep this page open.",
-  stopping: "Shutting down what's running. Proxmox waits for all of it to stop before it restarts the server.",
-  rebooting: "The server is restarting. If BossMox can't reach it for a while, that's expected. Keep this page open.",
-  starting: "The server is back. Waiting for everything to start.",
+  moving: "Moving everything off this node. It restarts only after all of it has moved. Keep this page open.",
+  stopping: "Shutting down what's running. Proxmox waits for all of it to stop before it restarts the node.",
+  rebooting: "The node is restarting. If BossMox can't reach it for a while, that's expected. Keep this page open.",
+  starting: "The node is back. Waiting for everything to start.",
 };
 function drawRestart(plan, state, title, note, done) {
   const stage = restartStage(plan, state);
@@ -586,7 +595,7 @@ async function watchRestart() {
       const title = allBack ? `${plan.server} is back` : state.back ? `${plan.server} is back, but something's missing` : `${plan.server} hasn't come back`;
       let note = allBack
         ? plan.target ? `Everything is running. The moved items stay on ${plan.target}. Use Move to bring them back.` : off.length ? "Everything set to start by itself is running. The items marked off need starting by hand." : "Everything is running again."
-        : state.back ? "These haven't started yet. Check them before relying on this server." : "It's been 15 minutes. Someone may need to look at the server itself.";
+        : state.back ? "These haven't started yet. Check them before relying on this node." : "It's been 15 minutes. Someone may need to look at the node itself.";
       if (plan.rolling) note += ` ${notTouched(plan)}`;
       if (plan.target) setMoved(plan.server, { target: plan.target, guests: plan.guests.map((g) => ({ id: g.id, name: g.name })) });
       drawRestart(plan, state, title, note, true);
@@ -637,7 +646,7 @@ async function followTask(server, task) {
 async function startRolling() {
   const names = (S.data?.nodes ?? []).filter((n) => n.online).map((n) => n.name);
   S.taskRunning = true;
-  dialog(`<h3>Checking every server for updates</h3><p>This looks for new updates. It doesn't install anything.</p>`);
+  dialog(`<h3>Checking every node for updates</h3><p>This looks for new updates. It doesn't install anything.</p>`);
   let plan;
   try {
     await Promise.all(names.map(async (server) => {
@@ -654,18 +663,18 @@ async function startRolling() {
   }
   S.taskRunning = false;
   if (plan.blocked.length) return dialog(`<h3>Not ready to update</h3>${plan.blocked.map((b) => `<p class="loginerr">${esc(b)}</p>`).join("")}${closeRow}`);
-  if (!plan.servers.length) return dialog(`<h3>Every server is up to date</h3><p>Nothing is waiting to install.</p>${closeRow}`);
+  if (!plan.servers.length) return dialog(`<h3>Every node is up to date</h3><p>Nothing is waiting to install.</p>${closeRow}`);
   S.rollingPlan = plan;
   const restarts = plan.servers.filter((v) => v.rebootNeeded).length;
   const how = !restarts
-    ? "BossMox opens the updater on one server at a time, in this order, for you to approve. Nothing here needs a restart, so everything stays where it is and keeps running."
+    ? "BossMox opens the updater on one node at a time, in this order, for you to approve. Nothing here needs a restart, so everything stays where it is and keeps running."
     : restarts === plan.servers.length
-      ? "BossMox updates one server at a time, in this order. It moves everything off, opens the updater for you to approve, restarts the server, then moves everything back."
-      : "BossMox updates one server at a time, in this order, and opens the updater for you to approve. A server that needs a restart has everything moved off first and moved back after. The others just update.";
-  dialog(`<h3>Update ${plan.servers.length === 1 ? esc(plan.servers[0].name) : `all ${plan.servers.length} servers`}?</h3>
+      ? "BossMox updates one node at a time, in this order. It moves everything off, opens the updater for you to approve, restarts the node, then moves everything back."
+      : "BossMox updates one node at a time, in this order, and opens the updater for you to approve. A node that needs a restart has everything moved off first and moved back after. The others just update.";
+  dialog(`<h3>Update ${plan.servers.length === 1 ? esc(plan.servers[0].name) : `all ${plan.servers.length} nodes`}?</h3>
     <p>${how} If any step fails, it stops there.</p>
     <div class="restartlist">${plan.servers.map((v) => `<div class="snap"><div>${esc(v.name)}<small>Version ${esc(v.version ?? "unknown")}</small></div><span class="state">${v.updates} ${v.updates === 1 ? "update" : "updates"}, ${v.rebootNeeded ? "restarts" : "no restart"}</span></div>`).join("")}</div>
-    ${plan.keepsMajority || !restarts ? "" : `<div class="advice" style="margin-top:12px"><div><b>This cluster has only ${plan.votes} votes</b>Everything keeps running, but nothing can be started, stopped or changed while a server restarts.</div></div>`}
+    ${plan.keepsMajority || !restarts ? "" : `<div class="advice" style="margin-top:12px"><div><b>This cluster has only ${plan.votes} votes</b>Everything keeps running, but nothing can be started, stopped or changed while a node restarts.</div></div>`}
     <label class="field restartname"><span>Type confirm to start</span><input id="rname" data-word="confirm" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-rollinggo="1" disabled>Start updating</button></div>`);
   $("#rname").focus();
@@ -702,7 +711,7 @@ async function rollingStep(rolling) {
     const others = S.data.nodes.filter((n) => n.online && n.name !== server).map((n) => n.name);
     // Finished servers are the newest, and guests should only move to the same version or newer.
     plan.target = rolling.servers.slice(0, rolling.index).reverse().find((n) => others.includes(n)) ?? others[0] ?? "";
-    if (!plan.target) return rollingStop(plan, `${server} wasn't updated`, "There's no other online server to move its guests to.");
+    if (!plan.target) return rollingStop(plan, `${server} wasn't updated`, "There's no other online node to move its guests to.");
     plan.phase = "moving";
     try {
       const res = await post("api/action/move-all", { server, target: plan.target, guests: guests.map((v) => v.id).join(",") });
@@ -797,7 +806,7 @@ function rollingNext(plan) {
   saveReboot(null);
   S.watching = false;
   const done = !rolling.restarted ? "Nothing needed a restart, so everything kept running." : rolling.restarted === rolling.servers.length ? "Each one restarted, and everything that moved is back where it started." : "The ones that needed it restarted, and everything that moved is back where it started.";
-  dialog(`<h3>${rolling.servers.length === 1 ? `${esc(plan.server)} is updated` : `All ${rolling.servers.length} servers are updated`}</h3><p>${done}</p>${closeRow}`);
+  dialog(`<h3>${rolling.servers.length === 1 ? `${esc(plan.server)} is updated` : `All ${rolling.servers.length} nodes are updated`}</h3><p>${done}</p>${closeRow}`);
   renderHealth();
   loadServer();
 }
@@ -812,7 +821,7 @@ async function loadNetwork() {
   const box = $("#netdetail");
   const asked = S.netServer;
   if (!asked) {
-    box.innerHTML = `<p class="empty">Waiting for a server to come online.</p>`;
+    box.innerHTML = `<p class="empty">Waiting for a node to come online.</p>`;
     return;
   }
   try {
@@ -823,8 +832,8 @@ async function loadNetwork() {
       ${i.note ? `<p class="meta">${esc(i.note)}</p>` : ""}
       <dl class="plain">${fact("Address", i.address)}${fact("Gateway", i.gateway)}${fact("Uses", i.ports.join(", "))}${fact("Part of", i.partOf)}${i.kind === "Virtual switch" ? `<dt>Guests</dt><dd>${esc(i.guests.join(", ") || "None")}</dd>` : ""}</dl></article>`;
     $("#netdetail").innerHTML = `<div class="head"><div><h2>${esc(n.server)}</h2><div class="state">${n.dnsServers.length ? `Looks up names with ${esc(n.dnsServers.join(", "))}` : "No name server set"}${n.searchDomain ? `, in ${esc(n.searchDomain)}` : ""}</div></div></div>
-      ${n.interfaces.map(card).join("") || `<p class="empty">This server didn't report any network connections.</p>`}
-      <p class="meta">BossMox shows the network but can't change it yet. A wrong change here can cut off the server, so that's coming with a safety net.</p>`;
+      ${n.interfaces.map(card).join("") || `<p class="empty">This node didn't report any network connections.</p>`}
+      <p class="meta">BossMox shows the network but can't change it yet. A wrong change here can cut off the node, so that's coming with a safety net.</p>`;
   } catch (err) {
     if (err.message !== "signed out" && $("#netdetail")) $("#netdetail").innerHTML = `<p class="empty">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>`;
   }
@@ -834,7 +843,7 @@ async function loadNetwork() {
 function startCreate() {
   const server = S.data?.nodes.find((n) => n.online)?.name;
   if (!server) {
-    $("#newbox").innerHTML = `<p class="empty">Waiting for a server to come online.</p>`;
+    $("#newbox").innerHTML = `<p class="empty">Waiting for a node to come online.</p>`;
     return;
   }
   loadCreate(server, "qemu");
@@ -853,15 +862,15 @@ async function loadCreate(server, kind) {
   const vm = kind === "qemu";
   const field = (label, html) => `<label class="field"><span>${label}</span>${html}</label>`;
   const nodes = S.data.nodes.filter((n) => n.online);
-  box.innerHTML = `<p class="meta" style="margin-top:0">${vm ? "A virtual machine is a full computer with its own operating system." : "A container shares this server's Linux, so it's lighter and starts in seconds."}</p>
+  box.innerHTML = `<p class="meta" style="margin-top:0">${vm ? "A virtual machine is a full computer with its own operating system." : "A container shares this node's Linux, so it's lighter and starts in seconds."}</p>
     <p class="loginerr" id="cerr" hidden></p>
     ${field("What to create", `<select id="ckind"><option value="qemu" ${vm ? "selected" : ""}>Virtual machine</option><option value="lxc" ${vm ? "" : "selected"}>Container</option></select>`)}
-    ${nodes.length > 1 ? field("Server", `<select id="cserver">${nodes.map((n) => `<option ${n.name === server ? "selected" : ""}>${esc(n.name)}</option>`).join("")}</select>`) : `<input type="hidden" id="cserver" value="${esc(server)}">`}
+    ${nodes.length > 1 ? field("Node", `<select id="cserver">${nodes.map((n) => `<option ${n.name === server ? "selected" : ""}>${esc(n.name)}</option>`).join("")}</select>`) : `<input type="hidden" id="cserver" value="${esc(server)}">`}
     ${field("Name", `<input id="cname" maxlength="63" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(kept.name)}">`)}
     ${vm ? field("Operating system", `<select id="cos"><option value="linux">Linux</option><option value="windows">Windows</option><option value="other">Something else</option></select>`) : ""}
     ${field(vm ? "Install from" : "Template", `<select id="cinstaller">${vm ? `<option value="">Nothing yet, I'll add a disc later</option>` : ""}${p.installers.map((i) => `<option value="${esc(i.volid)}">${esc(i.label)}</option>`).join("")}</select>`)}
-    ${!vm && !p.installers.length ? `<p class="meta">This server has no templates yet, so a container can't be made here.</p>` : ""}
-    ${vm ? `<p class="meta" style="margin:-8px 0 14px">${p.installers.length ? "" : "This server has no installer discs yet. "}<button class="linkbtn" data-discadd="1">Add a disc from a web address</button></p>` : ""}
+    ${!vm && !p.installers.length ? `<p class="meta">This node has no templates yet, so a container can't be made here.</p>` : ""}
+    ${vm ? `<p class="meta" style="margin:-8px 0 14px">${p.installers.length ? "" : "This node has no installer discs yet. "}<button class="linkbtn" data-discadd="1">Add a disc from a web address</button></p>` : ""}
     ${vm ? "" : field("Password for root", `<input id="cpassword" type="password" autocomplete="new-password">`)}
     <div class="createrow">
       ${field(`Processor cores (${p.cores} here)`, `<input id="ccores" type="number" min="1" max="128" value="${esc(kept.cores)}">`)}
@@ -887,7 +896,7 @@ function createGuest() {
   const taken = S.data.vms.find((v) => v.name.toLowerCase() === name.toLowerCase());
   if (!/^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$/.test(name)) return fail("A name uses letters, numbers, dots and dashes, and starts and ends with a letter or number.");
   if (taken) return fail(`${taken.name} already exists. Pick another name.`);
-  if (!$("#cstorage").value || !$("#cbridge").value) return fail("This server needs a storage and a network first.");
+  if (!$("#cstorage").value || !$("#cbridge").value) return fail("This node needs a storage and a network first.");
   if (kind === "lxc" && !$("#cinstaller").value) return fail("Pick a template.");
   if (kind === "lxc" && $("#cpassword").value.length < 8) return fail("Give it a password of at least 8 characters.");
   const body = {
@@ -960,7 +969,7 @@ function drawBackups() {
   const box = $("#bkbox");
   if (!box) return;
   if (!S.backups) {
-    box.innerHTML = `<p class="empty">${esc(S.backupsError || "Looking for backups on every server.")}</p>`;
+    box.innerHTML = `<p class="empty">${esc(S.backupsError || "Looking for backups on every node.")}</p>`;
     return;
   }
   S.bkTab ??= "backups";
@@ -1018,7 +1027,7 @@ function askBackupReplace() {
   if (v?.running) return dialog(`<h3>Shut down ${esc(v.name)} first</h3><p>BossMox won't replace a guest while it's running. Shut it down in Virtual Machines, then come back to this backup.</p>${closeRow}`);
   S.bkPlan.storage = storage;
   S.bkPlan.node = v?.node ?? x.node;
-  if (v && v.node !== x.node) return dialog(`<h3>This backup is on a different server</h3><p>${esc(v.name)} is on ${esc(v.node)}, and this backup is on ${esc(x.node)}. Move ${esc(v.name)} to ${esc(x.node)} first, or restore as a copy.</p>${closeRow}`);
+  if (v && v.node !== x.node) return dialog(`<h3>This backup is on a different node</h3><p>${esc(v.name)} is on ${esc(v.node)}, and this backup is on ${esc(x.node)}. Move ${esc(v.name)} to ${esc(x.node)} first, or restore as a copy.</p>${closeRow}`);
   dialog(`<h3>Replace ${esc(x.group.name)}?</h3><p>${esc(x.group.name)} is erased and rebuilt from ${esc(when(x.takenAt))}. Anything newer on it is gone for good, and its snapshots go too.</p>
     <label class="field restartname"><span>Type replace to confirm</span><input id="rname" data-word="replace" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-bkreplacego="1" disabled>Replace ${esc(x.group.name)}</button></div>`);
@@ -1047,7 +1056,7 @@ async function askSchedule() {
       <p class="loginerr" id="joberr" hidden></p>
       <label class="field restartname"><span>What to back up</span><select id="jobwhat"><option value="all">Everything</option>${S.data.vms.map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("")}</select></label>
       <label class="field restartname"><span>Which days</span><select id="jobday">${days.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></label>
-      <label class="field restartname"><span>What time, on the server's clock</span><input id="jobtime" type="time" value="02:00"></label>
+      <label class="field restartname"><span>What time, on the node's clock</span><input id="jobtime" type="time" value="02:00"></label>
       <label class="field restartname"><span>Save to</span><select id="jobstore">${plan.backupStorages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select></label>
       <label class="field restartname"><span>How many backups to keep of each</span><input id="jobkeep" type="number" min="1" max="99" value="3"></label>
       <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-jobsave="${esc(server)}">Add schedule</button></div>`);
@@ -1097,7 +1106,12 @@ function askPower(power) {
   const v = selected();
   if (!v) return;
   const w = POWER_WORDS[power];
-  confirmAction(`${w.title} ${v.name}?`, w.line(v), `${w.title} ${v.name}`, () => runAction("guest-power", v.node, `${w.title} ${v.name}`, { ...guestBody(v), power, confirm: String(v.id) }, () => refresh()), power === "stop");
+  const help = power === "shutdown" || power === "reboot" ? {
+    guest: v.id,
+    waiting: `Waiting for ${v.name} to respond. Some systems ignore this request. If it doesn't answer, Proxmox gives up, or you can force it off now.`,
+    failed: `${v.name} didn't respond, so it's still running. Some systems ignore this request. Force off cuts the power, and anything unsaved is lost.`,
+  } : null;
+  confirmAction(`${w.title} ${v.name}?`, w.line(v), `${w.title} ${v.name}`, () => runAction("guest-power", v.node, `${w.title} ${v.name}`, { ...guestBody(v), power, confirm: String(v.id) }, () => refresh(), help), power === "stop");
 }
 
 /* Snapshots */
@@ -1168,11 +1182,11 @@ async function startMove(id) {
   } catch (err) {
     return fail(err.message);
   }
-  if (plan.localResources) return fail("It uses hardware attached to this server, such as a USB device, so it has to stay here.");
-  if (!plan.targets.length) return fail(plan.blocked.length ? `No other server can take it. ${plan.blocked.map((b) => `${b.name} is missing ${b.storages.join(", ")}`).join(". ")}.` : "There's no other online server to move it to.");
+  if (plan.localResources) return fail("It uses hardware attached to this node, such as a USB device, so it has to stay here.");
+  if (!plan.targets.length) return fail(plan.blocked.length ? `No other node can take it. ${plan.blocked.map((b) => `${b.name} is missing ${b.storages.join(", ")}`).join(". ")}.` : "There's no other online node to move it to.");
   S.move = { v };
   const words = plan.interrupts
-    ? `${v.name} will shut down, move, and start again on the new server, so it will be offline for a short time.`
+    ? `${v.name} will shut down, move, and start again on the new node, so it will be offline for a short time.`
     : v.running ? `${v.name} keeps running while it moves.` : `${v.name} is off, so it will just be moved.`;
   dialog(`<h3>Move ${esc(v.name)}?</h3><p>${esc(words)} It's on ${esc(v.node)} now.${plan.localDisks ? " Its disks are copied too, which can take a while." : ""}</p>
     <label class="field restartname"><span>Move to</span><select id="mtarget">${plan.targets.map((n) => `<option>${esc(n)}</option>`).join("")}</select></label>
@@ -1328,7 +1342,7 @@ async function askGuestEdit(id) {
     <div class="createrow"><label class="field"><span>Processor cores</span><input id="ecores" type="number" min="1" max="128" value="${v.cores}"></label>
     <label class="field"><span>Memory in GB</span><input id="ememory" type="number" min="0.25" step="0.25" value="${v.memoryMb / 1024}"></label></div>
     ${discs ? `<label class="field"><span>Installer disc</span><select id="edisc"><option value="">No disc</option>${v.disc && !known ? `<option value="${esc(v.disc)}" selected>${esc(v.disc)}</option>` : ""}${discs.map((d) => `<option value="${esc(d.volid)}" ${d.volid === v.disc ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select></label>` : ""}
-    <label class="createcheck"><input id="eboot" type="checkbox" ${v.startsAtBoot ? "checked" : ""}> Start when the server starts</label>
+    <label class="createcheck"><input id="eboot" type="checkbox" ${v.startsAtBoot ? "checked" : ""}> Start when its node starts</label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-guestsave="1">Save</button></div>`);
 }
 function saveGuestEdit() {
@@ -1424,6 +1438,18 @@ document.addEventListener("click", (e) => {
     closeDialog();
     return askMoveBack(d.moveback);
   }
+  if (d.taskleave || d.forceoff) {
+    // Whatever is running carries on in Proxmox. BossMox just stops following it.
+    S.taskToken++;
+    S.taskRunning = false;
+    S.afterTask = null;
+    if (d.forceoff) {
+      S.sel = +d.forceoff;
+      return askPower("stop");
+    }
+    closeDialog();
+    return refresh();
+  }
   if (d.guestdelete) return askGuestDelete(+d.guestdelete);
   if (d.guestdeletego) {
     t.disabled = true;
@@ -1499,10 +1525,10 @@ document.addEventListener("click", (e) => {
     saveReboot(null);
     S.watching = false;
     if (plan?.phase === "moving") {
-      return dialog(`<h3>${esc(plan.server)} won't restart</h3><p>Anything already moving will finish moving. To send it back afterward, use Move everything back on the server's Overview.${plan.rolling ? ` ${esc(notTouched(plan))}` : ""}</p>${closeRow}`);
+      return dialog(`<h3>${esc(plan.server)} won't restart</h3><p>Anything already moving will finish moving. To send it back afterward, use Move everything back on the node's Overview.${plan.rolling ? ` ${esc(notTouched(plan))}` : ""}</p>${closeRow}`);
     }
     if (plan?.rolling && plan.phase === "restarting") {
-      return dialog(`<h3>BossMox stopped following the update</h3><p>${esc(plan.server)} is still restarting. To send its guests back afterward, use Move everything back on the server's Overview. ${esc(notTouched(plan))}</p>${closeRow}`);
+      return dialog(`<h3>BossMox stopped following the update</h3><p>${esc(plan.server)} is still restarting. To send its guests back afterward, use Move everything back on the node's Overview. ${esc(notTouched(plan))}</p>${closeRow}`);
     }
     return closeDialog();
   }
@@ -1519,7 +1545,7 @@ document.addEventListener("click", (e) => {
   if (d.install) {
     const server = d.install;
     const n = S.detail?.updates?.total ?? 0;
-    return confirmAction(`Install ${n} updates on ${server}?`, S.detail?.updates?.rebootNeeded ? "This opens a terminal on the server and installs in the foreground. A restart will be needed afterward. You'll get one more chance to review the list." : "This opens a terminal on the server and installs in the foreground. You'll get one more chance to review the list.", `Open installer for ${server}`, () => openTerminal(server));
+    return confirmAction(`Install ${n} updates on ${server}?`, S.detail?.updates?.rebootNeeded ? "This opens a terminal on the node and installs in the foreground. A restart will be needed afterward. You'll get one more chance to review the list." : "This opens a terminal on the node and installs in the foreground. You'll get one more chance to review the list.", `Open installer for ${server}`, () => openTerminal(server));
   }
   if (d.servertab) {
     S.serverTab = d.servertab;
