@@ -307,7 +307,7 @@ function renderServerDetail() {
   box.innerHTML = `
     <div class="head"><div><h2>${esc(S.server)}</h2>
       <div class="state"><span class="dot ${node?.online ? "running" : "warn"}"></span>${node?.online ? "Online" : "Offline"}${d?.summary ? `, running for ${esc(d.summary.uptime)}` : ""}</div></div>
-      <div class="actions"><button class="btn danger" data-restartserver="${esc(S.server)}">Restart</button></div></div>
+      <div class="actions"><button class="btn" data-nodeconsole="${esc(S.server)}" ${node?.online ? "" : "disabled"}>Console</button><button class="btn danger" data-restartserver="${esc(S.server)}">Restart</button></div></div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["updates", d?.updates?.total ? `Updates (${d.updates.total})` : "Updates"], ["services", "Services"], ["activity", "Activity"]].map(([k, l]) => `<button role="tab" aria-selected="${S.serverTab === k}" class="${S.serverTab === k ? "on" : ""}" data-servertab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${body}</div>`;
   box.scrollTop = top;
@@ -1223,10 +1223,11 @@ async function openTerminal(server) {
 }
 function showTerminal(server, id, title, help, guest = null) {
   const isConsole = guest !== null;
+  const buttons = typeof guest === "number" ? `<div class="actions conacts" data-guest="${guest}"></div>` : "";
   APPS.terminal.title = title;
   {
     openWin("terminal");
-    $(".wbody", wins.terminal).innerHTML = `<div class="termwrap">${isConsole ? `<div class="vnctools"><span>${help}</span><div class="actions conacts" data-guest="${guest}"></div></div>` : `<p class="termhelp">${help}</p>`}<div id="termbox"></div></div>`;
+    $(".wbody", wins.terminal).innerHTML = `<div class="termwrap">${isConsole ? `<div class="vnctools"><span>${help}</span>${buttons}</div>` : `<p class="termhelp">${help}</p>`}<div id="termbox"></div></div>`;
     const dark = { background: "#07161C", foreground: "#CFE6DF" };
     const xterm = new Terminal({ cursorBlink: true, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 14, theme: dark, scrollback: 10000 });
     const fit = new FitAddon.FitAddon();
@@ -1311,6 +1312,18 @@ function loadNoVnc() {
     s.onerror = () => reject(new Error("BossMox couldn't load the console."));
     document.head.append(s);
   });
+}
+async function openNodeConsole(server) {
+  if (term) return dialog(`<h3>A terminal is already open</h3><p>Close it first, then open this console.</p>${closeRow}`);
+  try {
+    const res = await post("api/action/node-console", { server });
+    const body = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) throw new Error(body.error);
+    showTerminal(server, body.terminal, `Console: ${server}`, `Console for ${esc(server)}. Anything you run here changes the node right away.`, "node");
+  } catch (err) {
+    dialog(`<h3>Couldn't open the console</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
 }
 async function openConsole(id) {
   const v = S.data?.vms.find((g) => g.id === id);
@@ -1491,6 +1504,7 @@ document.addEventListener("click", (e) => {
   }
   if (d.createnew) return createGuest();
   if (d.console) return openConsole(+d.console);
+  if (d.nodeconsole) return openNodeConsole(d.nodeconsole);
   if (d.vnccad) return vnc?.sendCtrlAltDel();
   if (d.guestedit) return askGuestEdit(+d.guestedit);
   if (d.guestsave) return saveGuestEdit();

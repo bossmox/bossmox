@@ -432,8 +432,8 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
   },
 };
 
-async function openUpdateTerminal(res: http.ServerResponse, name: string, session: Session) {
-  const proxy = await pve.post<TermProxy>(`/nodes/${encodeURIComponent(name)}/termproxy`, session, { cmd: "upgrade" });
+async function openNodeTerminal(res: http.ServerResponse, name: string, session: Session, form: Record<string, string>) {
+  const proxy = await pve.post<TermProxy>(`/nodes/${encodeURIComponent(name)}/termproxy`, session, form);
   return json(res, 200, { terminal: terminals.prepare(name, session, proxy) });
 }
 
@@ -463,11 +463,11 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
       throw err;
     }
   }
-  if (action === "install-updates") {
+  if (action === "install-updates" || action === "node-console") {
     const name = text((await readJson(req)).server, 64);
     if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
     try {
-      return await openUpdateTerminal(res, name, session);
+      return await openNodeTerminal(res, name, session, action === "install-updates" ? { cmd: "upgrade" } : {});
     } catch (err) {
       if (err instanceof PveError && err.status === 403) {
         return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
