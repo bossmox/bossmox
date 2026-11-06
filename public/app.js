@@ -15,7 +15,7 @@ const APPS = {
   monitor: { title: "Servers", color: "#7A5AC8", w: 900, h: 620 },
   storage: { title: "Storage", color: "#B9680A", w: 520, h: 420 },
   network: { title: "Network", color: "#2F7A7E", w: 460, h: 250 },
-  backups: { title: "Backups", color: "#C43838", w: 460, h: 250 },
+  backups: { title: "Backups", color: "#C43838", w: 860, h: 610 },
   terminal: { title: "Install updates", color: "#20262A", w: 860, h: 560, noIcon: true },
 };
 
@@ -111,6 +111,7 @@ function render(app) {
     renderDetail();
   }
   if (app === "monitor") renderServers();
+  if (app === "backups") loadBackups();
 }
 
 /* Virtual Machines */
@@ -349,6 +350,10 @@ async function runAction(action, server, title, extra = {}, after = null) {
       return showLogin("You've been signed out. Sign in again to continue.");
     }
     if (!res.ok) throw new Error(body.error);
+    if (!body.task) {
+      S.taskRunning = false;
+      return drawTask(title, { finished: true, result: "ok", lines: [] });
+    }
     const url = `api/task?server=${encodeURIComponent(server)}&task=${encodeURIComponent(body.task)}`;
     for (;;) {
       await new Promise((r) => setTimeout(r, 1000));
@@ -781,6 +786,165 @@ function rollingNext(plan) {
   loadServer();
 }
 
+/* Backups */
+async function loadBackups() {
+  try {
+    S.backups = await signal("api/backups");
+    S.backupsError = "";
+  } catch (err) {
+    if (err.message === "signed out") return;
+    S.backupsError = err.message || "BossMox lost contact with Proxmox.";
+  }
+  drawBackups();
+}
+const findBackup = (volid) => S.backups?.groups.flatMap((g) => g.backups.map((b) => ({ ...b, group: g }))).find((b) => b.volid === volid);
+function backupsPane() {
+  const b = S.backups;
+  const live = S.data?.vms ?? [];
+  const known = new Set(b.groups.map((g) => g.id));
+  const missing = live.filter((v) => !known.has(v.id));
+  const row = (x) => `<div class="snap"><div>${esc(when(x.takenAt))}<small>${esc(x.size)} on ${esc(x.storage)}, ${esc(x.node)}${x.notes ? `, ${esc(x.notes)}` : ""}</small></div><div class="actions"><button class="btn" data-bkrestore="${esc(x.volid)}">Restore</button><button class="btn" data-bkdelete="${esc(x.volid)}" ${x.locked ? "disabled title=\"This backup is protected\"" : ""}>Delete</button></div></div>`;
+  const group = (g) => `<details class="upgroup"><summary>${esc(g.name)} (${g.backups.length}), latest ${esc(when(g.backups[0]?.takenAt))}</summary>
+    ${g.exists ? `<div class="actions bknow"><button class="btn" data-bknow="${g.id}">Back up now</button></div>` : ""}${g.backups.map(row).join("")}</details>`;
+  return `${b.unscheduled.length ? `<div class="advice"><div><b>${b.unscheduled.length} ${b.unscheduled.length === 1 ? "isn't" : "aren't"} on a backup schedule</b>${esc(b.unscheduled.join(", "))}</div><button class="btn" data-jobadd="1">Add a schedule</button></div>` : ""}
+    ${b.groups.map(group).join("")}
+    ${missing.length ? `<h3 class="bkhead">No backups yet</h3>${missing.map((v) => `<div class="snap"><div>${esc(v.name)}<small>On ${esc(v.node)}</small></div><button class="btn" data-bknow="${v.id}">Back up now</button></div>`).join("")}` : ""}
+    ${!b.groups.length && !missing.length ? `<p class="empty">There's nothing to back up yet.</p>` : ""}`;
+}
+function schedulesPane() {
+  const list = S.backups.schedules;
+  return `<div class="row-end" style="margin:0 0 10px"><button class="btn primary" data-jobadd="1">Add a schedule</button></div>
+    ${list.length ? list.map((j) => `<div class="snap"><div>${esc(j.when)}<small>${esc(j.what)} to ${esc(j.storage)}${j.keep ? `, keeps the last ${j.keep}` : ""}${j.on && j.nextRun ? `. Next run ${esc(when(j.nextRun))}` : j.on ? "" : ". Paused"}</small></div><div class="actions"><button class="btn" data-jobtoggle="${esc(j.id)}">${j.on ? "Pause" : "Resume"}</button><button class="btn" data-jobdelete="${esc(j.id)}">Delete</button></div></div>`).join("") : `<p class="empty">No schedules yet. Backups only happen when someone remembers to run them.</p>`}`;
+}
+function drawBackups() {
+  const box = $("#bkbox");
+  if (!box) return;
+  if (!S.backups) {
+    box.innerHTML = `<p class="empty">${esc(S.backupsError || "Looking for backups on every server.")}</p>`;
+    return;
+  }
+  S.bkTab ??= "backups";
+  const open = new Set([...box.querySelectorAll("details[open] summary")].map((e) => e.textContent));
+  box.innerHTML = `<div class="tabs" role="tablist">${[["backups", "Backups"], ["schedules", "Schedules"]].map(([k, l]) => `<button role="tab" aria-selected="${S.bkTab === k}" class="${S.bkTab === k ? "on" : ""}" data-bktab="${k}">${l}</button>`).join("")}</div>
+    <div class="tabpane">${S.backupsError ? `<p class="loginerr">${esc(S.backupsError)}</p>` : ""}${S.bkTab === "backups" ? backupsPane() : schedulesPane()}</div>`;
+  box.querySelectorAll("details").forEach((e) => {
+    if (open.has($("summary", e).textContent)) e.open = true;
+  });
+}
+const failDialog = (title, err) => dialog(`<h3>${esc(title)}</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+async function askBackupNow(id) {
+  const v = S.data?.vms.find((g) => g.id === id);
+  if (!v) return;
+  try {
+    const plan = await signal(`api/reboot-plan?server=${encodeURIComponent(v.node)}`);
+    if (!plan.backupStorages.length) return dialog(`<h3>Nowhere to save a backup</h3><p>${esc(v.node)} has no storage set up for backups.</p>${closeRow}`);
+    dialog(`<h3>Back up ${esc(v.name)} now?</h3><p>${v.running ? `${esc(v.name)} keeps running, though it may feel slower until this finishes.` : `${esc(v.name)} is off, so this is quick.`}</p>
+      <label class="field restartname"><span>Save to</span><select id="bkstore">${plan.backupStorages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select></label>
+      <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-bkgo="${v.id}">Back up ${esc(v.name)}</button></div>`);
+  } catch (err) {
+    if (err.message !== "signed out") failDialog("Couldn't prepare the backup", err);
+  }
+}
+function backupNow(id) {
+  const v = S.data.vms.find((g) => g.id === id);
+  runAction("back-up-guests", v.node, `Backing up ${v.name}`, { guests: String(id), storage: $("#bkstore").value }, loadBackups);
+}
+async function askBackupRestore(volid) {
+  const x = findBackup(volid);
+  if (!x) return;
+  try {
+    const plan = await signal(`api/restore-plan?server=${encodeURIComponent(x.node)}&type=${x.type}`);
+    if (!plan.storages.length) return dialog(`<h3>Nowhere to restore to</h3><p>${esc(x.node)} has no storage that can hold this.</p>${closeRow}`);
+    S.bkPlan = { x, plan };
+    dialog(`<h3>Restore ${esc(x.group.name)}?</h3><p>From ${esc(when(x.takenAt))}, on ${esc(x.node)}. A copy sits alongside the original, switched off, and nothing is lost.</p>
+      <label class="field restartname"><span>Put its disks on</span><select id="bkdisk">${plan.storages.map((s) => `<option>${esc(s)}</option>`).join("")}</select></label>
+      <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button>${x.group.exists ? `<button class="btn" data-bkreplace="1">Replace the original</button>` : ""}<button class="btn primary" data-bkcopy="1">${x.group.exists ? "Restore as a copy" : "Restore"}</button></div>`);
+  } catch (err) {
+    if (err.message !== "signed out") failDialog("Couldn't prepare the restore", err);
+  }
+}
+function restoreCopy() {
+  const { x, plan } = S.bkPlan;
+  const name = x.group.exists ? `${x.group.name}-copy` : "";
+  runAction("backup-restore", x.node, `Restoring ${x.group.name}`, { volid: x.volid, type: x.type, storage: $("#bkdisk").value, guest: String(plan.nextId), name }, async () => {
+    await refresh();
+    loadBackups();
+  });
+}
+function askBackupReplace() {
+  const { x } = S.bkPlan;
+  const v = S.data?.vms.find((g) => g.id === x.group.id);
+  const storage = $("#bkdisk").value;
+  if (v?.running) return dialog(`<h3>Shut down ${esc(v.name)} first</h3><p>BossMox won't replace a guest while it's running. Shut it down in Virtual Machines, then come back to this backup.</p>${closeRow}`);
+  S.bkPlan.storage = storage;
+  S.bkPlan.node = v?.node ?? x.node;
+  if (v && v.node !== x.node) return dialog(`<h3>This backup is on a different server</h3><p>${esc(v.name)} is on ${esc(v.node)}, and this backup is on ${esc(x.node)}. Move ${esc(v.name)} to ${esc(x.node)} first, or restore as a copy.</p>${closeRow}`);
+  dialog(`<h3>Replace ${esc(x.group.name)}?</h3><p>${esc(x.group.name)} is erased and rebuilt from ${esc(when(x.takenAt))}. Anything newer on it is gone for good, and its snapshots go too.</p>
+    <label class="field restartname"><span>Type replace to confirm</span><input id="rname" data-word="replace" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-bkreplacego="1" disabled>Replace ${esc(x.group.name)}</button></div>`);
+  $("#rname").focus();
+}
+function restoreReplace() {
+  const { x, storage } = S.bkPlan;
+  runAction("backup-restore", x.node, `Replacing ${x.group.name}`, { volid: x.volid, type: x.type, storage, guest: String(x.group.id), replace: true, confirm: "replace" }, async () => {
+    await refresh();
+    loadBackups();
+  });
+}
+function askBackupDelete(volid) {
+  const x = findBackup(volid);
+  if (!x) return;
+  confirmAction(`Delete this backup of ${x.group.name}?`, `The backup from ${when(x.takenAt)} on ${x.storage} is gone for good.`, "Delete backup", () => runAction("backup-delete", x.node, `Deleting backup of ${x.group.name}`, { volid, storage: x.storage, confirm: volid }, loadBackups), true);
+}
+async function askSchedule() {
+  const server = S.data?.nodes.find((n) => n.online)?.name;
+  if (!server) return;
+  try {
+    const plan = await signal(`api/reboot-plan?server=${encodeURIComponent(server)}`);
+    if (!plan.backupStorages.length) return dialog(`<h3>Nowhere to save backups</h3><p>Set up a storage for backups first.</p>${closeRow}`);
+    const days = [["", "Every day"], ["mon", "Mondays"], ["tue", "Tuesdays"], ["wed", "Wednesdays"], ["thu", "Thursdays"], ["fri", "Fridays"], ["sat", "Saturdays"], ["sun", "Sundays"]];
+    dialog(`<h3>Add a backup schedule</h3>
+      <p class="loginerr" id="joberr" hidden></p>
+      <label class="field restartname"><span>What to back up</span><select id="jobwhat"><option value="all">Everything</option>${S.data.vms.map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("")}</select></label>
+      <label class="field restartname"><span>Which days</span><select id="jobday">${days.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></label>
+      <label class="field restartname"><span>What time, on the server's clock</span><input id="jobtime" type="time" value="02:00"></label>
+      <label class="field restartname"><span>Save to</span><select id="jobstore">${plan.backupStorages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select></label>
+      <label class="field restartname"><span>How many backups to keep of each</span><input id="jobkeep" type="number" min="1" max="99" value="3"></label>
+      <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-jobsave="${esc(server)}">Add schedule</button></div>`);
+  } catch (err) {
+    if (err.message !== "signed out") failDialog("Couldn't prepare the schedule", err);
+  }
+}
+function saveSchedule() {
+  const time = $("#jobtime").value;
+  const keep = Number($("#jobkeep").value);
+  if (!time || !Number.isInteger(keep) || keep < 1 || keep > 99) {
+    const err = $("#joberr");
+    err.textContent = "Pick a time, and keep between 1 and 99 backups.";
+    err.hidden = false;
+    return;
+  }
+  const day = $("#jobday").value;
+  const server = S.data.nodes.find((n) => n.online).name;
+  runAction("schedule-add", server, "Adding the schedule", { schedule: day ? `${day} ${time}` : time, guests: $("#jobwhat").value, storage: $("#jobstore").value, keep }, () => {
+    S.bkTab = "schedules";
+    loadBackups();
+  });
+}
+function toggleSchedule(id) {
+  const j = S.backups.schedules.find((x) => x.id === id);
+  const server = S.data?.nodes.find((n) => n.online)?.name;
+  if (!j || !server) return;
+  const word = j.on ? "Pause" : "Resume";
+  confirmAction(`${word} this schedule?`, `${j.when}, ${j.what} to ${j.storage}.`, `${word} schedule`, () => runAction("schedule-toggle", server, `${word} schedule`, { job: id, on: !j.on }, loadBackups));
+}
+function askScheduleDelete(id) {
+  const j = S.backups.schedules.find((x) => x.id === id);
+  const server = S.data?.nodes.find((n) => n.online)?.name;
+  if (!j || !server) return;
+  confirmAction("Delete this schedule?", `${j.when}, ${j.what} to ${j.storage}. Backups it already made stay.`, "Delete schedule", () => runAction("schedule-delete", server, "Deleting the schedule", { job: id, confirm: id }, loadBackups), true);
+}
+
 /* Turning a VM or container on and off */
 const POWER_WORDS = {
   start: { title: "Start", line: (v) => `${v.name} starts on ${v.node}.` },
@@ -954,7 +1118,7 @@ const RENDER = {
   vms: vmsShell, monitor: monView, storage: storeView,
   create: soon("Create a VM", "Not built yet."),
   network: soon("Network", "Not built yet."),
-  backups: soon("Backups", "Not built yet."),
+  backups: () => `<div id="bkbox" class="bkbox"></div>`,
 };
 
 /* Events */
@@ -997,6 +1161,24 @@ document.addEventListener("click", (e) => {
     closeDialog();
     return askMoveBack(d.moveback);
   }
+  if (d.bktab) {
+    S.bkTab = d.bktab;
+    return drawBackups();
+  }
+  if (d.bknow) return askBackupNow(+d.bknow);
+  if (d.bkgo) return backupNow(+d.bkgo);
+  if (d.bkrestore) return askBackupRestore(d.bkrestore);
+  if (d.bkcopy) return restoreCopy();
+  if (d.bkreplace) return askBackupReplace();
+  if (d.bkreplacego) {
+    t.disabled = true;
+    return restoreReplace();
+  }
+  if (d.bkdelete) return askBackupDelete(d.bkdelete);
+  if (d.jobadd) return askSchedule();
+  if (d.jobsave) return saveSchedule();
+  if (d.jobtoggle) return toggleSchedule(d.jobtoggle);
+  if (d.jobdelete) return askScheduleDelete(d.jobdelete);
   if (d.power) return askPower(d.power);
   if (d.snaptake) return askSnapshot();
   if (d.snapsave) return saveSnapshot();

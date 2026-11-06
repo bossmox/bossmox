@@ -7,6 +7,7 @@ import { AuthError, Sessions, type LoginOutcome, type Session } from "./auth.js"
 import { loadConfig } from "./config.js";
 import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
+import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import {
   buildMovePlan,
@@ -116,6 +117,52 @@ async function loadServerDetail(name: string, ticket: string): Promise<ServerDet
   return buildServerDetail(name, status, updates, repos, subscription, services, tasks, clusterStatus);
 }
 
+interface RawStorage {
+  storage: string;
+  active?: number;
+  enabled?: number;
+  avail?: number;
+  shared?: number;
+}
+const usable = (s: RawStorage) => s.active !== 0 && s.enabled !== 0;
+
+async function loadBackups(ticket: string) {
+  const data = await loadOverview(ticket);
+  const online = data.nodes.filter((n) => n.online).map((n) => n.name);
+  const sharedSeen = new Set<string>();
+  const perNode = await Promise.all(online.map(async (node) => {
+    const base = `/nodes/${encodeURIComponent(node)}/storage`;
+    const storages = (await pve.get<RawStorage[]>(`${base}?content=backup`, ticket)).filter(usable);
+    return { node, base, storages };
+  }));
+  const reads: Promise<BackupSource[]>[] = [];
+  for (const { node, base, storages } of perNode) {
+    for (const s of storages) {
+      // Storage shared between servers holds the same files, so read it once.
+      if (s.shared === 1) {
+        if (sharedSeen.has(s.storage)) continue;
+        sharedSeen.add(s.storage);
+      }
+      reads.push(pve.get<RawBackupFile[]>(`${base}/${encodeURIComponent(s.storage)}/content?content=backup`, ticket).then((files) => files.map((file) => ({ node, storage: s.storage, file }))).catch(() => []));
+    }
+  }
+  const [files, jobs, notBackedUp] = await Promise.all([
+    Promise.all(reads),
+    pve.get<RawBackupJob[]>("/cluster/backup", ticket).catch(() => []),
+    pve.get<{ vmid: number }[]>("/cluster/backup-info/not-backed-up", ticket).catch(() => []),
+  ]);
+  return buildBackups(files.flat(), data.vms.map((v) => ({ id: v.id, name: v.name })), jobs, notBackedUp);
+}
+
+async function loadRestorePlan(name: string, type: "qemu" | "lxc", ticket: string) {
+  const content = type === "qemu" ? "images" : "rootdir";
+  const [storages, nextId] = await Promise.all([
+    pve.get<RawStorage[]>(`/nodes/${encodeURIComponent(name)}/storage?content=${content}`, ticket),
+    pve.get<string | number>("/cluster/nextid", ticket),
+  ]);
+  return { nextId: Number(nextId), storages: storages.filter(usable).map((s) => s.storage) };
+}
+
 async function loadRollingPlan(ticket: string) {
   const data = await loadOverview(ticket);
   const [cluster, tieBreaker, servers] = await Promise.all([
@@ -157,6 +204,10 @@ const NODE_NAME = /^[\w.-]{1,64}$/;
 const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w.@!-]+:$/;
 
 const POWER = new Set(["start", "shutdown", "reboot", "stop"]);
+const VOLUME = /^[\w.-]+:[\w./-]+$/;
+const STORAGE = /^[\w.-]{1,64}$/;
+const JOB_ID = /^[\w-]{1,64}$/;
+const SCHEDULE = /^((mon|tue|wed|thu|fri|sat|sun) )?([01]\d|2[0-3]):[0-5]\d$/;
 const SNAPSHOT_NAME = /^[A-Za-z][\w-]{1,39}$/;
 
 /** The address of one VM or container, checked, for actions that take one. */
@@ -222,6 +273,53 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     const snap = snapshotName(body);
     if (body.confirm !== snap) throw new AuthError(400, "That wasn't confirmed.");
     return pve.delete<string>(`${path}/snapshot/${snap}`, who);
+  },
+  "backup-restore": async (name, who, body) => {
+    const volid = text(body.volid, 256);
+    const storage = text(body.storage, 64);
+    const type = body.type;
+    const id = text(body.guest, 12);
+    if (!VOLUME.test(volid) || !STORAGE.test(storage) || !/^\d+$/.test(id) || (type !== "qemu" && type !== "lxc")) throw new AuthError(400, "That restore request isn't valid.");
+    const replace = body.replace === true;
+    // Replacing erases the guest as it is now, so it needs its own typed word.
+    if (replace && body.confirm !== "replace") throw new AuthError(400, "That wasn't confirmed.");
+    const form: Record<string, string> = { vmid: id, storage };
+    if (replace) form.force = "1";
+    else form.unique = "1";
+    const copyName = text(body.name, 63);
+    if (!replace && /^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(copyName)) form[type === "qemu" ? "name" : "hostname"] = copyName;
+    if (type === "qemu") form.archive = volid;
+    else Object.assign(form, { ostemplate: volid, restore: "1" });
+    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${type}`, who, form);
+  },
+  "backup-delete": (name, who, body) => {
+    const volid = text(body.volid, 256);
+    const storage = text(body.storage, 64);
+    if (!VOLUME.test(volid) || !STORAGE.test(storage)) throw new AuthError(400, "That request isn't valid.");
+    if (body.confirm !== volid) throw new AuthError(400, "That wasn't confirmed.");
+    return pve.delete<string>(`/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}/content/${encodeURIComponent(volid)}`, who);
+  },
+  "schedule-add": async (_name, who, body) => {
+    const schedule = text(body.schedule, 16);
+    const storage = text(body.storage, 64);
+    const guests = text(body.guests, 256);
+    const keep = Number(body.keep);
+    if (!SCHEDULE.test(schedule) || !STORAGE.test(storage) || !Number.isInteger(keep) || keep < 1 || keep > 99) throw new AuthError(400, "That schedule isn't valid.");
+    if (guests !== "all" && !/^\d+(,\d+)*$/.test(guests)) throw new AuthError(400, "That schedule isn't valid.");
+    await pve.post<null>("/cluster/backup", who, { schedule, storage, mode: "snapshot", compress: "zstd", enabled: "1", "prune-backups": `keep-last=${keep}`, ...(guests === "all" ? { all: "1" } : { vmid: guests }) });
+    return null;
+  },
+  "schedule-toggle": async (_name, who, body) => {
+    const id = text(body.job, 64);
+    if (!JOB_ID.test(id) || typeof body.on !== "boolean") throw new AuthError(400, "That request isn't valid.");
+    await pve.put<null>(`/cluster/backup/${encodeURIComponent(id)}`, who, { enabled: body.on ? "1" : "0" });
+    return null;
+  },
+  "schedule-delete": async (_name, who, body) => {
+    const id = text(body.job, 64);
+    if (!JOB_ID.test(id) || body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
+    await pve.delete<null>(`/cluster/backup/${encodeURIComponent(id)}`, who);
+    return null;
   },
   "back-up-guests": (name, who, body) => {
     const vmid = text(body.guests, 256);
@@ -362,7 +460,7 @@ const handler: http.RequestListener = async (req, res) => {
     if (route === "/api/login-info") {
       return json(res, 200, { realms: await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains") });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -393,6 +491,13 @@ const handler: http.RequestListener = async (req, res) => {
           return json(res, 200, buildMovePlan(type, name, nodes, raw, running));
         }
         if (route === "/api/rolling-plan") return json(res, 200, await loadRollingPlan(session.ticket));
+        if (route === "/api/backups") return json(res, 200, await loadBackups(session.ticket));
+        if (route === "/api/restore-plan") {
+          const name = params.get("server") ?? "";
+          const type = params.get("type");
+          if (!NODE_NAME.test(name) || (type !== "qemu" && type !== "lxc")) return json(res, 400, { error: "That request isn't valid." });
+          return json(res, 200, await loadRestorePlan(name, type, session.ticket));
+        }
         if (route === "/api/snapshot-support") {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
