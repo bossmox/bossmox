@@ -34,6 +34,8 @@ Running BossMox outside the cluster is the most robust choice, because it keeps 
 
 The first time you visit a self-signed address, your browser warns you. Compare the fingerprint it shows with the one on the server: `openssl x509 -noout -fingerprint -sha256 -in /etc/bossmox/tls.crt`. Clicking through without checking could hand your password to someone in the middle.
 
+Give BossMox its own name or address. Browsers share cookies across every port on a host, so an untrusted site on another port of the same address could interfere with sign-in.
+
 Behind a reverse proxy, pass the original `Host` header through, set `BOSSMOX_TRUSTED_PROXY` to the proxy's address, and add the public name to `BOSSMOX_ALLOWED_HOSTS`. The proxy must add the real client address to `X-Forwarded-For`.
 
 To use it from other machines, it needs HTTPS because passwords pass through it. Set `TLS_CERT_FILE` and `TLS_KEY_FILE`, or put it behind an HTTPS proxy and set `BOSSMOX_BEHIND_HTTPS_PROXY=1`. List the host names you use in `BOSSMOX_ALLOWED_HOSTS`. BossMox refuses to start on a network address without one of those, or `BOSSMOX_ALLOW_HTTP=1`, which is only for a port published to `127.0.0.1` as above.
