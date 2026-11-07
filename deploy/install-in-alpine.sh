@@ -165,6 +165,7 @@ while :; do
     printf "  ${BRIGHT}BossMox is set up$PLAIN$EOL\n$EOL\n"
     printf "  Manage at    ${BRIGHT}https://%s$PLAIN$EOL\n" "$ADDR"
     printf "  Status       $STATE$PLAIN$EOL\n"
+    [ ! -f /opt/bossmox/VERSION ] || printf "  Version      %s$EOL\n" "$(cat /opt/bossmox/VERSION)"
   fi
   printf "$EOL\n$EOL\n$EOL\n  ${DIM}Press L to log in to this machine$PLAIN$EOL\n\033[J"
   KEY=""

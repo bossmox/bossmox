@@ -11,7 +11,9 @@ TLS_NAME=${5:-}
 
 npm test >/dev/null
 TMPFILE=$(mktemp -d)
-tar -czf "$TMPFILE/bossmox.tgz" dist/src public deploy package.json node_modules/ws
+echo "dev-$(git rev-parse --short HEAD)" > "$TMPFILE/VERSION"
+tar -czf "$TMPFILE/bossmox.tgz" dist/src public deploy package.json node_modules/ws -C "$TMPFILE" VERSION
+rm "$TMPFILE/VERSION"
 [ "$CA" = "-" ] || cp "$CA" "$TMPFILE/pve-root-ca.pem"
 # A private folder, because these run as root and /tmp is shared with the service account.
 STAGE=$(ssh -o BatchMode=yes "$VM" "mktemp -d")

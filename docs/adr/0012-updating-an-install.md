@@ -10,7 +10,7 @@ Date: 2026-11-06. Status: accepted for the one-command update. The Update button
 - Settings in `/var/lib/bossmox`, the HTTPS certificate and the finished setup all stay.
 - A VM set up by `deploy/update-alpine.sh` keeps its Proxmox details in `/etc/bossmox/env`, which installing rewrites, so the update refuses those.
 - `deploy/update.sh` is a different thing: the development script for container deployments.
-- A release now carries a `VERSION` file, dated so people can tell which is newer, with the commit so it says exactly what's in it.
+- A release now carries a `VERSION` file, dated so people can tell which is newer, with the commit so it says exactly what's in it. It shows in the top bar after sign-in, never before, because the exact version tells an attacker what to try. It also shows on the VM's console, which only someone with console access can see.
 
 ## Learned
 

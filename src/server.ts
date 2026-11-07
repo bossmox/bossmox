@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import http from "node:http";
 import https from "node:https";
@@ -39,6 +40,14 @@ import {
 } from "./server-detail.js";
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public");
+/** Written into a release. A copy run from the repo has none, and the page then shows nothing. */
+const VERSION = (() => {
+  try {
+    return readFileSync(path.resolve(PUBLIC, "../VERSION"), "utf8").trim();
+  } catch {
+    return "";
+  }
+})();
 const STATIC: Record<string, [string, string]> = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/style.css": ["style.css", "text/css; charset=utf-8"],
@@ -1016,7 +1025,8 @@ const handler: http.RequestListener = async (req, res) => {
           const known = detail.summary || detail.updates || detail.services || detail.tasks;
           return known ? json(res, 200, detail) : json(res, 404, { error: "BossMox can't find that node, or your account can't see it." });
         }
-        return json(res, 200, { ...(await overview(session)), username: session.username });
+        // Only after sign-in: the exact version tells an attacker what to try.
+        return json(res, 200, { ...(await overview(session)), username: session.username, version: VERSION });
       } catch (err) {
         if (err instanceof PveError && err.status === 401) {
           sessions.end(id);
