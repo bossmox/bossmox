@@ -83,8 +83,9 @@ function clusterScreen() {
        ${buttons(c.canBuild ? `<button class="btn" data-do="lookjoin">Add this node</button>` : "", `<button class="btn primary" data-do="done">Finish adding</button>`)}`);
     return;
   }
+  const moved = c.otherAddress && c.canBuild ? `<p class="meta"><strong>Check this before building a cluster.</strong> Proxmox has this node at ${esc(c.otherAddress)}, but you reached it at ${esc(c.nodes[0]?.address ?? "")}. A cluster would use ${esc(c.otherAddress)}, so other nodes may not be able to join. If that address is out of date, correct it in /etc/hosts on the node and run pvecm updatecerts --force there, then sign in again. If it's a separate cluster network, carry on.</p>` : "";
   screen(4, "Build a cluster", "This node isn't in a cluster yet. A cluster lets nodes share guests and keep them running through a restart. You can also stay on one node.",
-    `${nodeRows()}${c.canBuild ? field("Cluster name", textInput("name", 'maxlength="15" placeholder="home-lab"')) : `<p class="meta">Sign in as root to build a cluster.</p>`}
+    `${nodeRows()}${moved}${c.canBuild ? field("Cluster name", textInput("name", 'maxlength="15" placeholder="home-lab"')) : `<p class="meta">Sign in as root to build a cluster.</p>`}
      ${buttons(`<button class="btn" data-do="done">Stay on one node</button>`, c.canBuild ? `<button class="btn primary" data-do="create">Create cluster</button>` : "")}`);
 }
 function joinScreen(joiner) {

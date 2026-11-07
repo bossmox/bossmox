@@ -192,6 +192,23 @@ test("a node that moved is kept at the address it was reached on, and checked by
   assert.deepEqual(l.saved[0], { PVE_URL: "https://10.0.0.1:8006", PVE_CA_FILE: "/x/ca.pem", PVE_TLS_NAME: "n1", BOSSMOX_ALLOWED_HOSTS: "10.0.0.9" });
 });
 
+test("the wizard points out an address it can't use, before a cluster gets built on it", async () => {
+  const { l } = moved();
+  assert.equal((await signedIn(l)).otherAddress, "192.168.99.9");
+  const plain = lab();
+  assert.equal((await signedIn(plain)).otherAddress, "");
+});
+
+test("a typed name isn't compared with an address", async () => {
+  const l = lab();
+  l.wizard.enterCode(CODE);
+  await assert.rejects(l.wizard.signIn("not an address", FP(1), "root", "pam", "right"));
+  const named = lab();
+  named.wizard.enterCode(CODE);
+  const s = await named.wizard.signIn("pve1.lan", FP(1), "root", "pam", "right").catch(() => null);
+  assert.equal(s?.otherAddress ?? "", "");
+});
+
 test("a certificate that matches neither the address nor the node's name is still refused", async () => {
   const { l } = moved({ verifies: async () => false });
   await signedIn(l);

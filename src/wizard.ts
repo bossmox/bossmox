@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, rmSync } from "node:fs";
+import { isIP } from "node:net";
 import type { Peer, Pinned } from "./pinned.js";
 import { parseAddress, PinError, PveReply } from "./pinned.js";
 import type { Saved } from "./settings.js";
@@ -65,6 +66,8 @@ export class Wizard {
   private nodeName = "";
   private clusterName = "";
   private nodes: NodeView[] = [];
+  /** The address Proxmox gives for this node, when it isn't the one we reached it on. */
+  private otherAddress = "";
   finished = false;
 
   constructor(private readonly hashFile: string, private readonly out: Outside) {}
@@ -152,12 +155,15 @@ export class Wizard {
     const nodes = entries.filter((e) => e.type === "node");
     // Proxmox reports whatever /etc/hosts says, which goes stale when a node moves. The address we reached it on is proven.
     const reached = this.need().host;
+    const reported = nodes.find((n) => n.name === this.nodeName)?.ip ?? "";
+    // Only two addresses can be compared. A name the person typed says nothing about the address behind it.
+    this.otherAddress = reported && reported !== reached && isIP(reached) ? reported : "";
     this.nodes = nodes.map((n) => ({ name: n.name ?? "", address: n.name === this.nodeName ? reached : n.ip ?? "", online: n.online === 1 }));
   }
 
   async state() {
     await this.refresh();
-    return { user: this.user, clusterName: this.clusterName, nodes: this.nodes, canBuild: this.user === "root@pam" };
+    return { user: this.user, clusterName: this.clusterName, nodes: this.nodes, canBuild: this.user === "root@pam", otherAddress: this.otherAddress };
   }
 
   private requireRoot() {

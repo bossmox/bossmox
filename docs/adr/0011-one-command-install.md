@@ -18,7 +18,8 @@ Found on the first real home node. Proxmox reports a node's address from `/etc/h
 - The node BossMox signed in to keeps the address that was typed, because that one is proven to work. Other cluster members keep the address Proxmox reports.
 - If a single node's certificate doesn't match that address, BossMox checks it against the node's name and saves that as `PVE_TLS_NAME`. Trust still comes from that node's own certificate authority, read over the fingerprint-pinned connection.
 - A cluster gets no fallback, because `PVE_TLS_NAME` is one name and each node's certificate carries its own. Setup stops and says how to correct the address.
-- Building a cluster on such a node isn't fixed by this: corosync would use the stale address. The node's `/etc/hosts` still has to be corrected first.
+- Building a cluster on such a node isn't fixed by this: corosync would use the stale address. The wizard warns on the Build a cluster screen and doesn't block, because a node can legitimately have a separate cluster network.
+- The Tiny got a one-node cluster this way. A one-node cluster on a stale address stays quorate and starts its guests after a reboot, but it's wrong for adding nodes. Correcting it means `/etc/hosts`, `ring0_addr` with `config_version` raised in `/etc/pve/corosync.conf`, restarting corosync and pve-cluster, then `pvecm updatecerts --force`. Rehearsed in the lab, then done on the Tiny with a reboot.
 
 ## Open
 
