@@ -181,6 +181,8 @@ printf 'tty1::respawn:/usr/local/sbin/bossmox-console\nttyS0::respawn:/usr/local
 sed -i '/^# BossMox setup/,/^# end BossMox setup/d' /etc/issue
 kill -HUP 1
 pkill -f getty 2>/dev/null || true
+# The screen is a loop that started at boot, so after an update it would keep showing the old one.
+pkill -f /usr/local/sbin/bossmox-console 2>/dev/null || true
 cat > /usr/local/sbin/bossmox-reset <<'EOF'
 #!/bin/sh
 # Starts setup again with a new code. Only someone with console access to this VM can run this.
