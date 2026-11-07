@@ -36,7 +36,7 @@ ADDRESS=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | hea
 
 rm -rf "$OLD"
 cp -a /opt/bossmox "$OLD" || finish "there wasn't room to keep the old version."
-# Stopped first: left running over missing files it crash-loops until its supervisor gives up, and then won't restart.
+# Stopped first, so it isn't crash-looping over missing files while the packages update.
 rc-service bossmox stop
 find /opt/bossmox -mindepth 1 -delete
 

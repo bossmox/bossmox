@@ -4,6 +4,9 @@
 # With no Proxmox address, BossMox starts in setup mode and shows a code on this VM's console.
 set -eu
 
+# The guest agent runs commands with umask 077, which would leave the app unreadable by the service account.
+umask 022
+
 PUBLIC_ADDRESS=$1
 PVE_URL=${2:-}
 PVE_TLS_NAME=${3:-}
