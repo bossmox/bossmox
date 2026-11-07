@@ -19,4 +19,4 @@ Date: 2026-11-06. Status: accepted, for testing. The public way to fetch it isn'
 
 ## Tested
 
-On a fresh single-node Proxmox 9.2.26: refused bad options and a "no" cleanly, 99 seconds from nothing to ready on DHCP, wizard with Stay on one node, sign-in, and a VM restart. `--ip`, `--vlan` and LVM or ZFS storage weren't tried.
+On a fresh single-node Proxmox 9.2.26: refused bad options and a "no" cleanly, 99 seconds from nothing to ready on DHCP, wizard with Stay on one node, sign-in, and a VM restart. On a real single node at home with `--ip` on LVM-thin storage: 78 seconds, page up, first-boot files gone, other guests untouched. `--vlan` and ZFS storage weren't tried.
