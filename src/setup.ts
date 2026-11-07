@@ -36,8 +36,9 @@ const STATIC: Record<string, [string, string]> = {
 const wizard = new Wizard(env.BOSSMOX_SETUP_HASH ?? path.join(path.dirname(settingsPath(env)), "setup.hash"), {
   probe,
   call,
-  verifies: (host, port, ca) => new Promise((resolve) => {
-    const socket = tls.connect({ host, port, ca, servername: /^[\d.]+$/.test(host) ? undefined : host, timeout: 8000 }, () => {
+  verifies: (host, port, ca, name) => new Promise((resolve) => {
+    const identity = name ? { checkServerIdentity: (_h: string, cert: tls.PeerCertificate) => tls.checkServerIdentity(name, cert) } : {};
+    const socket = tls.connect({ host, port, ca, servername: /^[\d.]+$/.test(host) ? undefined : host, timeout: 8000, ...identity }, () => {
       socket.destroy();
       resolve(socket.authorized);
     });

@@ -21,8 +21,8 @@ export class WizardError extends Error {
 export interface Outside {
   probe(host: string, port: number): Promise<Peer>;
   call<T>(to: Pinned, method: "GET" | "POST", path: string, opts?: { ticket?: string; csrf?: string; form?: Record<string, string> }): Promise<T>;
-  /** Whether a node's certificate verifies against the certificate authority, name included. */
-  verifies(host: string, port: number, ca: string): Promise<boolean>;
+  /** Whether a node's certificate verifies against the certificate authority, and matches `name` or else the address. */
+  verifies(host: string, port: number, ca: string, name?: string): Promise<boolean>;
   saveCa(pem: string): string;
   saveSettings(values: Saved): void;
   wait(ms: number): Promise<void>;
@@ -150,7 +150,9 @@ export class Wizard {
     const cluster = entries.find((e) => e.type === "cluster");
     this.clusterName = cluster?.name ?? "";
     const nodes = entries.filter((e) => e.type === "node");
-    this.nodes = nodes.map((n) => ({ name: n.name ?? "", address: n.ip ?? "", online: n.online === 1 }));
+    // Proxmox reports whatever /etc/hosts says, which goes stale when a node moves. The address we reached it on is proven.
+    const reached = this.need().host;
+    this.nodes = nodes.map((n) => ({ name: n.name ?? "", address: n.name === this.nodeName ? reached : n.ip ?? "", online: n.online === 1 }));
   }
 
   async state() {
@@ -241,22 +243,34 @@ export class Wizard {
     const hosts = this.nodes.filter((n) => n.address).map((n) => n.address);
     if (!hosts.length) hosts.push(first.host);
     const failed: string[] = [];
+    // A node that moved keeps its old address on its certificate, but its name still matches. One PVE_TLS_NAME
+    // can only describe one node, so this is for a single node. A cluster's addresses have to match.
+    const nodeName = hosts.length === 1 ? this.nodeName : "";
+    let tlsName = "";
+    const check = async (h: string, authority: string) => {
+      if (await this.out.verifies(h, first.port, authority)) return true;
+      if (!nodeName || !(await this.out.verifies(h, first.port, authority, nodeName))) return false;
+      tlsName = nodeName;
+      return true;
+    };
     // A node that only just joined can take a few seconds to start using its new certificate.
     const until = this.out.now() + VERIFY_WAIT_MS;
     if (ca) {
       for (const h of hosts) {
-        let good = await this.out.verifies(h, first.port, ca);
+        let good = await check(h, ca);
         while (!good && this.out.now() < until) {
           await this.out.wait(3000);
-          good = await this.out.verifies(h, first.port, ca);
+          good = await check(h, ca);
         }
         if (!good) failed.push(h);
       }
     }
-    if (!ca || failed.length) throw new WizardError(502, `BossMox couldn't verify the certificate on ${failed.join(", ") || "this cluster"}. Check that each node's address matches its certificate.`);
+    if (!ca) throw new WizardError(502, "BossMox couldn't read this cluster's certificate authority.");
+    if (failed.length) throw new WizardError(502, `BossMox couldn't verify ${failed.join(", ")}, the address Proxmox gives for that node. If it's out of date, correct it in /etc/hosts on that node, then run pvecm updatecerts --force there.`);
     this.out.saveSettings({
       PVE_URL: hosts.map((h) => `https://${h}:${first.port}`).join(","),
       PVE_CA_FILE: this.out.saveCa(ca),
+      ...(tlsName ? { PVE_TLS_NAME: tlsName } : {}),
       BOSSMOX_ALLOWED_HOSTS: publicHost,
     });
     this.finished = true;

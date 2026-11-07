@@ -58,7 +58,7 @@ function lab(over: Partial<Outside> = {}) {
     now: () => clock,
     ...over,
   };
-  return { wizard: new Wizard(hash, out), calls, saved, guests, hash, tick: (ms: number) => { clock += ms; }, setCluster: (n: string) => { clusterName = n; } };
+  return { wizard: new Wizard(hash, out), calls, saved, guests, hash, tick: (ms: number) => { clock += ms; }, setCluster: (n: string) => { clusterName = n; }, setMembers: (m: typeof members) => { members.splice(0, members.length, ...m); } };
 }
 const signedIn = async (l: ReturnType<typeof lab>) => {
   l.wizard.enterCode(CODE);
@@ -170,6 +170,49 @@ test("setup won't finish if a node's certificate doesn't verify", async () => {
   await assert.rejects(l.wizard.finish("10.0.0.9"), /couldn't verify/);
   assert.equal(l.saved.length, 0);
   assert.equal(existsSync(l.hash), true, "and the code still works to try again");
+});
+
+// Exactly what the first real home node did: moved networks, so /etc/hosts and its certificate still name the old address.
+const moved = (over: Partial<Outside> = {}) => {
+  const asked: string[] = [];
+  const l = lab({
+    verifies: async (h, _p, _c, name) => { asked.push(`${h} ${name ?? "address"}`); return h === "10.0.0.1" && name === "n1"; },
+    ...over,
+  });
+  l.setMembers([{ name: "n1", ip: "192.168.99.9" }]);
+  return { l, asked };
+};
+
+test("a node that moved is kept at the address it was reached on, and checked by its name", async () => {
+  const { l, asked } = moved();
+  const s = await signedIn(l);
+  assert.equal(s.nodes[0]?.address, "10.0.0.1", "the wizard shows the address that works");
+  await l.wizard.finish("10.0.0.9");
+  assert.equal(asked.some((a) => a.startsWith("192.168.99.9")), false, "the stale address is never tried");
+  assert.deepEqual(l.saved[0], { PVE_URL: "https://10.0.0.1:8006", PVE_CA_FILE: "/x/ca.pem", PVE_TLS_NAME: "n1", BOSSMOX_ALLOWED_HOSTS: "10.0.0.9" });
+});
+
+test("a certificate that matches neither the address nor the node's name is still refused", async () => {
+  const { l } = moved({ verifies: async () => false });
+  await signedIn(l);
+  await assert.rejects(l.wizard.finish("10.0.0.9"), /couldn't verify 10\.0\.0\.1/);
+  assert.equal(l.saved.length, 0);
+});
+
+test("a node whose address matches needs no name saved", async () => {
+  const l = lab();
+  await signedIn(l);
+  await l.wizard.finish("10.0.0.9");
+  assert.equal(l.saved[0]?.PVE_TLS_NAME, undefined);
+});
+
+test("a cluster doesn't fall back to a name, because one name can't fit every node", async () => {
+  const asked: (string | undefined)[] = [];
+  const l = lab({ verifies: async (_h, _p, _c, name) => { asked.push(name); return false; } });
+  l.setMembers([{ name: "n1", ip: "10.0.0.1" }, { name: "n2", ip: "10.0.0.2" }]);
+  await signedIn(l);
+  await assert.rejects(l.wizard.finish("10.0.0.9"), /couldn't verify 10\.0\.0\.1, 10\.0\.0\.2/);
+  assert.equal(asked.some(Boolean), false);
 });
 
 test("setup waits for a node that only just joined", async () => {

@@ -11,6 +11,15 @@ Date: 2026-11-06. Status: accepted, for testing. The public way to fetch it isn'
 - Storage defaults to whichever holds VM disks and has the most free space, and `--storage` overrides it. The address defaults to DHCP, and `--ip` with `--gateway` fixes it.
 - `deploy/make-release.sh` publishes `install.sh`, `bossmox.tgz` and a checksum to a `release` branch.
 
+## A node that moved networks
+
+Found on the first real home node. Proxmox reports a node's address from `/etc/hosts`, and its certificate keeps the address it was made with, so a node moved to a new network reports a dead address and has a certificate that doesn't list the live one.
+
+- The node BossMox signed in to keeps the address that was typed, because that one is proven to work. Other cluster members keep the address Proxmox reports.
+- If a single node's certificate doesn't match that address, BossMox checks it against the node's name and saves that as `PVE_TLS_NAME`. Trust still comes from that node's own certificate authority, read over the fingerprint-pinned connection.
+- A cluster gets no fallback, because `PVE_TLS_NAME` is one name and each node's certificate carries its own. Setup stops and says how to correct the address.
+- Building a cluster on such a node isn't fixed by this: corosync would use the stale address. The node's `/etc/hosts` still has to be corrected first.
+
 ## Open
 
 - A DHCP address that changes breaks sign-in, because BossMox allows only the address it was set up on. Use `--ip` or a DHCP reservation.
