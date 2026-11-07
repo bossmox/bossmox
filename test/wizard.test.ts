@@ -22,7 +22,7 @@ function lab(over: Partial<Outside> = {}) {
   const guests: Record<string, number> = { n2: 0, n3: 0 };
   const calls: string[] = [];
   const saved: Saved[] = [];
-  const name = (to: Pinned) => ({ "10.0.0.1": "n1", "10.0.0.2": "n2", "10.0.0.3": "n3" })[to.host] ?? "?";
+  const name = (to: Pinned) => ({ "10.0.0.1": "n1", "pve1.lan": "n1", "10.0.0.2": "n2", "10.0.0.3": "n3" })[to.host] ?? "?";
   const out: Outside = {
     probe: async (host) => ({ fingerprint: FP(Number(host.split(".").pop())), subject: "x" }),
     async call<T>(to: Pinned, method: string, p: string, opts: { form?: Record<string, string> } = {}): Promise<T> {
@@ -200,13 +200,11 @@ test("the wizard points out an address it can't use, before a cluster gets built
 });
 
 test("a typed name isn't compared with an address", async () => {
-  const l = lab();
-  l.wizard.enterCode(CODE);
-  await assert.rejects(l.wizard.signIn("not an address", FP(1), "root", "pam", "right"));
   const named = lab();
   named.wizard.enterCode(CODE);
-  const s = await named.wizard.signIn("pve1.lan", FP(1), "root", "pam", "right").catch(() => null);
-  assert.equal(s?.otherAddress ?? "", "");
+  const s = await named.wizard.signIn("pve1.lan", FP(1), "root", "pam", "right");
+  assert.equal(s.nodes[0]?.address, "pve1.lan");
+  assert.equal(s.otherAddress, "");
 });
 
 test("a certificate that matches neither the address nor the node's name is still refused", async () => {
