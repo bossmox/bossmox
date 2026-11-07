@@ -12,6 +12,14 @@ Date: 2026-11-06. Status: accepted for the one-command update. The Update button
 - `deploy/update.sh` is a different thing: the development script for container deployments.
 - A release now carries a `VERSION` file, dated so people can tell which is newer, with the commit so it says exactly what's in it.
 
+## Learned
+
+The guest agent runs commands with umask 077. Run that way, `install-in-alpine.sh` left the app readable only by root, so the service account saw its entry file as missing and a good update got rolled back. That script now sets umask 022. Anything else run through the agent that writes files other accounts need has the same trap.
+
+## Tested
+
+On a lab node with setup finished: a "no" and a bad option change nothing, a real update took 35 seconds with settings and the certificate unchanged and sign-in working, the same version again does nothing, and a version broken on purpose went back to the old one and still signed in. A real update hasn't been followed by a VM reboot, or run on the Tiny.
+
 ## Not covered
 
 - Going back restores the app in `/opt/bossmox`. It doesn't undo Alpine package updates, or the service and console files `install-in-alpine.sh` writes.
