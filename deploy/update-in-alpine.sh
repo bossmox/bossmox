@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run as root inside the BossMox VM by update.sh. Expects bossmox.tgz and install-in-alpine.sh next to this script.
+# Run as root inside the BossMox VM by update-bossmox.sh. Expects bossmox.tgz and install-in-alpine.sh next to this script.
 # Writes one line to `result`: "ok", or the reason it put the old version back.
 set -u
 

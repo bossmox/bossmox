@@ -18,7 +18,7 @@ The guest agent runs commands with umask 077. Run that way, `install-in-alpine.s
 
 ## Tested
 
-On a lab node with setup finished: a "no" and a bad option change nothing, a real update took 35 seconds with settings and the certificate unchanged and sign-in working, the same version again does nothing, and a version broken on purpose went back to the old one and still signed in. A real update hasn't been followed by a VM reboot, or run on the Tiny.
+On a lab node with setup finished: a "no" and a bad option change nothing, a real update took 35 seconds with settings and the certificate unchanged and sign-in working, the same version again does nothing, and a version broken on purpose went back to the old one and still signed in. The Tiny's VM then reached the same release through it, from the version before versions existed. A VM reboot straight after an update hasn't been tried.
 
 ## Not covered
 

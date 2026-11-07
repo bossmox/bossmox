@@ -10,9 +10,27 @@ BossMox is an independent project. It is not affiliated with or endorsed by Prox
 
 Early. Sign in with your normal Proxmox account, including authenticator-app 2FA. You see and do what your Proxmox permissions allow. You can start, stop, create, change, delete and open a console on VMs and containers, take snapshots, back up and restore on a schedule, and update a whole cluster one node at a time. It also shows nodes, storage, network, services and recent activity, and points out things worth a look. It can check a server for updates and install them in a live terminal. Everything it can change is listed in `ACTIONS` and the install route in `src/server.ts`.
 
-Hardware security keys (WebAuthn) and recovery codes don't work in BossMox yet.
+Hardware security keys (WebAuthn) and recovery codes don't work in BossMox yet. The setup wizard can't sign in with a one-time code yet, so finish setup as a root account without 2FA.
 
-## Run it
+## Install on a Proxmox node
+
+Run as root on a node, with `bossmox.tgz` beside the script. It creates one small Alpine VM and changes nothing else, then prints the address and a setup code. `--help` isn't needed: the options are at the top of the script.
+
+```sh
+bash install.sh --storage local-lvm --ip 192.168.1.20/24 --gateway 192.168.1.1
+```
+
+Open the address, enter the code and follow the wizard. Use a fixed address or a DHCP reservation, because BossMox only answers on the address it was set up on.
+
+To update it later, run this as root on the same node, with the new `bossmox.tgz` beside it. Settings stay, everyone is signed out when it restarts, and if the new version doesn't start, the old one goes back.
+
+```sh
+bash update-bossmox.sh
+```
+
+If a node has moved to a new network since Proxmox was installed, its `/etc/hosts` and certificate still name the old address. BossMox copes on a single node, but correct them before building a cluster.
+
+## Run it yourself
 
 1. Copy `/etc/pve/pve-root-ca.pem` from Proxmox to `./pve-root-ca.pem`.
 2. Copy `.env.example` to `.env` and fill in `PVE_URL`.

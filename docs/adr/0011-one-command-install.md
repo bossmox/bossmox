@@ -9,7 +9,7 @@ Date: 2026-11-06. Status: accepted, for testing. The public way to fetch it isn'
 - The VM finishes itself on first boot and removes the first-boot files afterwards.
 - The guest agent is installed so the node can read the VM's address and setup code. That lets the installer print both, instead of sending people to the console. Whoever runs it is already root on the node, so this doesn't weaken the setup code.
 - Storage defaults to whichever holds VM disks and has the most free space, and `--storage` overrides it. The address defaults to DHCP, and `--ip` with `--gateway` fixes it.
-- `deploy/make-release.sh` publishes `install.sh`, `bossmox.tgz` and a checksum to a `release` branch.
+- `deploy/make-release.sh` publishes `install.sh`, `update-bossmox.sh`, `bossmox.tgz` and a checksum to a `release` branch.
 
 ## A node that moved networks
 
@@ -26,6 +26,7 @@ Found on the first real home node. Proxmox reports a node's address from `/etc/h
 - A DHCP address that changes breaks sign-in, because BossMox allows only the address it was set up on. Use `--ip` or a DHCP reservation.
 - How the public install command is delivered safely. A pasted `curl | bash` on a hypervisor still needs a decision.
 - Root accounts with two-factor can't finish the wizard yet.
+- Whether the wizard should lead with Stay on one node, since a cluster is hard to undo. Left as it is for now, Rocky 2026-11-06.
 
 ## Tested
 
