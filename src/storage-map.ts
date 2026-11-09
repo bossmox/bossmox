@@ -31,6 +31,8 @@ export interface RawVolume {
   volid?: string;
   content?: string;
   size?: number;
+  /** Space a disk kept as a file really takes. Proxmox leaves it out for pool volumes. */
+  used?: number;
   vmid?: number | string;
 }
 export interface NodeStorageInput {
@@ -130,7 +132,8 @@ export interface Pool {
   thin: boolean;
   /** What the disks given out add up to, when that's more than the pool holds. */
   overGivenGb: number | null;
-  guests: { vmid: number; gb: number }[];
+  /** Each guest's disks here: the size given out, and the space they really take where Proxmox says. */
+  guests: { vmid: number; gb: number; usedGb: number | null }[];
   files: { label: string; gb: number }[];
   /** Space used that nothing listed accounts for, such as Proxmox itself on the system disk. */
   otherGb: number;
@@ -217,10 +220,11 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
     }
 
     const volumes = (input.content[c.storage] ?? []).filter((v) => v.content);
-    const byGuest = new Map<number, number>();
+    const byGuest = new Map<number, { size: number; used: number | null }>();
     for (const v of volumes.filter((v) => DISK_CONTENT.includes(v.content ?? ""))) {
       const id = Number(v.vmid ?? 0);
-      byGuest.set(id, (byGuest.get(id) ?? 0) + (v.size ?? 0));
+      const was = byGuest.get(id) ?? { size: 0, used: 0 };
+      byGuest.set(id, { size: was.size + (v.size ?? 0), used: was.used === null || typeof v.used !== "number" ? null : was.used + v.used });
     }
     const fileTotals = new Map<string, number>();
     for (const v of volumes.filter((v) => !DISK_CONTENT.includes(v.content ?? ""))) {
@@ -228,8 +232,9 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
       fileTotals.set(label, (fileTotals.get(label) ?? 0) + (v.size ?? 0));
     }
     const thin = type === "lvmthin" || (type === "zfspool" && c.sparse === 1);
-    const given = [...byGuest.values()].reduce((a, b) => a + b, 0);
-    const listed = [...fileTotals.values()].reduce((a, b) => a + b, 0) + (thin || !DISK_CONTENT.some((u) => uses.includes(u)) ? 0 : given);
+    const given = [...byGuest.values()].reduce((a, b) => a + b.size, 0);
+    const taken = [...byGuest.values()].reduce((a, b) => a + (b.used ?? b.size), 0);
+    const listed = [...fileTotals.values()].reduce((a, b) => a + b, 0) + (thin ? 0 : taken);
     const other = Math.max(0, (s.used ?? 0) - (thin ? (s.used ?? 0) : listed));
     pools.push({
       id: c.storage,
@@ -245,7 +250,7 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
       freeGb: gb(s.avail),
       thin,
       overGivenGb: thin && given > (s.total ?? 0) ? gb(given) : null,
-      guests: [...byGuest].map(([vmid, bytes]) => ({ vmid, gb: gb(bytes) })).sort((a, b) => b.gb - a.gb || a.vmid - b.vmid),
+      guests: [...byGuest].map(([vmid, b]) => ({ vmid, gb: gb(b.size), usedGb: b.used === null ? null : gb(b.used) })).sort((a, b) => b.gb - a.gb || a.vmid - b.vmid),
       files: [...fileTotals].map(([label, bytes]) => ({ label, gb: gb(bytes) })).sort((a, b) => b.gb - a.gb),
       otherGb: gb(other) >= 0.5 ? gb(other) : 0,
       otherLabel: type === "dir" && disks.length > 0 && disks === system ? "Proxmox itself and other files" : "Other files",

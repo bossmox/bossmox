@@ -85,3 +85,12 @@ test("an empty disk is offered for storage, and a mount BossMox can't match isn'
   assert.deepEqual(m.empty.map((d) => d.path), ["/dev/sdd"]);
   assert.deepEqual(m.unplaced.map((p) => p.id), ["mystery"]);
 });
+
+test("a disk kept as a file counts the space it really takes, not its size", () => {
+  const m = buildStorageMap(fixture("storage-zfs-mirror"), true);
+  const local = pool(m, "local")!;
+  assert.deepEqual(local.guests, [{ vmid: 100, gb: 16, usedGb: 0 }]);
+  assert.equal(local.otherLabel, "Proxmox itself and other files");
+  assert.ok(local.otherGb > 4, "the 16 GB disk no longer hides the system's own files");
+  assert.equal(pool(m, "tank")!.guests[0]!.usedGb, null, "a pool doesn't say, so nothing is made up");
+});

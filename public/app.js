@@ -549,7 +549,7 @@ const USE_WORDS = { images: "VM disks", rootdir: "Container disks", backup: "Bac
 const onlineNodes = () => (S.data?.nodes ?? []).filter((n) => n.online).map((n) => n.name);
 /* Storage as disks and pools (ADR 0014): one view, shaped like a disk manager, with every action on it. */
 const guestName = (vmid) => S.data?.vms.find((v) => v.id === vmid)?.name ?? `Guest ${vmid}`;
-const sizeWords = (n) => (n >= 1000 ? `${Math.round(n / 100) / 10} TB` : `${n >= 10 ? Math.round(n) : n} GB`);
+const sizeWords = (n) => (n >= 1000 ? `${Math.round(n / 100) / 10} TB` : n > 0 && n < 0.1 ? "under 0.1 GB" : `${n >= 10 ? Math.round(n) : n} GB`);
 function diskLine(d) {
   const facts = [d.kind, sizeWords(d.sizeGb)];
   const wipe = S.diskData?.[S.storeNode]?.find((x) => x.path === d.path)?.canWipe;
@@ -560,7 +560,8 @@ function diskLine(d) {
 }
 function poolBlock(p) {
   const pct = p.totalGb ? Math.min(100, Math.round((p.usedGb / p.totalGb) * 100)) : 0;
-  const using = [...p.guests.map((g) => `${guestName(g.vmid)} ${sizeWords(g.gb)}`), ...p.files.filter((f) => f.gb >= 0.1).map((f) => `${f.label} ${sizeWords(f.gb)}`), ...(p.otherGb ? [`${p.otherLabel} ${sizeWords(p.otherGb)}`] : [])];
+  const guest = (g) => (g.usedGb !== null && g.usedGb < g.gb ? `${guestName(g.vmid)} ${sizeWords(g.usedGb)} of a ${sizeWords(g.gb)} disk` : p.thin ? `${guestName(g.vmid)} (${sizeWords(g.gb)} disk)` : `${guestName(g.vmid)} ${sizeWords(g.gb)}`);
+  const using = [...p.guests.map(guest), ...p.files.filter((f) => f.gb >= 0.1).map((f) => `${f.label} ${sizeWords(f.gb)}`), ...(p.otherGb ? [`${p.otherLabel} ${sizeWords(p.otherGb)}`] : [])];
   const facts = [
     p.layout,
     p.thin ? "Disks here take space only as they fill." : "",
@@ -575,7 +576,7 @@ function poolBlock(p) {
       ${listed ? `<div class="actions"><button class="btn" data-stedit="${esc(p.id)}">Change use</button><button class="btn" data-stremove="${esc(p.id)}">Remove</button></div>` : ""}</div>
     ${p.active ? `<small>${sizeWords(p.usedGb)} used of ${sizeWords(p.totalGb)}, ${sizeWords(p.freeGb)} free</small><div class="meter"><i style="width:${pct}%"></i></div>` : `<p class="loginerr">This node can't reach it right now.</p>`}
     ${using.length ? `<small>Using it: ${esc(using.join(", "))}</small>` : ""}
-    <small>Holds ${esc(holds.join(", ").toLowerCase() || "nothing yet")}.</small>
+    <small>Holds ${esc(holds.join(", ").toLowerCase().replace(/\bvm\b/g, "VM") || "nothing yet")}.</small>
     ${facts.map((f) => `<small>${esc(f)}</small>`).join("")}
     ${p.details ? `<small class="stdetails">${esc(p.details)}</small>` : ""}</div>`;
 }
@@ -702,6 +703,18 @@ function askEditStorage(id) {
     <fieldset class="uses"><legend>Keep on it</legend>${s.usesAllowed.map((u) => `<label class="createcheck"><input type="checkbox" value="${u}" ${s.uses.includes(u) ? "checked" : ""}> ${USE_WORDS[u]}</label>`).join("")}</fieldset>
     <p class="meta">Turning something off doesn't delete what's already there.</p>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-stuses="1">Save</button></div>`);
+}
+/**
+ * Nothing on the node can hold this. Say so, and offer the fix instead of stopping (ADR 0014): a storage that
+ * could hold it gets a button to start doing so, otherwise the way to add one.
+ */
+function noPlaceFor(title, server, use) {
+  const words = USE_WORDS[use].toLowerCase().replace(/\bvm\b/g, "VM");
+  const could = (S.storeList ?? []).filter((x) => !x.disabled && x.usesAllowed.includes(use) && !x.uses.includes(use) && (!x.nodes.length || x.nodes.includes(server)));
+  const pick = could[0];
+  S.noPlace = pick ? { id: pick.id, uses: [...pick.uses, use] } : null;
+  dialog(`<h3>${esc(title)}</h3><p>${esc(server)} has no storage set up for ${esc(words)}.${pick ? ` ${esc(pick.id)} can hold them too, without changing anything already on it.` : " Add a NAS, or make storage on an empty disk, and pick this as one of the things it's for."}</p>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button>${pick ? `<button class="btn primary" data-noplace="1">Let ${esc(pick.id)} hold ${esc(words)}</button>` : `<button class="btn primary" data-openstore="1">Open Storage</button>`}</div>`);
 }
 function saveUses() {
   const uses = pickedUses();
@@ -1481,7 +1494,7 @@ function makeTemplate(id) {
 function askUpload() {
   const stores = S.createPlan?.mediaStorages ?? [];
   const { server } = S.createFor;
-  if (!stores.length) return dialog(`<h3>Nowhere to keep a disc</h3><p>${esc(server)} has no storage set up for installer discs.</p>${closeRow}`);
+  if (!stores.length) return noPlaceFor("Nowhere to keep a disc", server, "iso");
   dialog(`<h3>Upload an installer disc</h3><p>The file goes straight to ${esc(server)}. Keep this page open until it finishes.</p>
     <p class="loginerr" id="formerr" hidden></p>
     <label class="field restartname"><span>Disc image (.iso)</span><input id="uploadfile" type="file" accept=".iso,.img"></label>
@@ -1532,7 +1545,7 @@ async function askDownloadTemplate() {
     return failDialog("Couldn't list the templates", err);
   }
   if (!list.length) return dialog(`<h3>No templates listed</h3><p>${esc(server)} hasn't fetched the template list yet. Try again in a minute.</p>${closeRow}`);
-  if (!stores.length) return dialog(`<h3>Nowhere to keep a template</h3><p>${esc(server)} has no storage set up for templates.</p>${closeRow}`);
+  if (!stores.length) return noPlaceFor("Nowhere to keep a template", server, "vztmpl");
   dialog(`<h3>Download a template</h3><p>A template is a ready-made system for new containers. ${esc(server)} downloads it directly.</p>
     <label class="field restartname"><span>System</span><select id="tmplname">${list.map((t) => `<option value="${esc(t.template)}">${esc(t.template.replace(/\.tar\.\w+$/, ""))}</option>`).join("")}</select></label>
     <label class="field restartname"><span>Keep it on</span><select id="tmplstore">${stores.map((s) => `<option>${esc(s)}</option>`).join("")}</select></label>
@@ -1731,7 +1744,7 @@ async function askBackupNow(id) {
   if (!v) return;
   try {
     const plan = await signal(`api/reboot-plan?server=${encodeURIComponent(v.node)}`);
-    if (!plan.backupStorages.length) return dialog(`<h3>Nowhere to save a backup</h3><p>${esc(v.node)} has no storage set up for backups.</p>${closeRow}`);
+    if (!plan.backupStorages.length) return noPlaceFor("Nowhere to save a backup", v.node, "backup");
     dialog(`<h3>Back up ${esc(v.name)} now?</h3><p>${v.running ? `${esc(v.name)} keeps running, though it may feel slower until this finishes.` : `${esc(v.name)} is off, so this is quick.`}</p>
       <label class="field restartname"><span>Save to</span><select id="bkstore">${plan.backupStorages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select></label>
       <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-bkgo="${v.id}">Back up ${esc(v.name)}</button></div>`);
@@ -1748,7 +1761,7 @@ async function askBackupRestore(volid) {
   if (!x) return;
   try {
     const plan = await signal(`api/restore-plan?server=${encodeURIComponent(x.node)}&type=${x.type}`);
-    if (!plan.storages.length) return dialog(`<h3>Nowhere to restore to</h3><p>${esc(x.node)} has no storage that can hold this.</p>${closeRow}`);
+    if (!plan.storages.length) return noPlaceFor("Nowhere to restore to", x.node, x.type === "lxc" ? "rootdir" : "images");
     S.bkPlan = { x, plan };
     dialog(`<h3>Restore ${esc(x.group.name)}?</h3><p>From ${esc(when(x.takenAt))}, on ${esc(x.node)}. A copy sits alongside the original, switched off, and nothing is lost.</p>
       <label class="field restartname"><span>Put its disks on</span><select id="bkdisk">${plan.storages.map((s) => `<option>${esc(s)}</option>`).join("")}</select></label>
@@ -1795,7 +1808,7 @@ async function askSchedule() {
   if (!server) return;
   try {
     const plan = await signal(`api/reboot-plan?server=${encodeURIComponent(server)}`);
-    if (!plan.backupStorages.length) return dialog(`<h3>Nowhere to save backups</h3><p>Set up a storage for backups first.</p>${closeRow}`);
+    if (!plan.backupStorages.length) return noPlaceFor("Nowhere to save backups", server, "backup");
     const days = [["", "Every day"], ["mon", "Mondays"], ["tue", "Tuesdays"], ["wed", "Wednesdays"], ["thu", "Thursdays"], ["fri", "Fridays"], ["sat", "Saturdays"], ["sun", "Sundays"]];
     dialog(`<h3>Add a backup schedule</h3>
       <p class="loginerr" id="joberr" hidden></p>
@@ -2290,7 +2303,7 @@ async function askGuestDisc() {
 function askDisc() {
   const server = $("#cserver").value;
   const stores = S.createPlan?.mediaStorages ?? [];
-  if (!stores.length) return dialog(`<h3>Nowhere to keep a disc</h3><p>${esc(server)} has no storage set up for installer discs.</p>${closeRow}`);
+  if (!stores.length) return noPlaceFor("Nowhere to keep a disc", server, "iso");
   dialog(`<h3>Add an installer disc</h3><p>${esc(server)} downloads it directly, so this doesn't use your own connection. Paste the address of an .iso file.</p>
     <p class="loginerr" id="discerr" hidden></p>
     <label class="field restartname"><span>Web address</span><input id="discurl" type="url" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
@@ -2445,6 +2458,10 @@ document.addEventListener("click", (e) => {
   if (d.stsave) return saveShare();
   if (d.stedit) return askEditStorage(d.stedit);
   if (d.stuses) return saveUses();
+  if (d.noplace && S.noPlace) {
+    const { id, uses } = S.noPlace;
+    return runAction("storage-edit", onlineNodes()[0], `Letting ${id} hold more`, { id, uses }, afterStorage);
+  }
   if (d.stremove) return askRemoveStorage(d.stremove);
   if (d.stremovego) {
     t.disabled = true;
