@@ -71,7 +71,7 @@ export function growForm(type: "qemu" | "lxc", config: Config, slot: string, add
   return { disk: slot, size: `+${addGb}G` };
 }
 
-export function addDiskForm(type: "qemu" | "lxc", config: Config, v: { storage: string; sizeGb: number; mount: string }): Record<string, string> {
+export function addDiskForm(type: "qemu" | "lxc", config: Config, v: { storage: string; sizeGb: number; mount: string; fileStorage?: boolean }): Record<string, string> {
   if (!STORAGE.test(v.storage)) throw new HardwareError("Pick a storage.");
   if (!Number.isInteger(v.sizeGb) || v.sizeGb < 1 || v.sizeGb > 65536) throw new HardwareError("A disk is between 1 and 65536 GB.");
   if (type === "lxc") {
@@ -80,7 +80,8 @@ export function addDiskForm(type: "qemu" | "lxc", config: Config, v: { storage: 
   }
   // Windows has no driver for the fast disk types until someone installs one, so it stays on what it can see.
   const prefix = config.sata0 !== undefined && config.scsi0 === undefined ? "sata" : config.virtio0 !== undefined && config.scsi0 === undefined ? "virtio" : "scsi";
-  return { [nextSlot(prefix, config)]: `${v.storage}:${v.sizeGb}` };
+  // On a folder or share, raw disks can't be snapshotted, so ask for qcow2 as Proxmox's own screen does.
+  return { [nextSlot(prefix, config)]: `${v.storage}:${v.sizeGb}${v.fileStorage ? ",format=qcow2" : ""}` };
 }
 
 /** Only ordinary data disks can go. Losing the boot disk, or a volume with a guest's whole system on it, is never one click. */

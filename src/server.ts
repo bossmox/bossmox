@@ -9,7 +9,7 @@ import { clientAddress, loadConfig, sameOrigin } from "./config.js";
 import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
-import { containerForm, CreateError, discDownload, discForm, installerLabel, vmForm, type CreateInput } from "./create.js";
+import { containerForm, CreateError, discDownload, discForm, FILE_STORAGE, installerLabel, vmForm, type CreateInput } from "./create.js";
 import { changesForm, SettingsError, waitingChanges } from "./guest-settings.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
 import { assertCanWipe, buildStorageList, deviceIsValid, diskStorageForm, hostIsValid, networkForm, readHardDisks, StorageError, storageBlockers, usesForm, type RawDisk, type RawStorageConfig } from "./storage.js";
@@ -333,6 +333,12 @@ function snapshotName(body: Record<string, unknown>): string {
   return snap;
 }
 
+/** Whether a storage keeps VM disks as files, from the node's own list, which only shows what the person can use. */
+async function keepsFiles(node: string, storage: string, ticket: string): Promise<boolean> {
+  const list = await pve.get<{ storage: string; type?: string }[]>(`/nodes/${encodeURIComponent(node)}/storage`, ticket);
+  return FILE_STORAGE.has(list.find((s) => s.storage === storage)?.type ?? "");
+}
+
 /** Everything BossMox can change on Proxmox is listed here. There is no general pass-through. */
 const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string, unknown>) => Promise<string | null>> = {
   "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
@@ -399,7 +405,7 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     if (body.confirm !== snap) throw new AuthError(400, "That wasn't confirmed.");
     return pve.delete<string>(`${path}/snapshot/${snap}`, who);
   },
-  "guest-create": (name, who, body) => {
+  "guest-create": async (name, who, body) => {
     const kind = body.kind;
     if (kind !== "qemu" && kind !== "lxc") throw new AuthError(400, "That request isn't valid.");
     const input: CreateInput = {
@@ -414,6 +420,7 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
       os: text(body.os, 16),
       start: body.start === true,
       password: text(body.password, 128),
+      fileStorage: kind === "qemu" && (await keepsFiles(name, text(body.storage, 64), who.ticket)),
     };
     try {
       const form = kind === "qemu" ? vmForm(input) : containerForm(input);
@@ -555,7 +562,8 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
   },
   "disk-add": async (name, who, body) => {
     const { path } = guestPath(name, body);
-    const form = await withConfig(path, who, (c) => addDiskForm(kindOf(body), c, { storage: text(body.storage, 64), sizeGb: Number(body.sizeGb), mount: text(body.mount, 200) }));
+    const fileStorage = kindOf(body) === "qemu" && (await keepsFiles(name, text(body.storage, 64), who.ticket));
+    const form = await withConfig(path, who, (c) => addDiskForm(kindOf(body), c, { storage: text(body.storage, 64), sizeGb: Number(body.sizeGb), mount: text(body.mount, 200), fileStorage }));
     await pve.put<null>(`${path}/config`, who, form);
     return null;
   },

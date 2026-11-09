@@ -89,3 +89,10 @@ test("disc downloads must be a plain .iso from the web", () => {
 test("installers show their file name", () => {
   assert.equal(installerLabel("local:iso/alpine.iso"), "alpine.iso");
 });
+
+test("on a folder or share, every VM disk asks for qcow2 so snapshots work", () => {
+  const f = vmForm(input({ os: "windows", fileStorage: true }));
+  for (const k of ["sata0", "efidisk0", "tpmstate0"]) assert.match(f[k] ?? "", /,format=qcow2$/, k);
+  const pool = vmForm(input({ os: "windows" }));
+  for (const k of ["sata0", "efidisk0", "tpmstate0"]) assert.doesNotMatch(pool[k] ?? "", /format=/, k);
+});

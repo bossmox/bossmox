@@ -74,3 +74,8 @@ test("addresses leave out what nobody can connect to", () => {
   assert.deepEqual(pickAddresses("qemu", agent), ["10.0.30.5", "2001:db8::5"]);
   assert.deepEqual(pickAddresses("qemu", {}), []);
 });
+
+test("an added VM disk on a folder or share asks for qcow2, a container's doesn't", () => {
+  assert.equal(addDiskForm("qemu", { scsi0: "x" }, { storage: "files", sizeGb: 2, mount: "", fileStorage: true }).scsi1, "files:2,format=qcow2");
+  assert.equal(addDiskForm("qemu", { scsi0: "x" }, { storage: "fast", sizeGb: 2, mount: "" }).scsi1, "fast:2");
+});

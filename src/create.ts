@@ -13,7 +13,12 @@ export interface CreateInput {
   os: string;
   start: boolean;
   password: string;
+  /** The storage keeps disks as files (a folder, NFS or SMB). Without qcow2 they'd be raw, and snapshots fail. */
+  fileStorage?: boolean;
 }
+
+/** Storage types that keep VM disks as files, where Proxmox picks raw unless asked, and raw can't be snapshotted. */
+export const FILE_STORAGE = new Set(["dir", "nfs", "cifs", "glusterfs"]);
 
 const NAME = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,61}[A-Za-z0-9])?$/;
 const SIMPLE = /^[\w.-]{1,64}$/;
@@ -40,6 +45,8 @@ export function vmForm(v: CreateInput): Record<string, string> {
   if (!ostype) throw new CreateError("Pick an operating system.");
   const windows = v.os === "windows";
   const disk = windows ? "sata0" : "scsi0";
+  // Measured on PVE 9.2: with qcow2 on all three, a Windows VM on a folder snapshots, TPM state included.
+  const fmt = v.fileStorage ? ",format=qcow2" : "";
   const form: Record<string, string> = {
     vmid: v.id,
     name: v.name,
@@ -47,12 +54,12 @@ export function vmForm(v: CreateInput): Record<string, string> {
     cores: String(v.cores),
     memory: String(v.memoryMb),
     net0: `${windows ? "e1000e" : "virtio"},bridge=${v.bridge}`,
-    [disk]: `${v.storage}:${v.diskGb}`,
+    [disk]: `${v.storage}:${v.diskGb}${fmt}`,
     scsihw: "virtio-scsi-single",
     boot: `order=${disk}${v.installer ? ";ide2" : ""}`,
   };
   if (windows) {
-    Object.assign(form, { bios: "ovmf", machine: "q35", efidisk0: `${v.storage}:1,efitype=4m,pre-enrolled-keys=1`, tpmstate0: `${v.storage}:1,version=v2.0` });
+    Object.assign(form, { bios: "ovmf", machine: "q35", efidisk0: `${v.storage}:1,efitype=4m,pre-enrolled-keys=1${fmt}`, tpmstate0: `${v.storage}:1,version=v2.0${fmt}` });
   }
   if (v.installer) form.ide2 = `${v.installer},media=cdrom`;
   if (v.start) form.start = "1";
