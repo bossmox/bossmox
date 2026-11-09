@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildStorageMap, type NodeStorageInput } from "../src/storage-map.js";
+import { buildStorageMap, poolItems, type NodeStorageInput } from "../src/storage-map.js";
 
 /** Proxmox's real answers, captured from the Tiny (an ordinary LVM install plus a second drive) and two lab nodes. */
 function fixture(name: string): NodeStorageInput {
@@ -93,4 +93,41 @@ test("a disk kept as a file counts the space it really takes, not its size", () 
   assert.equal(local.otherLabel, "Proxmox itself and other files");
   assert.ok(local.otherGb > 4, "the 16 GB disk no longer hides the system's own files");
   assert.equal(pool(m, "tank")!.guests[0]!.usedGb, null, "a pool doesn't say, so nothing is made up");
+});
+
+
+const vols = [
+  { volid: "fast:vm-951-disk-0", content: "images", size: 2 * 1024 ** 3, vmid: 951 },
+  { volid: "fast:vm-958-disk-0", content: "images", size: 1024 ** 3, vmid: 958 },
+  { volid: "fast:base-700-disk-0", content: "images", size: 1024 ** 3, vmid: 700 },
+  { volid: "local:iso/debian.iso", content: "iso", size: 1024 ** 3 },
+  { volid: "local:iso/old.iso", content: "iso", size: 1024 ** 3 },
+  { volid: "local:backup/vzdump-qemu-951.vma.zst", content: "backup", size: 1024 ** 3, vmid: 951 },
+];
+const guests = [
+  { vmid: 951, name: "thin-guest", known: true, refs: ["fast:vm-951-disk-0", "local:iso/debian.iso"] },
+  // A linked clone of a template that's since been deleted still points at the template's base disk.
+  { vmid: 701, name: "clone", known: true, refs: ["fast:base-700-disk-0/vm-701-disk-0"] },
+];
+const item = (list: ReturnType<typeof poolItems>, volid: string) => list.find((i) => i.volid === volid)!;
+
+test("a disk whose guest exists is never deletable, a true leftover is", () => {
+  const list = poolItems(vols, guests, true);
+  assert.deepEqual([item(list, "fast:vm-951-disk-0").canDelete, item(list, "fast:vm-951-disk-0").whyNot], [false, "It's thin-guest's disk."]);
+  assert.deepEqual([item(list, "fast:vm-958-disk-0").canDelete, item(list, "fast:vm-958-disk-0").leftover], [true, true]);
+  assert.equal(item(list, "fast:base-700-disk-0").canDelete, false, "a linked clone still needs its base disk");
+});
+
+test("a disc in a drive can't go, a spare one can, and backups live in Backups", () => {
+  const list = poolItems(vols, guests, true);
+  assert.equal(item(list, "local:iso/debian.iso").whyNot, "It's in thin-guest's disc drive.");
+  assert.equal(item(list, "local:iso/old.iso").canDelete, true);
+  assert.equal(item(list, "local:iso/old.iso").name, "old.iso");
+  assert.equal(item(list, "local:backup/vzdump-qemu-951.vma.zst").canDelete, false);
+});
+
+test("nothing is deletable while BossMox can't see everything", () => {
+  assert.match(item(poolItems(vols, guests, false), "fast:vm-958-disk-0").whyNot, /node is offline/);
+  const blind = [...guests, { vmid: 960, name: "unread", known: false, refs: [] }];
+  assert.match(item(poolItems(vols, blind, true), "local:iso/old.iso").whyNot, /couldn't read every guest/);
 });

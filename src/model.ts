@@ -153,6 +153,8 @@ export function buildOverview(
         discLocked: config?.ide2 !== undefined && (String(config.ide2).includes("cloudinit") || !String(config.ide2).includes("media=cdrom")),
         bridges: [...new Set(Object.entries(config ?? {}).filter(([k]) => /^net\d+$/.test(k)).map(([, v]) => String(v).match(/bridge=([^,]+)/)?.[1]).filter((b): b is string => Boolean(b)))],
         configLoaded: config !== undefined,
+        // Every volume its settings name (disks, disc drives, a linked clone's base), so nothing in use gets deleted.
+        refs: Object.values(config ?? {}).map((v) => String(v).split(",")[0] as string).filter((v) => /^[A-Za-z][\w.-]*:[^=\s]+$/.test(v)),
         tech: {
           "Machine type": config?.machine ?? "i440fx (default)",
           Firmware: config?.bios ?? "seabios (default)",

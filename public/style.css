@@ -260,6 +260,9 @@ summary{cursor:pointer;font-weight:650}
 .stdetails{font-size:12px;opacity:.8}
 .sthd{font-size:15px;font-weight:650;margin:18px 0 0}
 .stnote{display:block;color:var(--muted);padding-bottom:6px}
+.stitems{margin-top:6px;padding:4px 0 2px;border-top:1px solid var(--line)}
+.stitemhd{margin:10px 0 0;font-size:13px;font-weight:650}
+.stitems .snap{padding:7px 0}
 @media (max-width:760px){.stdisk,.stpool .sthead,.sttop{flex-wrap:wrap}.sttop .stnode{max-width:none;flex:1 1 100%}}
 .uses{border:0;padding:0;margin:0 0 12px;display:grid;gap:6px}
 .uses legend{font-weight:600;font-size:13.5px;margin-bottom:6px;padding:0}

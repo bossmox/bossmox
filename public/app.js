@@ -571,6 +571,7 @@ function poolBlock(p) {
   ].filter(Boolean);
   const holds = p.uses.map((u) => USE_WORDS[u]).filter(Boolean);
   const listed = S.storeList?.some((s) => s.id === p.id);
+  const open = S.openPools?.has(`${S.storeNode}/${p.id}`);
   return `<div class="stpool ${p.overGivenGb ? "warnpool" : ""}">
     <div class="sthead"><div><b>${esc(p.id)}</b> <span class="inl">${esc(p.title)}</span></div>
       ${listed ? `<div class="actions"><button class="btn" data-stedit="${esc(p.id)}">Change use</button><button class="btn" data-stremove="${esc(p.id)}">Remove</button></div>` : ""}</div>
@@ -578,7 +579,32 @@ function poolBlock(p) {
     ${using.length ? `<small>Using it: ${esc(using.join(", "))}</small>` : ""}
     <small>Holds ${esc(holds.join(", ").toLowerCase().replace(/\bvm\b/g, "VM") || "nothing yet")}.</small>
     ${facts.map((f) => `<small>${esc(f)}</small>`).join("")}
-    ${p.details ? `<small class="stdetails">${esc(p.details)}</small>` : ""}</div>`;
+    ${p.details ? `<small class="stdetails">${esc(p.details)}</small>` : ""}
+    ${p.active ? `<div><button class="linkbtn" data-poolopen="${esc(p.id)}" aria-expanded="${open ? "true" : "false"}">${open ? "Hide what's on it" : "What's on it"}</button></div>${open ? poolItemsList(p) : ""}` : ""}</div>`;
+}
+const ITEM_WORDS = { disk: "Disks", disc: "Installer discs", template: "Container templates", backup: "Backups", import: "Imports", snippet: "Snippets", other: "Other" };
+function poolItemsList(p) {
+  const holdsDiscs = p.uses.includes("iso");
+  const groups = Object.keys(ITEM_WORDS).map((k) => [k, p.items.filter((i) => i.kind === k)]).filter(([, list]) => list.length);
+  const row = (i) => {
+    const what = i.kind === "disk" ? (i.leftover ? "Left over from a guest that no longer exists" : `${i.owner || guestName(i.vmid)}'s disk`) : "";
+    const size = i.usedGb !== null && i.usedGb < i.gb ? `${sizeWords(i.usedGb)} of ${sizeWords(i.gb)}` : sizeWords(i.gb);
+    const button = i.kind === "backup" ? `<button class="btn" data-open="backups">Open Backups</button>` : i.canDelete ? `<button class="btn ${i.leftover ? "danger" : ""}" data-itemdelete="${esc(i.volid)}" data-itempool="${esc(p.id)}">Delete</button>` : "";
+    return `<div class="snap"><div>${esc(i.name)}<small>${esc([what, size].filter(Boolean).join(", "))}${!i.canDelete && i.kind !== "backup" && i.kind !== "disk" ? `. ${esc(i.whyNot)}` : ""}</small></div><div class="actions">${button}</div></div>`;
+  };
+  return `<div class="stitems">
+    ${groups.map(([k, list]) => `<p class="stitemhd">${ITEM_WORDS[k]} (${list.length})</p>${list.map(row).join("")}`).join("") || `<p class="meta">Nothing Proxmox keeps track of is on it.</p>`}
+    ${p.otherGb ? `<p class="meta">${esc(p.otherLabel)} take ${sizeWords(p.otherGb)}. Proxmox only lists what it keeps track of, so those can't be shown here.</p>` : ""}
+    ${holdsDiscs ? `<div class="row-end"><button class="btn" data-itemupload="${esc(p.id)}">Upload an installer disc</button></div>` : ""}</div>`;
+}
+function askItemDelete(pool, volid) {
+  const i = S.storeMaps?.[S.storeNode] && [...S.storeMaps[S.storeNode].groups.flatMap((g) => g.pools), ...S.storeMaps[S.storeNode].unplaced, ...S.storeMaps[S.storeNode].network].find((p) => p.id === pool)?.items.find((x) => x.volid === volid);
+  if (!i) return;
+  const node = S.storeNode;
+  const line = i.leftover
+    ? `This disk is left over from guest ${i.vmid}, which no longer exists, and nothing uses it. Deleting it frees ${sizeWords(i.usedGb ?? i.gb)} on ${pool}. It can't be undone.`
+    : `This deletes ${i.name} from ${pool}, freeing ${sizeWords(i.gb)}. It can't be undone.`;
+  confirmAction(`Delete ${i.name}?`, line, `Delete ${i.name}`, () => runAction("content-delete", node, `Deleting ${i.name}`, { storage: pool, volid, confirm: volid }, () => loadStorageMap(node)), true);
 }
 function mapPane() {
   const nodes = onlineNodes();
@@ -1491,9 +1517,8 @@ function makeTemplate(id) {
 }
 
 /* Installer discs from this computer, and container templates */
-function askUpload() {
-  const stores = S.createPlan?.mediaStorages ?? [];
-  const { server } = S.createFor;
+function askUpload(server = S.createFor.server, stores = S.createPlan?.mediaStorages ?? [], after = null) {
+  S.uploadTo = { server, after: after ?? (() => loadCreate(server, S.createFor.kind)) };
   if (!stores.length) return noPlaceFor("Nowhere to keep a disc", server, "iso");
   dialog(`<h3>Upload an installer disc</h3><p>The file goes straight to ${esc(server)}. Keep this page open until it finishes.</p>
     <p class="loginerr" id="formerr" hidden></p>
@@ -1505,7 +1530,7 @@ function startUpload() {
   const file = $("#uploadfile").files[0];
   if (!file) return formError("Choose a file first.");
   if (!/^[\w.-]+\.(iso|img)$/i.test(file.name)) return formError("That has to be an .iso or .img file, with no spaces in its name.");
-  const { server, kind } = S.createFor;
+  const { server, after } = S.uploadTo;
   const storage = $("#uploadstore").value;
   const xhr = new XMLHttpRequest();
   S.taskRunning = true;
@@ -1519,7 +1544,7 @@ function startUpload() {
   const done = (title, line, bad) => {
     S.taskRunning = false;
     dialog(`<h3>${esc(title)}</h3><p class="${bad ? "loginerr" : ""}">${esc(line)}</p>${closeRow}`);
-    S.afterTask = () => loadCreate(server, kind);
+    S.afterTask = after;
   };
   xhr.onload = () => {
     let body = {};
@@ -2458,6 +2483,18 @@ document.addEventListener("click", (e) => {
   if (d.stsave) return saveShare();
   if (d.stedit) return askEditStorage(d.stedit);
   if (d.stuses) return saveUses();
+  if (d.poolopen) {
+    S.openPools ??= new Set();
+    const key = `${S.storeNode}/${d.poolopen}`;
+    if (S.openPools.has(key)) S.openPools.delete(key);
+    else S.openPools.add(key);
+    return drawStore();
+  }
+  if (d.itemdelete) return askItemDelete(d.itempool, d.itemdelete);
+  if (d.itemupload) {
+    const node = S.storeNode;
+    return askUpload(node, [d.itemupload], () => loadStorageMap(node));
+  }
   if (d.noplace && S.noPlace) {
     const { id, uses } = S.noPlace;
     return runAction("storage-edit", onlineNodes()[0], `Letting ${id} hold more`, { id, uses }, afterStorage);

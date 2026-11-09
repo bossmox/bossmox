@@ -16,7 +16,7 @@ import { assertCanWipe, buildStorageList, deviceIsValid, diskStorageForm, hostIs
 import { addDiskForm, addNicForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { applyChannel, ChannelError } from "./update-channel.js";
-import { buildStorageMap, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
+import { buildStorageMap, poolItems, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import {
   buildMovePlan,
   buildRebootPlan,
@@ -368,9 +368,13 @@ async function loadStorageMap(name: string, session: Session) {
     status,
     rootfs: nodeStatus.rootfs ?? null,
     content: Object.fromEntries(contentEntries),
+    guests: guestRefs(data),
+    allNodesOnline: data.nodes.every((n) => n.online),
   }, data.nodes.length > 1);
   return { map, diskList: readHardDisks(disks) };
 }
+
+const guestRefs = (data: Overview): GuestRefs[] => data.vms.map((v) => ({ vmid: v.id, name: v.name, known: v.configLoaded, refs: v.refs }));
 
 /** Whether a storage keeps VM disks as files, from the node's own list, which only shows what the person can use. */
 async function keepsFiles(node: string, storage: string, ticket: string): Promise<boolean> {
@@ -561,6 +565,18 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     }
     await pve.delete<null>(`/storage/${encodeURIComponent(form.storage as string)}`, who).catch(() => null);
     throw new AuthError(400, `${name} couldn't connect to that share, so it wasn't added. Check that the NAS lets this node in.`);
+  },
+  "content-delete": async (name, who, body) => {
+    const storage = text(body.storage, 64);
+    const volid = text(body.volid, 300);
+    if (!STORAGE.test(storage) || !volid || body.confirm !== volid) throw new AuthError(400, "That wasn't confirmed.");
+    const base = `/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}`;
+    // Fresh, not the cached overview: a guest made a moment ago must count.
+    const [volumes, data] = await Promise.all([pve.get<RawVolume[]>(`${base}/content`, who.ticket), loadOverview(who.ticket)]);
+    const item = poolItems(volumes, guestRefs(data), data.nodes.every((n) => n.online)).find((i) => i.volid === volid);
+    if (!item) throw new AuthError(400, `That isn't on ${storage} anymore.`);
+    if (!item.canDelete) throw new AuthError(400, item.whyNot);
+    return pve.delete<string>(`${base}/content/${encodeURIComponent(volid)}`, who);
   },
   "storage-edit": async (_name, who, body) => {
     const id = text(body.id, 64);

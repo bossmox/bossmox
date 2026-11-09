@@ -35,6 +35,60 @@ export interface RawVolume {
   used?: number;
   vmid?: number | string;
 }
+/** A guest as storage needs it: who it is, and every volume its settings name. */
+export interface GuestRefs {
+  vmid: number;
+  name: string;
+  /** False when Proxmox didn't give its settings, so what it refers to is unknown. */
+  known: boolean;
+  refs: string[];
+}
+
+const ITEM_KIND: Record<string, string> = { images: "disk", rootdir: "disk", iso: "disc", vztmpl: "template", backup: "backup", import: "import", snippets: "snippet" };
+
+/**
+ * What's on a pool, and whether each thing can be deleted from BossMox (ADR 0015). Proxmox itself deletes a disk
+ * that a VM still uses without a word (measured in the lab), so this is the check, and the server runs it again
+ * on every delete. A disk is only ever deletable when no guest in the cluster owns it or refers to it.
+ */
+export function poolItems(volumes: RawVolume[], guests: GuestRefs[], allNodesOnline: boolean) {
+  const byId = new Map(guests.map((g) => [g.vmid, g]));
+  const allKnown = guests.every((g) => g.known);
+  return volumes
+    .filter((v) => v.volid && v.content)
+    .map((v) => {
+      const volid = v.volid as string;
+      const kind = ITEM_KIND[v.content ?? ""] ?? "other";
+      const file = volid.slice(volid.indexOf(":") + 1);
+      const vmid = Number(v.vmid ?? 0) || null;
+      const owner = vmid ? byId.get(vmid) : undefined;
+      // A disk's own name, such as vm-958-disk-0, also turns up inside a linked clone's reference to it.
+      const ownName = file.split("/").pop() ?? file;
+      const usedBy = guests.filter((g) => g.refs.some((r) => r === volid || (kind === "disk" && r.includes(ownName)))).map((g) => g.name);
+      let whyNot = "";
+      if (kind === "backup") whyNot = "Backups are kept in the Backups app.";
+      else if (kind === "disk" && owner) whyNot = `It's ${owner.name}'s disk.`;
+      else if (kind === "snippet" || kind === "other") whyNot = "BossMox doesn't manage these yet.";
+      else if (usedBy.length) whyNot = kind === "disc" ? `It's in ${usedBy.join(", ")}'s disc drive.` : `${usedBy.join(", ")} still uses it.`;
+      else if (!allNodesOnline) whyNot = "A node is offline, so BossMox can't be sure nothing there uses it.";
+      else if (!allKnown) whyNot = "BossMox couldn't read every guest's settings, so it can't be sure nothing uses it.";
+      return {
+        volid,
+        kind,
+        name: kind === "disk" ? ownName : file.replace(/^(iso|vztmpl|import|snippets|backup)\//, ""),
+        gb: gb(v.size),
+        usedGb: typeof v.used === "number" ? gb(v.used) : null,
+        vmid,
+        owner: owner?.name ?? "",
+        leftover: kind === "disk" && !owner && !usedBy.length,
+        canDelete: whyNot === "",
+        whyNot,
+      };
+    })
+    .sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+}
+export type PoolItem = ReturnType<typeof poolItems>[number];
+
 export interface NodeStorageInput {
   node: string;
   disks: RawDisk[];
@@ -45,6 +99,8 @@ export interface NodeStorageInput {
   status: RawStorageStatus[];
   rootfs: { total?: number } | null;
   content: Record<string, RawVolume[]>;
+  guests?: GuestRefs[];
+  allNodesOnline?: boolean;
 }
 
 const GB = 1024 ** 3;
@@ -141,6 +197,7 @@ export interface Pool {
   snapshots: string;
   otherNodes: string;
   disks: string[];
+  items: PoolItem[];
 }
 export interface Disk {
   path: string;
@@ -257,6 +314,7 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
       snapshots: snapshots(type),
       otherNodes: otherNodes(type, shared, clustered),
       disks: [...new Set(disks)],
+      items: poolItems(volumes, input.guests ?? [], input.allNodesOnline ?? true),
     });
   }
 
