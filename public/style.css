@@ -263,6 +263,11 @@ summary{cursor:pointer;font-weight:650}
 .stitems{margin-top:6px;padding:4px 0 2px;border-top:1px solid var(--line)}
 .stitemhd{margin:10px 0 0;font-size:13px;font-weight:650}
 .stq{margin:14px 0 6px;font-weight:650}
+.warnline{color:var(--warn);margin:6px 0 0}
+.warnline:empty{display:none}
+dd.agenthelp{grid-column:1/-1;margin:-4px 0 6px}
+dd.agenthelp small{display:block;color:var(--muted);line-height:1.5}
+dd.agenthelp code{font-size:12px}
 .choice[disabled]{opacity:.55;cursor:not-allowed}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .stitems .snap{padding:7px 0}

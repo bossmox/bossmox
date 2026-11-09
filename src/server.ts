@@ -13,7 +13,7 @@ import { containerForm, CreateError, discDownload, discForm, FILE_STORAGE, insta
 import { changesForm, SettingsError, waitingChanges } from "./guest-settings.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
 import { assertCanWipe, buildStorageList, setupPlan, deviceIsValid, diskStorageForm, hostIsValid, networkForm, readHardDisks, StorageError, storageBlockers, usesForm, type RawDisk, type RawStorageConfig } from "./storage.js";
-import { addDiskForm, addNicForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
+import { snapshotFix, addDiskForm, addNicForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { applyChannel, ChannelError } from "./update-channel.js";
 import { plainError } from "./plain-errors.js";
@@ -392,6 +392,11 @@ async function storageMapFor(name: string, t: string, data: Overview) {
 
 const guestRefs = (data: Overview): GuestRefs[] => data.vms.map((v) => ({ vmid: v.id, name: v.name, known: v.configLoaded, refs: v.refs }));
 
+async function snapshotFixFor(node: string, path: string, ticket: string): Promise<string[]> {
+  const [config, storages] = await Promise.all([pve.get<RawConfig>(`${path}/config`, ticket), pve.get<{ storage: string; type?: string }[]>(`/nodes/${encodeURIComponent(node)}/storage`, ticket)]);
+  return snapshotFix(config as Parameters<typeof snapshotFix>[0], Object.fromEntries(storages.map((s) => [s.storage, s.type ?? ""])));
+}
+
 /** Whether a storage keeps VM disks as files, from the node's own list, which only shows what the person can use. */
 async function keepsFiles(node: string, storage: string, ticket: string): Promise<boolean> {
   const list = await pve.get<{ storage: string; type?: string }[]>(`/nodes/${encodeURIComponent(node)}/storage`, ticket);
@@ -444,6 +449,21 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
     // Force off has to win over a shutdown that's stuck waiting for the guest.
     return pve.post<string>(`${path}/status/${power}`, who, power === "stop" ? { "overrule-shutdown": "1" } : {});
+  },
+  "snapshot-fix": async (name, who, body) => {
+    const { id, path } = guestPath(name, { ...body, type: "qemu" });
+    if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
+    const status = await pve.get<{ status?: string }>(`${path}/status/current`, who.ticket);
+    // Tested with the VM shut down. Converting the firmware and TPM disks of a running VM isn't something to try.
+    if (status.status !== "stopped") throw new AuthError(400, "Shut it down first.");
+    const slots = await snapshotFixFor(name, path, who.ticket);
+    if (!slots.length) throw new AuthError(400, "Converting its disks wouldn't make snapshots work, so nothing was changed.");
+    const config = await pve.get<RawConfig>(`${path}/config`, who.ticket);
+    for (const disk of slots) {
+      const storage = String(config[disk]).split(":")[0] ?? "";
+      await finishTask(name, await pve.post<string>(`${path}/move_disk`, who, { disk, storage, format: "qcow2", delete: "1" }), who, 900);
+    }
+    return null;
   },
   "snapshot-take": (name, who, body) => {
     const { path } = guestPath(name, body);
@@ -1156,7 +1176,8 @@ const handler: http.RequestListener = async (req, res) => {
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
           const { path } = guestPath(name, { guest: params.get("guest"), type: params.get("type") });
           const feature = await pve.get<{ hasFeature?: number }>(`${path}/feature?feature=snapshot`, session.ticket);
-          return json(res, 200, { supported: feature.hasFeature === 1 });
+          if (feature.hasFeature === 1 || params.get("type") !== "qemu") return json(res, 200, { supported: feature.hasFeature === 1, fix: [] });
+          return json(res, 200, { supported: false, fix: await snapshotFixFor(name, path, session.ticket) });
         }
         if (route === "/api/reboot-plan") {
           const name = params.get("server") ?? "";

@@ -42,6 +42,25 @@ export function readDisks(type: "qemu" | "lxc", config: Config) {
     .sort((a, b) => Number(b.boot) - Number(a.boot) || a.slot.localeCompare(b.slot, undefined, { numeric: true }));
 }
 
+const SNAP_POOLS = new Set(["lvmthin", "zfspool", "rbd", "btrfs"]);
+const FILE_TYPES = new Set(["dir", "nfs", "cifs", "glusterfs"]);
+/**
+ * The disks to convert so a VM can be snapshotted (ADR 0016): raw files on a folder or share, which Proxmox made
+ * when not asked for qcow2. Only offered when converting them would be enough, so every other disk already can.
+ */
+export function snapshotFix(config: Config, storageTypes: Record<string, string>): string[] {
+  const slots = Object.entries(config).filter(([k, v]) => (QEMU_DISK.test(k) || k === "efidisk0" || k === "tpmstate0") && !String(v).includes("media=cdrom") && String(v) !== "none" && String(v).includes(":"));
+  const convert: string[] = [];
+  for (const [slot, v] of slots) {
+    const volume = String(v).split(",")[0] ?? "";
+    const type = storageTypes[volume.split(":")[0] ?? ""] ?? "";
+    if (SNAP_POOLS.has(type) || (FILE_TYPES.has(type) && volume.endsWith(".qcow2"))) continue;
+    if (FILE_TYPES.has(type) && /\.(raw|vmdk)$/.test(volume)) convert.push(slot);
+    else return [];
+  }
+  return convert;
+}
+
 export function readNics(type: "qemu" | "lxc", config: Config) {
   return Object.entries(config)
     .filter(([k]) => NIC.test(k))

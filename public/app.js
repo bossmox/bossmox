@@ -306,7 +306,7 @@ function renderDetail() {
       <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
       <div class="actions">${v.template ? `<button class="btn primary" data-clone="${v.id}">New from template</button>` : v.running
         ? `<button class="btn" data-console="${v.id}">Console</button><button class="btn" data-power="shutdown">Shut down</button><button class="btn" data-power="reboot">Restart</button><button class="btn" data-power="stop">Force off</button>`
-        : `<button class="btn primary" data-power="start">Start</button>`}${v.template ? "" : `<button class="btn" data-clone="${v.id}">Clone</button>`}${(S.data?.nodes.length ?? 0) > 1 && !v.template ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${v.type === "qemu" && !v.template ? `<span ${v.running ? 'title="The machine has to be powered off to access this menu"' : ""}><button class="btn" ${v.running ? "disabled" : `data-bootmenu="${v.id}"`}>Boot menu</button></span>` : ""}${v.running || v.template ? "" : `<button class="btn" data-maketemplate="${v.id}">Make template</button>`}${v.running ? "" : `<button class="btn" data-guestdelete="${v.id}">Delete</button>`}</div></div>
+        : `<button class="btn primary" data-power="start">Start</button>`}${v.template ? "" : `<button class="btn" data-clone="${v.id}">Clone</button>`}${(S.data?.nodes.length ?? 0) > 1 && !v.template ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${v.type === "qemu" && !v.template ? `<span ${v.running ? 'title="The machine has to be powered off to access this menu"' : ""}><button class="btn" ${v.running ? "disabled" : `data-bootmenu="${v.id}"`}>Boot menu</button></span>` : ""}${v.template ? "" : `<button class="btn" data-maketemplate="${v.id}">Make template</button>`}<button class="btn" data-guestdelete="${v.id}">Delete</button></div></div>
     <div id="vmwaiting">${waitingWords(v)}</div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["hardware", "Hardware"], ...(v.template ? [] : [["snapshots", "Snapshots"]]), ["settings", "Settings"]].map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${TAB[S.tab](v)}</div>`;
@@ -331,6 +331,7 @@ const TAB = {
       <dt>Operating system</dt><dd>${esc(v.os)}</dd>
       <dt>Processor cores</dt><dd>${v.cores}</dd>
       ${v.running ? `<dt>Address</dt><dd id="vmaddr">${esc(addressWords(v))}</dd>` : ""}
+      ${v.running && v.type === "qemu" ? `<dd class="agenthelp" id="vmagent">${agentHelp(v)}</dd>` : ""}
       <dt>Starts at boot</dt><dd>${v.startsAtBoot ? "Yes" : "No"}</dd>
       <dt>Snapshots</dt><dd>${v.snapshots.length || "None"}</dd>
     </dl>`,
@@ -346,7 +347,7 @@ const TAB = {
   },
   snapshots: (v) => `<div class="head"><p class="meta" style="margin-top:0">A snapshot saves ${esc(v.name)} as it is now, so you can go back to it later. It isn't a backup: it lives on the same disk.</p>
       ${S.snapSupport?.[v.id] === false ? "" : `<div class="actions"><button class="btn primary" data-snaptake="1">Take a snapshot</button></div>`}</div>
-    ${S.snapSupport?.[v.id] === false ? `<div class="advice"><div><b>Snapshots aren't available for ${esc(v.name)}</b>The storage holding its disk can't take them. Backups still work.</div></div>` : ""}
+    ${S.snapSupport?.[v.id] === false ? snapshotAdvice(v) : ""}
     ${v.snapshots.length
       ? v.snapshots.map((s) => `<div class="snap"><div>${esc(s.name)}<small>${esc(s.description ? `${s.description}, ${when(s.takenAt)}` : when(s.takenAt))}</small></div><div class="actions"><button class="btn" data-snaprestore="${esc(s.name)}">Go back to this</button><button class="btn" data-snapdelete="${esc(s.name)}">Delete</button></div></div>`).join("")
       : S.snapSupport?.[v.id] === false ? "" : `<p class="empty">This VM has no snapshots yet.</p>`}`,
@@ -422,6 +423,12 @@ async function loadAhead() {
     if (first) await loadCpuTypes(onlineNodes()[0]);
     if (first || wins.tasklog) await loadTaskLog();
     if (first || wins.storage) await loadStorage();
+    if (first || S.aheadRuns % 10 === 0) {
+      for (const node of onlineNodes()) {
+        if (run !== S.loadRun) return;
+        if (!wins.storage || node !== S.storeNode) await loadStorageMap(node);
+      }
+    }
     // Disks answer slowly and rarely change, but a failing one should still reach the desktop.
     if (first || wins.storage || S.aheadRuns % 10 === 0) {
       for (const node of onlineNodes()) {
@@ -1055,7 +1062,7 @@ async function startRestart(server) {
     ${canMove ? plan.cantMove.map((m) => `<p class="loginerr" style="margin-top:12px">${esc(m)}</p>`).join("") : ""}
     ${guests.length ? `<div class="restartlist">${guests.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state">${v.startsAtBoot ? "Starts again by itself" : "Stays off until started"}</span></div>`).join("")}</div>` : ""}
     ${canMove ? `<label class="field restartname"><span>Before restarting</span><select id="rmove"><option value="">Shut them down, don't move them</option>${others.map((n) => `<option value="${esc(n)}" selected>Move everything to ${esc(n)}</option>`).join("")}</select></label>` : ""}
-    ${guests.length && plan.backupStorages.length ? `<div class="restartbackup"><select id="rstore" aria-label="Backup storage">${plan.backupStorages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select><button class="btn" data-backup="${esc(server)}">Back up first</button></div>` : ""}
+    ${guests.length && plan.backupStorages.length ? `<div class="restartbackup"><select id="rstore" aria-label="Backup storage" data-bkwarn="${esc(server)}">${plan.backupStorages.map((s) => poolOption(server, s)).join("")}</select><button class="btn" data-backup="${esc(server)}">Back up first</button></div>${backupWarnLine(server, plan.backupStorages[0].name)}` : ""}
     <label class="field restartname"><span>Type reboot to confirm</span><input id="rname" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-restart="${esc(server)}" disabled>Restart ${esc(server)}</button></div>`);
   $("#rname").focus();
@@ -1445,12 +1452,22 @@ async function loadNetwork() {
   }
 }
 
+function agentHelp(v) {
+  const a = S.addresses?.[v.id];
+  if (!a || a.known) return "";
+  return `<small>The guest agent is a small program inside the VM that tells Proxmox its address and lets it shut down cleanly. To install it: on Debian or Ubuntu, <code>apt install qemu-guest-agent</code>; on Windows, the guest tools on the virtio-win disc. ${v.agent ? "Its setting is already on here, so once it's installed it should show up within a minute." : `Its setting is off here too. Turning it on takes effect after ${esc(v.name)} is shut down and started again.`}</small>${v.agent ? "" : `<button class="linkbtn" data-agenton="${v.id}">Turn on the guest agent setting</button>`}`;
+}
+function snapshotAdvice(v) {
+  const fix = S.snapFix?.[v.id] ?? [];
+  if (!fix.length) return `<div class="advice"><div><b>Snapshots aren't available for ${esc(v.name)}</b>The storage holding its disk can't take them. Backups still work.</div></div>`;
+  return `<div class="advice"><div><b>Snapshots aren't available for ${esc(v.name)} yet</b>Its disks are kept in a format that can't be snapshotted. BossMox can convert them where they are, which takes about a minute for every few GB. ${v.running ? "Shut it down first." : ""}</div><button class="btn" data-snapfix="${v.id}" ${v.running ? "disabled" : ""}>Make snapshots work</button></div>`;
+}
 /* A guest's address, asked for only while its Overview is showing */
 function addressWords(v) {
   const a = S.addresses?.[v.id];
   if (!a) return "Checking";
   if (a.list.length) return a.list.join(", ");
-  if (v.type === "qemu" && !a.known) return "Needs the guest agent to show this";
+  if (v.type === "qemu" && !a.known) return "Unknown until the guest agent is running inside it";
   return "None yet";
 }
 async function loadAddress(v) {
@@ -1460,19 +1477,57 @@ async function loadAddress(v) {
   if (v.type === "qemu" && !v.agent) {
     S.addresses[v.id].known = false;
     if (S.sel === v.id && $("#vmaddr")) $("#vmaddr").textContent = addressWords(v);
+    if (S.sel === v.id && $("#vmagent")) $("#vmagent").innerHTML = agentHelp(v);
     return;
   }
   try {
     const r = await signal(`api/guest-addresses?server=${encodeURIComponent(v.node)}&guest=${v.id}&type=${v.type}`);
     S.addresses[v.id] = { list: r.addresses, known: r.known, at: Date.now() };
     if (S.sel === v.id && $("#vmaddr")) $("#vmaddr").textContent = addressWords(v);
+    if (S.sel === v.id && $("#vmagent")) $("#vmagent").innerHTML = agentHelp(v);
   } catch { /* the next look asks again */ }
 }
 
 /* Hardware */
 const planFor = (v) => signal(`api/create-plan?server=${encodeURIComponent(v.node)}&kind=${v.type}`);
 const after = () => refresh().then(renderDetail);
-const storageOptions = (plan) => plan.storages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("");
+/** Where a storage is and what it can't do, in a few words, from the storage map. Empty until the map has loaded. */
+function poolWords(node, id) {
+  const m = S.storeMaps?.[node];
+  if (!m) return "";
+  for (const g of m.groups) {
+    const p = g.pools.find((x) => x.id === id);
+    if (p) return `${g.disks.some((d) => d.system) ? "on the system disk" : `on ${g.disks.map((d) => d.model || d.path).join(" + ")}`}${p.snapshots.startsWith("Snapshots don't") ? ", no snapshots" : ""}`;
+  }
+  const n = m.network.find((x) => x.id === id);
+  return n ? `${n.title.toLowerCase()}${n.details ? ` at ${n.details}` : ""}` : "";
+}
+const poolOption = (node, s, selected = false) => {
+  const words = poolWords(node, s.name ?? s);
+  const free = s.freeGb === undefined ? "" : `, ${s.freeGb} GB free`;
+  return `<option value="${esc(s.name ?? s)}" ${selected ? "selected" : ""}>${esc(s.name ?? s)}${words ? `, ${esc(words)}` : ""}${free}</option>`;
+};
+const storageOptions = (plan, node = plan.server ?? S.storeNode) => plan.storages.map((s) => poolOption(node, s)).join("");
+/** A backup on the same computer as the guests goes down with it. Said under every place a backup is saved. */
+function backupWarning(node, id) {
+  const m = S.storeMaps?.[node];
+  if (!m || m.network.some((p) => p.id === id)) return "";
+  const g = m.groups.find((x) => x.pools.some((p) => p.id === id));
+  if (!g) return "";
+  return g.disks.some((d) => d.system)
+    ? "This is the system disk, the same drive Proxmox runs from. If that drive fails, these backups go with it. A NAS, or at least another drive, is much safer."
+    : "This drive is in the same computer as the guests. If the computer fails or is stolen, the backups go with it. A NAS is safer.";
+}
+const backupWarnLine = (node, id) => `<p class="meta warnline" data-bkwarnfor="${esc(node)}">${esc(backupWarning(node, id))}</p>`;
+/** A network as a person sees it: the node's own network, a port it's plugged into, or guests only. */
+function bridgeWords(node, name) {
+  const i = S.nets?.[node]?.interfaces?.find((x) => x.name === name);
+  if (!i) return name;
+  if (i.gateway) return `${name}, the network the node itself is on`;
+  if (i.ports?.length) return `${name}, connected to ${i.ports.join(" and ")}`;
+  return `${name}, guests only: no network port, so they can only reach each other`;
+}
+const bridgeOptions = (node, list) => list.map((b) => `<option value="${esc(b)}">${esc(bridgeWords(node, b))}</option>`).join("");
 const formError = (text) => {
   const e = $("#formerr");
   e.textContent = text;
@@ -1503,7 +1558,7 @@ async function askAddDisk() {
   }
   dialog(`<h3>Add a disk to ${esc(v.name)}</h3><p class="loginerr" id="formerr" hidden></p>
     <div class="createrow"><label class="field"><span>Size in GB</span><input id="disksize" type="number" min="1" value="32"></label></div>
-    <label class="field"><span>Keep it on</span><select id="diskstore">${storageOptions(plan)}</select></label>
+    <label class="field"><span>Keep it on</span><select id="diskstore">${storageOptions(plan, v.node)}</select></label>
     ${v.type === "lxc" ? `<label class="field"><span>Where it appears</span><input id="diskmount" placeholder="/data" autocomplete="off" autocapitalize="none" spellcheck="false"></label>` : ""}
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-diskaddgo="1">Add disk</button></div>`);
 }
@@ -1535,7 +1590,7 @@ async function askAddNic() {
     return failDialog("Couldn't prepare that", err);
   }
   dialog(`<h3>Add a network card to ${esc(v.name)}</h3><p class="loginerr" id="formerr" hidden></p>
-    <label class="field"><span>Network</span><select id="nicbridge">${plan.bridges.map((b) => `<option>${esc(b)}</option>`).join("")}</select></label>
+    <label class="field"><span>Network</span><select id="nicbridge">${bridgeOptions(v.node, plan.bridges)}</select></label>
     <label class="field"><span>VLAN, if it needs one</span><input id="nicvlan" inputmode="numeric" autocomplete="off"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-nicaddgo="1">Add card</button></div>`);
 }
@@ -1561,7 +1616,7 @@ async function askClone(id) {
   dialog(`<h3>${v.template ? `New guest from ${esc(v.name)}` : `Clone ${esc(v.name)}`}</h3><p>${v.template ? "This makes a separate guest from the template." : "This makes a complete separate copy."} ${v.running ? `${esc(v.name)} keeps running, with a brief pause as the copy starts.` : ""} The new one starts switched off, on ${esc(v.node)}.</p>
     <p class="loginerr" id="formerr" hidden></p>
     <label class="field restartname"><span>Name</span><input id="clonename" maxlength="63" value="${esc(v.template ? "" : `${v.name}-copy`)}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
-    <label class="field"><span>Keep its disks on</span><select id="clonestore">${storageOptions(plan)}</select></label>
+    <label class="field"><span>Keep its disks on</span><select id="clonestore">${storageOptions(plan, v.node)}</select></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-clonego="${v.id}">${v.template ? "Create" : "Clone"}</button></div>`);
   $("#clonename").focus();
 }
@@ -1575,6 +1630,7 @@ function cloneGuest(id) {
 function askTemplate(id) {
   const v = S.data?.vms.find((g) => g.id === id);
   if (!v) return;
+  if (v.running) return dialog(`<h3>Shut ${esc(v.name)} down first</h3><p>A running guest can't become a template. Shut it down from its Overview, then make it a template.</p>${closeRow}`);
   dialog(`<h3>Make ${esc(v.name)} a template?</h3><p>A template is a master copy for making new guests. ${esc(v.name)} can't be started again after this, and that can't be undone. Clone it first if you want to keep using it.</p>
     <label class="field restartname"><span>Type template to confirm</span><input id="rname" data-word="template" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-templatego="${v.id}" disabled>Make template</button></div>`);
@@ -1592,7 +1648,7 @@ function askUpload(server = S.createFor.server, stores = S.createPlan?.mediaStor
   dialog(`<h3>Upload an installer disc</h3><p>The file goes straight to ${esc(server)}. Keep this page open until it finishes.</p>
     <p class="loginerr" id="formerr" hidden></p>
     <label class="field restartname"><span>Disc image (.iso)</span><input id="uploadfile" type="file" accept=".iso,.img"></label>
-    <label class="field restartname"><span>Keep it on</span><select id="uploadstore">${stores.map((s) => `<option>${esc(s)}</option>`).join("")}</select></label>
+    <label class="field restartname"><span>Keep it on</span><select id="uploadstore">${stores.map((s) => poolOption(server, s)).join("")}</select></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-uploadgo="1">Upload</button></div>`);
 }
 function startUpload() {
@@ -1689,8 +1745,9 @@ async function loadCreate(server, kind) {
       ${field(`Memory in GB (${p.memoryGb} here)`, `<input id="cmemory" type="number" min="0.25" step="0.25" value="${esc(kept.memory)}">`)}
       ${field("Disk in GB", `<input id="cdisk" type="number" min="1" value="${esc(kept.disk)}">`)}
     </div>
-    ${field("Keep its disk on", `<select id="cstorage">${p.storages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select>`)}
-    ${field("Network", `<select id="cbridge">${p.bridges.map((b) => `<option>${esc(b)}</option>`).join("")}</select>`)}
+    ${field("Keep its disk on", `<select id="cstorage">${p.storages.map((s) => poolOption(server, s)).join("")}</select>`)}
+    ${p.storages.length ? "" : `<p class="loginerr">${esc(server)} has nowhere to keep ${vm ? "VM" : "container"} disks yet. <button class="linkbtn" data-openstore="1">Open Storage</button> and use Add storage.</p>`}
+    ${field("Network", `<select id="cbridge">${bridgeOptions(server, p.bridges)}</select>`)}
     <label class="createcheck"><input id="cstart" type="checkbox"> Start it right away</label>
     <div class="row-end"><button class="btn primary" data-createnew="1">Create</button></div>`;
 }
@@ -1734,6 +1791,7 @@ function createGuest() {
 async function askGuestDelete(id) {
   const v = S.data?.vms.find((g) => g.id === id);
   if (!v) return;
+  if (v.running) return dialog(`<h3>Shut ${esc(v.name)} down first</h3><p>A running guest can't be deleted. Shut it down from its Overview, then delete it.</p>${closeRow}`);
   const clones = (S.data?.vms ?? []).filter((x) => x.id !== v.id && (x.refs ?? []).some((r) => r.includes(`base-${v.id}-disk-`))).map((x) => x.name);
   if (clones.length) {
     return dialog(`<h3>${esc(v.name)} can't be deleted yet</h3><p>${esc(clones.join(", "))} ${clones.length === 1 ? "was" : "were"} made from this template and still ${clones.length === 1 ? "needs" : "need"} it. Delete ${clones.length === 1 ? "that clone" : "those clones"} first.</p>${closeRow}`);
@@ -1807,11 +1865,11 @@ async function askProtect() {
     }
     S.protectOn = server;
     const best = [...plan.backupStorages].sort((a, b) => Number(b.shared) - Number(a.shared))[0];
-    const on = (x) => `<option value="${esc(x.name)}" ${x.name === best.name ? "selected" : ""}>${esc(x.name)}, ${x.freeGb} GB free</option>`;
+    const on = (x) => poolOption(server, x, x.name === best.name);
     dialog(`<h3>Protect everything</h3><p>Every guest gets backed up each night, including new ones you add later. Proxmox runs this itself, so BossMox doesn't need to be running.</p>
       <p class="loginerr" id="formerr" hidden></p>
-      <label class="field restartname"><span>Save to</span><select id="prstore">${plan.backupStorages.map(on).join("")}</select></label>
-      ${best.shared ? "" : `<p class="meta">This is on the node itself, so it won't help if that node's disk dies. A NAS is safer.</p>`}
+      <label class="field restartname"><span>Save to</span><select id="prstore" data-bkwarn="${esc(server)}">${plan.backupStorages.map(on).join("")}</select></label>
+      ${backupWarnLine(server, best.name)}
       <div class="createrow"><label class="field"><span>What time</span><input id="prtime" type="time" value="02:00"></label><label class="field"><span>Nights to keep</span><input id="prkeep" type="number" min="1" max="99" value="7"></label></div>
       <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-protectgo="1">Protect everything</button></div>`);
   } catch (err) {
@@ -1856,7 +1914,7 @@ async function askBackupNow(id) {
     const plan = await signal(`api/reboot-plan?server=${encodeURIComponent(v.node)}`);
     if (!plan.backupStorages.length) return noPlaceFor("Nowhere to save a backup", v.node, "backup");
     dialog(`<h3>Back up ${esc(v.name)} now?</h3><p>${v.running ? `${esc(v.name)} keeps running, though it may feel slower until this finishes.` : `${esc(v.name)} is off, so this is quick.`}</p>
-      <label class="field restartname"><span>Save to</span><select id="bkstore">${plan.backupStorages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select></label>
+      <label class="field restartname"><span>Save to</span><select id="bkstore" data-bkwarn="${esc(v.node)}">${plan.backupStorages.map((s) => poolOption(v.node, s)).join("")}</select></label>${backupWarnLine(v.node, plan.backupStorages[0].name)}
       <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-bkgo="${v.id}">Back up ${esc(v.name)}</button></div>`);
   } catch (err) {
     if (err.message !== "signed out") failDialog("Couldn't prepare the backup", err);
@@ -1874,7 +1932,7 @@ async function askBackupRestore(volid) {
     if (!plan.storages.length) return noPlaceFor("Nowhere to restore to", x.node, x.type === "lxc" ? "rootdir" : "images");
     S.bkPlan = { x, plan };
     dialog(`<h3>Restore ${esc(x.group.name)}?</h3><p>From ${esc(when(x.takenAt))}, on ${esc(x.node)}. A copy sits alongside the original, switched off, and nothing is lost.</p>
-      <label class="field restartname"><span>Put its disks on</span><select id="bkdisk">${plan.storages.map((s) => `<option>${esc(s)}</option>`).join("")}</select></label>
+      <label class="field restartname"><span>Put its disks on</span><select id="bkdisk">${plan.storages.map((s) => poolOption(x.node, s)).join("")}</select></label>
       <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button>${x.group.exists ? `<button class="btn" data-bkreplace="1">Replace the original</button>` : ""}<button class="btn primary" data-bkcopy="1">${x.group.exists ? "Restore as a copy" : "Restore"}</button></div>`);
   } catch (err) {
     if (err.message !== "signed out") failDialog("Couldn't prepare the restore", err);
@@ -1925,7 +1983,7 @@ async function askSchedule() {
       <label class="field restartname"><span>What to back up</span><select id="jobwhat"><option value="all">Everything</option>${S.data.vms.map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("")}</select></label>
       <label class="field restartname"><span>Which days</span><select id="jobday">${days.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select></label>
       <label class="field restartname"><span>What time, on the node's clock</span><input id="jobtime" type="time" value="02:00"></label>
-      <label class="field restartname"><span>Save to</span><select id="jobstore">${plan.backupStorages.map((s) => `<option value="${esc(s.name)}">${esc(s.name)}, ${s.freeGb} GB free</option>`).join("")}</select></label>
+      <label class="field restartname"><span>Save to</span><select id="jobstore" data-bkwarn="${esc(server)}">${plan.backupStorages.map((s) => poolOption(server, s)).join("")}</select></label>${backupWarnLine(server, plan.backupStorages[0].name)}
       <label class="field restartname"><span>How many backups to keep of each</span><input id="jobkeep" type="number" min="1" max="99" value="3"></label>
       <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-jobsave="${esc(server)}">Add schedule</button></div>`);
   } catch (err) {
@@ -1987,8 +2045,9 @@ function askPower(power, id = S.sel) {
 async function checkSnapshots(v) {
   if (S.snapSupport?.[v.id] !== undefined) return;
   try {
-    const { supported } = await signal(`api/snapshot-support?server=${encodeURIComponent(v.node)}&guest=${v.id}&type=${v.type}`);
+    const { supported, fix } = await signal(`api/snapshot-support?server=${encodeURIComponent(v.node)}&guest=${v.id}&type=${v.type}`);
     S.snapSupport = { ...S.snapSupport, [v.id]: supported };
+    S.snapFix = { ...S.snapFix, [v.id]: fix ?? [] };
     if (S.tab === "snapshots") renderDetail();
   } catch { /* Proxmox still refuses in plain view if this check couldn't run. */ }
 }
@@ -2591,6 +2650,21 @@ document.addEventListener("click", (e) => {
       await afterStorage();
     });
   }
+  if (d.snapfix) {
+    const v = S.data?.vms.find((g) => g.id === +d.snapfix);
+    if (!v) return;
+    return confirmAction(`Make snapshots work for ${v.name}?`, `BossMox converts ${v.name}'s disks to a format that can be snapshotted, on the same storage. It takes about a minute for every few GB, and ${v.name} stays shut down until it's done. Make a backup first if it holds anything you can't lose.`, "Convert its disks", () => runAction("snapshot-fix", v.node, `Converting ${v.name}'s disks`, { ...guestBody(v), confirm: String(v.id) }, async () => {
+      delete S.snapSupport[v.id];
+      await refresh();
+      await checkSnapshots(v);
+      renderDetail();
+    }));
+  }
+  if (d.agenton) {
+    const v = S.data?.vms.find((g) => g.id === +d.agenton);
+    if (!v) return;
+    return confirmAction(`Turn on the guest agent setting for ${v.name}?`, `It takes effect after ${v.name} is shut down and started again. The agent itself still has to be installed inside it.`, "Turn it on", () => runAction("guest-settings", v.node, `Saving ${v.name}`, { ...guestBody(v), changes: { agent: true } }, refresh));
+  }
   if (d.poolopen) {
     S.openPools ??= new Set();
     const key = `${S.storeNode}/${d.poolopen}`;
@@ -2757,6 +2831,10 @@ document.addEventListener("input", (e) => {
   }
 });
 document.addEventListener("change", (e) => {
+  if (e.target.dataset?.bkwarn) {
+    const line = e.target.closest("#dialog")?.querySelector(".warnline");
+    if (line) line.textContent = backupWarning(e.target.dataset.bkwarn, e.target.value);
+  }
   if (e.target.dataset?.setupdisk && S.setup) {
     if (e.target.checked) S.setup.devices.add(e.target.dataset.setupdisk);
     else S.setup.devices.delete(e.target.dataset.setupdisk);
