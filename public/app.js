@@ -569,7 +569,7 @@ const TAB = {
   hardware: (v) => {
     const lock = v.template ? "" : "1";
     const disk = (d) => `<div class="snap"><div>${d.boot ? "Boot disk" : d.mount ? esc(d.mount) : "Disk"}<small>${d.sizeGb} GB on ${esc(d.storage)}, ${esc(d.slot)}</small></div>${lock ? `<div class="actions"><button class="btn" data-diskgrow="${esc(d.slot)}">Grow</button>${d.boot ? "" : `<button class="btn" data-diskremove="${esc(d.slot)}">Remove</button>`}</div>` : ""}</div>`;
-    const nic = (n) => `<div class="snap"><div>${esc(n.bridge || "Not connected")}${n.vlan ? `, VLAN ${esc(n.vlan)}` : ""}<small>${esc(n.model)}, ${esc(n.mac)}</small></div>${lock && v.nics.length > 1 ? `<button class="btn" data-nicremove="${esc(n.slot)}">Remove</button>` : ""}</div>`;
+    const nic = (n) => `<div class="snap"><div>${esc(n.bridge || "Not connected")}${n.vlan ? `, VLAN ${esc(n.vlan)}` : ""}<small>${v.type === "lxc" ? `${esc(addrWords(n))}, ` : ""}${esc(n.model)}, ${esc(n.mac)}</small></div><div class="actions">${lock && v.type === "lxc" ? `<button class="btn" data-addrchange="${esc(n.slot)}">Change address</button>` : ""}${lock && v.nics.length > 1 ? `<button class="btn" data-nicremove="${esc(n.slot)}">Remove</button>` : ""}</div></div>`;
     return `${v.configLoaded ? "" : `<p class="meta">Proxmox didn't return this guest's settings.</p>`}
       <div class="hwhead"><h3>Disks</h3>${lock ? `<button class="btn" data-diskadd="1">Add a disk</button>` : ""}</div>${v.disks.map(disk).join("") || `<p class="empty">No disks.</p>`}
       ${v.type === "qemu" && !v.discLocked ? `<div class="hwhead"><h3>Disc drive</h3><button class="btn" data-gdisc="1">Change disc</button></div><div class="snap"><div>${v.disc ? esc(v.disc.split("/").pop()) : "Empty"}</div></div>` : ""}
@@ -1949,6 +1949,34 @@ function addNic() {
   const v = selected();
   runAction("nic-add", v.node, `Adding a network card to ${v.name}`, { ...guestBody(v), bridge: $("#nicbridge").value, vlan: $("#nicvlan").value.trim() }, after);
 }
+/* A container's address (ADR 0024). A VM's address is set inside the VM, so only containers get this. */
+const addrWords = (n) => (n.ip === "dhcp" ? "automatic address" : n.ip ? `${n.ip}${n.gw ? ` via ${n.gw}` : ""}` : "no IPv4 address");
+function askAddress(slot) {
+  const v = selected();
+  const n = v.nics.find((x) => x.slot === slot);
+  if (!n) return;
+  const fixed = n.ip && n.ip !== "dhcp";
+  dialog(`<h3>Change ${esc(v.name)}'s address</h3>
+    <p>On ${esc(n.bridge)}${n.vlan ? `, VLAN ${esc(n.vlan)}` : ""}. Now: ${esc(addrWords(n))}.</p><p class="loginerr" id="formerr" hidden></p>
+    <label class="field"><span>Address</span><select id="addrmode"><option value="fixed" ${fixed ? "selected" : ""}>Fixed: stays the same</option><option value="dhcp" ${fixed ? "" : "selected"}>Automatic: from your router</option></select></label>
+    <div id="addrfixed" ${fixed ? "" : "hidden"}><div class="createrow">
+      <label class="field"><span>Address and network size</span><input id="addrip" placeholder="192.168.1.30/24" value="${fixed ? esc(n.ip) : ""}" autocomplete="off" spellcheck="false"></label>
+      <label class="field"><span>Gateway (your router)</span><input id="addrgw" placeholder="192.168.1.1" value="${esc(n.gw ?? "")}" autocomplete="off" spellcheck="false"></label></div>
+      <p class="meta">Make sure nothing else on the network uses that address.</p></div>
+    ${v.running ? `<p class="meta">${esc(v.name)} is running, so the change happens right away. Anything connected to its old address, like an SSH session, is cut off.${fixed ? "" : " It also keeps its old automatic address until it restarts, so restart it afterward."}</p>` : ""}
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-addrgo="${esc(slot)}">Change address</button></div>`);
+}
+function changeAddress(slot) {
+  const v = selected();
+  const mode = $("#addrmode").value;
+  const address = $("#addrip").value.trim();
+  const gateway = $("#addrgw").value.trim();
+  if (mode === "fixed" && !/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(address)) return formError("Type the address with its network size, like 192.168.1.30/24.");
+  runAction("guest-address", v.node, `Changing ${v.name}'s address`, { ...guestBody(v), nic: slot, confirm: slot, mode, address, gateway }, after);
+}
+document.addEventListener("change", (e) => {
+  if (e.target.id === "addrmode") $("#addrfixed").hidden = e.target.value !== "fixed";
+});
 function askRemoveNic(slot) {
   const v = selected();
   const n = v.nics.find((x) => x.slot === slot);
@@ -3191,6 +3219,8 @@ document.addEventListener("click", (e) => {
   if (d.nicadd) return askAddNic();
   if (d.nicaddgo) return addNic();
   if (d.nicremove) return askRemoveNic(d.nicremove);
+  if (d.addrchange) return askAddress(d.addrchange);
+  if (d.addrgo) return changeAddress(d.addrgo);
   if (d.clone) return askClone(+d.clone);
   if (d.clonego) return cloneGuest(+d.clonego);
   if (d.maketemplate) return askTemplate(+d.maketemplate);

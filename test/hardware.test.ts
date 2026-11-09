@@ -21,7 +21,7 @@ test("a container's disks show where they appear", () => {
 
 test("network cards are read for both kinds", () => {
   assert.deepEqual(readNics("qemu", vm)[0], { slot: "net0", model: "virtio", mac: "BC:24:11:00:00:01", bridge: "vmbr0", vlan: "30" });
-  assert.deepEqual(readNics("lxc", ct)[0], { slot: "net0", model: "eth0", mac: "BC:24:11:00:00:02", bridge: "vmbr0", vlan: "" });
+  assert.deepEqual(readNics("lxc", ct)[0], { slot: "net0", model: "eth0", mac: "BC:24:11:00:00:02", bridge: "vmbr0", vlan: "", ip: "dhcp", gw: "" });
 });
 
 test("the boot disk can't be removed, whatever it's called", () => {
@@ -93,4 +93,33 @@ test("raw disks on a folder are the ones to convert for snapshots, and only when
 test("a storage named only with dots is refused (pre-public review 2026-11-09)", () => {
   for (const storage of [".", ".."]) assert.throws(() => addDiskForm("qemu", { scsi0: "x" }, { storage, sizeGb: 2, mount: "" }), /Pick a storage/);
   assert.equal(addDiskForm("qemu", { scsi0: "x" }, { storage: "my.pool", sizeGb: 2, mount: "" }).scsi1, "my.pool:2");
+});
+
+test("a container's address: fixed or automatic, keeping everything else on the card", async () => {
+  const { addressForm } = await import("../src/hardware.js");
+  const card = "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AA:BB:CC,ip=dhcp,ip6=auto,tag=30,firewall=1";
+  const c = { net0: card };
+  assert.deepEqual(readNics("lxc", c)[0]!.ip, "dhcp");
+  assert.equal(readNics("qemu", { net0: "virtio=BC:24:11:AA:BB:CC,bridge=vmbr0" })[0]!.ip, undefined, "a VM's address isn't in its settings");
+  const fixed = addressForm(c, "net0", { mode: "fixed", address: "10.0.30.70/24", gateway: "10.0.30.250" }).net0!;
+  assert.equal(fixed, "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AA:BB:CC,ip6=auto,tag=30,firewall=1,ip=10.0.30.70/24,gw=10.0.30.250");
+  const back = addressForm({ net0: fixed }, "net0", { mode: "dhcp", address: "", gateway: "" }).net0!;
+  assert.equal(back, "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:AA:BB:CC,ip6=auto,tag=30,firewall=1,ip=dhcp", "the old gateway goes with the fixed address");
+  assert.match(addressForm(c, "net0", { mode: "fixed", address: "10.0.30.70/24", gateway: "" }).net0!, /ip=10\.0\.30\.70\/24$/, "a network with no router is allowed");
+});
+
+test("a container's address: typos are refused with the reason", async () => {
+  const { addressForm, sameNetwork } = await import("../src/hardware.js");
+  const c = { net0: "name=eth0,bridge=vmbr0,ip=dhcp" };
+  const bad = (v: { mode: string; address: string; gateway: string }, why: RegExp, slot = "net0") => assert.throws(() => addressForm(c, slot, v), why);
+  bad({ mode: "fixed", address: "10.0.30.70", gateway: "" }, /network size/);
+  bad({ mode: "fixed", address: "10.0.30.700/24", gateway: "" }, /network size/);
+  bad({ mode: "fixed", address: "10.0.30.70/33", gateway: "" }, /network size/);
+  bad({ mode: "fixed", address: "10.0.30.70/24", gateway: "192.168.1.1" }, /isn't on the same network/);
+  bad({ mode: "fixed", address: "10.0.30.70/24", gateway: "10.0.30.70" }, /own address/);
+  bad({ mode: "fixed", address: "10.0.30.70/24", gateway: "10.0.30" }, /four numbers/);
+  bad({ mode: "maybe", address: "", gateway: "" }, /automatic or fixed/);
+  bad({ mode: "dhcp", address: "", gateway: "" }, /doesn't exist/, "net1");
+  assert.equal(sameNetwork("10.0.31.5", 23, "10.0.30.1"), true, "a /23 spans two of the third numbers");
+  assert.equal(sameNetwork("10.0.31.5", 24, "10.0.30.1"), false);
 });

@@ -13,7 +13,8 @@ import { containerForm, CreateError, discDownload, discForm, FILE_STORAGE, insta
 import { changesForm, SettingsError, waitingChanges } from "./guest-settings.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
 import { assertCanWipe, buildStorageList, setupPlan, deviceIsValid, diskStorageForm, hostIsValid, networkForm, readHardDisks, StorageError, storageBlockers, usesForm, type RawDisk, type RawStorageConfig } from "./storage.js";
-import { snapshotFix, addDiskForm, addNicForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
+import { snapshotFix, addDiskForm, addNicForm, addressForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
+import { networkInterfaces } from "node:os";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { applyChannel, ChannelError } from "./update-channel.js";
 import { plainError } from "./plain-errors.js";
@@ -317,6 +318,11 @@ const BIOS_ESC_AFTER_MS = 1500;
 const UPLOAD_NAME = /^[\w.-]{1,200}\.(iso|img)$/i;
 
 /** Turns a hardware rule into a plain 400, and reads the guest's settings the rule needs. */
+/** The IPv4 addresses BossMox answers on from the network. Loopback (127.0.0.1) is left out: every guest has it too. */
+function ownAddresses(): Set<string> {
+  return new Set(Object.values(networkInterfaces()).flat().filter((i) => i && i.family === "IPv4" && !i.internal && !i.address.startsWith("127.")).map((i) => i!.address));
+}
+const part = (value: string, key: string) => value.split(",").find((p) => p.startsWith(`${key}=`))?.slice(key.length + 1) ?? "";
 async function withConfig<T>(path: string, who: Identity, run: (config: RawConfig) => T): Promise<T> {
   const config = await pve.get<RawConfig>(`${path}/config`, who.ticket);
   try {
@@ -832,6 +838,23 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
   "nic-add": async (name, who, body) => {
     const { path } = guestPath(name, body);
     const form = await withConfig(path, who, (c) => addNicForm(kindOf(body), c, { bridge: text(body.bridge, 32), vlan: text(body.vlan, 4) }));
+    await pve.put<null>(`${path}/config`, who, form);
+    return null;
+  },
+  "guest-address": async (name, who, body) => {
+    const { path } = guestPath(name, body);
+    if (kindOf(body) !== "lxc") throw new AuthError(400, "Only a container's address can be set from here. A VM sets its own, inside the VM.");
+    const slot = text(body.nic, 8);
+    if (body.confirm !== slot) throw new AuthError(400, "That wasn't confirmed.");
+    const form = await withConfig(path, who, (c) => {
+      // Moving the container BossMox runs in would cut off everyone using it, this page included.
+      const mine = ownAddresses();
+      const configured = part(String(c[slot] ?? ""), "ip").split("/")[0] ?? "";
+      if (mine.has(configured)) throw new HardwareError("This container is BossMox itself. Changing its address here would cut you off, so it isn't offered.");
+      return addressForm(c, slot, { mode: text(body.mode, 8), address: text(body.address, 20), gateway: text(body.gateway, 16) });
+    });
+    const live = await pve.get<{ inet?: string }[]>(`${path}/interfaces`, who.ticket).catch(() => []);
+    if (live.some((i) => ownAddresses().has(String(i.inet ?? "").split("/")[0] ?? ""))) throw new AuthError(400, "This container is BossMox itself. Changing its address here would cut you off, so it isn't offered.");
     await pve.put<null>(`${path}/config`, who, form);
     return null;
   },

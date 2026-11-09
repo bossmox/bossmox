@@ -74,6 +74,8 @@ export function readNics(type: "qemu" | "lxc", config: Config) {
         mac: type === "qemu" ? first.split("=")[1] ?? "" : part(value, "hwaddr"),
         bridge: part(value, "bridge"),
         vlan: part(value, "tag"),
+        // A container's address is in its own settings; a VM's is inside the VM, where Proxmox can't set it.
+        ...(type === "lxc" ? { ip: part(value, "ip"), gw: part(value, "gw") } : {}),
       };
     })
     .sort((a, b) => a.slot.localeCompare(b.slot, undefined, { numeric: true }));
@@ -120,6 +122,46 @@ export function addNicForm(type: "qemu" | "lxc", config: Config, v: { bridge: st
   if (type === "lxc") return { [slot]: `name=eth${slot.slice(3)},bridge=${v.bridge},ip=dhcp${tag}` };
   const model = String(config.net0 ?? "").split("=")[0] || "virtio";
   return { [slot]: `${model},bridge=${v.bridge}${tag}` };
+}
+
+const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+const ipv4 = (s: string) => {
+  const m = IPV4.exec(s);
+  return m && m.slice(1).every((n) => Number(n) <= 255) ? m.slice(1).reduce((a, n) => a * 256 + Number(n), 0) : null;
+};
+/** True when the gateway sits on the address's own network, the usual mistake being a typo in either. */
+export function sameNetwork(address: string, prefix: number, gateway: string) {
+  const a = ipv4(address), g = ipv4(gateway);
+  if (a === null || g === null) return false;
+  const size = 2 ** (32 - prefix);
+  return Math.floor(a / size) === Math.floor(g / size);
+}
+
+/**
+ * A container card's new IPv4 address (ADR 0024): automatic, or fixed with a gateway. Everything else on the card
+ * (its name, MAC, bridge, VLAN, IPv6, firewall, limits) stays as it was.
+ */
+export function addressForm(config: Config, slot: string, v: { mode: string; address: string; gateway: string }): Record<string, string> {
+  if (!NIC.test(slot) || !Object.hasOwn(config, slot)) throw new HardwareError("That network card doesn't exist.");
+  let ip: string, gw: string;
+  if (v.mode === "dhcp") {
+    ip = "dhcp";
+    gw = "";
+  } else if (v.mode === "fixed") {
+    const [addr = "", bits = ""] = v.address.trim().split("/");
+    const prefix = Number(bits);
+    if (ipv4(addr) === null || !/^\d{1,2}$/.test(bits) || prefix < 8 || prefix > 32) throw new HardwareError("Type the address with its network size, like 192.168.1.30/24.");
+    const gateway = v.gateway.trim();
+    if (gateway) {
+      if (ipv4(gateway) === null) throw new HardwareError("The gateway is four numbers, like 192.168.1.1.");
+      if (gateway === addr) throw new HardwareError("The gateway can't be the container's own address.");
+      if (!sameNetwork(addr, prefix, gateway)) throw new HardwareError(`${gateway} isn't on the same network as ${addr}/${prefix}. Check both.`);
+    }
+    ip = `${addr}/${prefix}`;
+    gw = gateway;
+  } else throw new HardwareError("Pick automatic or fixed.");
+  const parts = String(config[slot]).split(",").filter((p) => !p.startsWith("ip=") && !p.startsWith("gw="));
+  return { [slot]: [...parts, `ip=${ip}`, ...(gw ? [`gw=${gw}`] : [])].join(",") };
 }
 
 export function removeNicForm(config: Config, slot: string): Record<string, string> {
