@@ -7,6 +7,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Node's type definitions follow the oldest Node BossMox supports (22, see "engines" in package.json), so
+      # code can't start relying on something newer Nodes have. Patch and minor updates within 22 still come.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
