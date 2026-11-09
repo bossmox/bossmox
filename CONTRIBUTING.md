@@ -12,6 +12,13 @@ Thanks for wanting to help. Bug reports, ideas and pull requests are all welcome
 - Anything that can erase or change something needs a confirmation that names the thing, and BossMox checks for itself rather than trusting Proxmox to refuse.
 - Bigger decisions get a short record in `docs/adr/`.
 
+## How changes come in
+
+- `main` is always releasable. Work happens on a branch in your fork, and comes in as a pull request to `main`.
+- The tests run on every pull request and have to pass. Keep each pull request to one change.
+- Commit messages say what changed and why: a short first line in the imperative ("Show the version on the console"), then a few lines of why if it isn't obvious.
+- Releases are tagged on `main` (`v0.1.0-preview`, `v0.2.0`...) and built with `deploy/make-release.sh`.
+
 ## License of your contribution
 
 BossMox is licensed under the GNU Affero General Public License, version 3 (see `LICENSE`).

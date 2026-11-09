@@ -1,6 +1,6 @@
 name: An idea
 description: Something BossMox should do, or do differently.
-labels: [idea]
+labels: [enhancement]
 body:
   - type: textarea
     id: what

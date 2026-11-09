@@ -3,3 +3,11 @@ dist/
 .env
 .secrets/
 out/
+
+# Editors, operating systems and logs
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+*.log

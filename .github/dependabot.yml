@@ -1,0 +1,13 @@
+# Dependabot proposes updates as pull requests; nothing is merged automatically. Core libraries (ws, the vendored
+# console and terminal code) aren't merged until they've been tested on a real Proxmox cluster.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
