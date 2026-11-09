@@ -260,7 +260,7 @@ summary{cursor:pointer;font-weight:650}
 .stdetails{font-size:12px;opacity:.8}
 .sthd{font-size:15px;font-weight:650;margin:18px 0 0}
 .stnote{display:block;color:var(--muted);padding-bottom:6px}
-@media (max-width:760px){.stdisk,.stpool .sthead{flex-wrap:wrap}}
+@media (max-width:760px){.stdisk,.stpool .sthead,.sttop{flex-wrap:wrap}.sttop .stnode{max-width:none;flex:1 1 100%}}
 .uses{border:0;padding:0;margin:0 0 12px;display:grid;gap:6px}
 .uses legend{font-weight:600;font-size:13.5px;margin-bottom:6px;padding:0}
 .uses .createcheck{margin:0}
