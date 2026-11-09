@@ -16,7 +16,10 @@ const LOCKS: Record<string, string> = {
 
 const RULES: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/still in use by linked clone/i, () => "A clone made from this template still needs it. Delete that clone first, or make it a full copy."],
-  [/\b(?:VM|CT) is locked \(([\w-]+)\)/i, (m) => LOCKS[(m[1] ?? "").toLowerCase()] ?? "It's busy with something else. Try again in a minute."],
+  [/\b(?:VM|CT) is locked \(([\w-]+)\)/i, (m) => {
+    const lock = (m[1] ?? "").toLowerCase();
+    return Object.hasOwn(LOCKS, lock) ? (LOCKS[lock] as string) : "It's busy with something else. Try again in a minute.";
+  }],
   [/\bprotected\b/i, () => "It's protected, so Proxmox won't delete it. Turn off its protection first."],
   [/no space left on device|not enough (free )?space|insufficient space|out of (data )?space|thin pool .* (is )?full/i, () => "The storage is full. Free some space, or pick another storage."],
   [/\b(?:VM|CT) (?:\d+ )?is running\b|is running - (?:destroy|unable)/i, () => "It's running. Shut it down first."],

@@ -6,7 +6,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { parseAddress, PinError, PveReply, type Pinned } from "../src/pinned.js";
 import { applySettings, saveSettings, type Saved } from "../src/settings.js";
-import { Wizard, WizardError, type Outside } from "../src/wizard.js";
+import { setupHostAllowed, Wizard, WizardError, type Outside } from "../src/wizard.js";
 import type { RawRepositories } from "../src/server-detail.js";
 
 /** Proxmox's real answer from a lab node with a fresh install's sources. */
@@ -363,4 +363,30 @@ test("only the offered channels are accepted", async () => {
   const l = lab();
   await signedIn(l);
   await assert.rejects(l.wizard.setChannel("test"), status(400));
+});
+
+
+test("junk codes from one machine don't lock out another (security review L1)", () => {
+  const { wizard } = lab();
+  for (let i = 0; i < 10; i++) assert.throws(() => wizard.enterCode("NOPE", "10.0.0.66"), status(401));
+  assert.throws(() => wizard.enterCode(CODE, "10.0.0.66"), status(429));
+  assert.ok(wizard.enterCode(CODE, "10.0.0.5"));
+});
+
+test("an abandoned setup forgets the root password after its hour (security review L5)", async () => {
+  const l = lab();
+  await signedIn(l);
+  l.tick(61 * 60 * 1000);
+  l.wizard.forgetIfExpired();
+  assert.equal((l.wizard as unknown as { password: string }).password, "");
+  assert.equal((l.wizard as unknown as { ticket: string }).ticket, "");
+});
+
+test("setup only answers to an address or a bare machine name, not another site's name (security review L1)", () => {
+  assert.equal(setupHostAllowed("10.0.30.240"), true);
+  assert.equal(setupHostAllowed("10.0.30.240:443"), true);
+  assert.equal(setupHostAllowed("[fd00::5]:443"), true);
+  assert.equal(setupHostAllowed("bossmox"), true);
+  assert.equal(setupHostAllowed("evil.example.com"), false);
+  assert.equal(setupHostAllowed(""), false);
 });

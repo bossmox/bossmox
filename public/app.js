@@ -211,7 +211,8 @@ function drawHealthCheck() {
 async function loadHealthCheck() {
   const run = S.loadRun;
   try {
-    const { checks } = await signal("api/health");
+    const { checks } = await signal(`api/health${S.healthAgain ? "?again=1" : ""}`);
+    S.healthAgain = false;
     if (run !== S.loadRun) return;
     S.healthChecks = checks;
     S.healthError = "";
@@ -2490,7 +2491,7 @@ function forceBios(id) {
     const was = state?.textContent;
     if (state) state.textContent = "Restarting to the boot menu.";
     try {
-      const res = await post("api/action/guest-boot-menu", { server: v.node, ...guestBody(v) });
+      const res = await post("api/action/guest-boot-menu", { server: v.node, ...guestBody(v), confirm: String(v.id) });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error);
     } catch (err) {
@@ -2504,7 +2505,7 @@ async function startToBootMenu(id) {
   const v = S.data.vms.find((g) => g.id === id);
   dialog(`<h3>Starting ${esc(v.name)}</h3><p>BossMox is getting it to the boot menu, then opens the console.</p>`);
   try {
-    const res = await post("api/action/guest-boot-menu", { server: v.node, ...guestBody(v) });
+    const res = await post("api/action/guest-boot-menu", { server: v.node, ...guestBody(v), confirm: String(v.id) });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error);
     closeDialog();
@@ -2714,6 +2715,7 @@ document.addEventListener("click", (e) => {
   }
   if (d.hcagain) {
     S.healthChecks = null;
+    S.healthAgain = true;
     drawHealthCheck();
     return loadHealthCheck();
   }

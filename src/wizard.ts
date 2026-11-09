@@ -8,6 +8,7 @@ import { plainError } from "./plain-errors.js";
 import type { Saved } from "./settings.js";
 
 const MAX_CODE_TRIES = 10;
+const MAX_CODE_TRIES_ALL = 200;
 const CODE_WINDOW_MS = 5 * 60 * 1000;
 const TOKEN_MS = 60 * 60 * 1000;
 const JOIN_WAIT_MS = 4 * 60 * 1000;
@@ -57,6 +58,7 @@ const hashCode = (code: string) => createHash("sha256").update(code.toUpperCase(
 /** Holds a setup in progress. Passwords live here only until it finishes, and never reach a file or a log. */
 export class Wizard {
   private tries = 0;
+  private readonly triesBy = new Map<string, number>();
   private triesFrom = 0;
   private token = "";
   private tokenUntil = 0;
@@ -74,25 +76,33 @@ export class Wizard {
 
   constructor(private readonly hashFile: string, private readonly out: Outside) {}
 
-  enterCode(code: string): string {
+  /**
+   * Wrong codes are counted per address (security review 2026-11-09, L1), so one machine sending junk can't lock
+   * the real admin out. A high ceiling for everyone together still stops a spread-out guessing run.
+   */
+  enterCode(code: string, from = ""): string {
     const t = this.out.now();
     if (t - this.triesFrom > CODE_WINDOW_MS) {
       this.tries = 0;
       this.triesFrom = t;
+      this.triesBy.clear();
     }
-    if (this.tries >= MAX_CODE_TRIES) throw new WizardError(429, "Too many wrong codes. Wait 5 minutes and try again.");
+    const mine = this.triesBy.get(from) ?? 0;
+    if (mine >= MAX_CODE_TRIES || this.tries >= MAX_CODE_TRIES_ALL) throw new WizardError(429, "Too many wrong codes. Wait 5 minutes and try again.");
     this.tries += 1;
+    this.triesBy.set(from, mine + 1);
     if (!existsSync(this.hashFile)) throw new WizardError(400, "No setup code exists on this machine. Run bossmox-reset on its console to make one.");
     const want = Buffer.from(readFileSync(this.hashFile, "utf8").trim(), "hex");
     const got = hashCode(code);
     if (want.length !== got.length || !timingSafeEqual(want, got)) throw new WizardError(401, "That code didn't match. Check the VM's console and try again.");
-    this.tries = 0;
+    this.triesBy.delete(from);
     this.token = randomBytes(32).toString("base64url");
     this.tokenUntil = t + TOKEN_MS;
     return this.token;
   }
 
   allowed(token: string | undefined): boolean {
+    this.forgetIfExpired();
     if (!token || !this.token || this.out.now() > this.tokenUntil) return false;
     const a = Buffer.from(token);
     const b = Buffer.from(this.token);
@@ -136,9 +146,21 @@ export class Wizard {
     this.csrf = login.CSRFPreventionToken ?? "";
     this.user = login.username;
     this.password = password;
-    const nodes = await this.out.call<{ node: string }[]>(to, "GET", "/nodes", this.auth());
-    this.nodeName = nodes[0]?.node ?? "";
+    // On a cluster /nodes lists every node, so the one that answered is the cluster's "local" entry.
+    const status = await this.out.call<{ type?: string; name?: string; local?: number }[]>(to, "GET", "/cluster/status", this.auth()).catch(() => []);
+    const local = status.find((e) => e.type === "node" && e.local === 1)?.name;
+    const nodes = local ? [] : await this.out.call<{ node: string }[]>(to, "GET", "/nodes", this.auth());
+    this.nodeName = local ?? nodes[0]?.node ?? "";
     return this.state();
+  }
+
+  /** An hour after the code, a setup left open drops the root password and ticket (security review L5). */
+  forgetIfExpired() {
+    if (!this.token || this.out.now() <= this.tokenUntil) return;
+    this.token = "";
+    this.password = "";
+    this.ticket = "";
+    this.csrf = "";
   }
 
   private auth() {
@@ -325,4 +347,13 @@ export class Wizard {
     rmSync(this.hashFile, { force: true });
     rmSync(this.hashFile.replace(/\.hash$/, ".code"), { force: true });
   }
+}
+
+/**
+ * During setup BossMox is reached by its address, as the installer prints it. A name with dots in it would be some
+ * other site's DNS pointing here, the DNS-rebinding trick (security review L1), so it's refused.
+ */
+export function setupHostAllowed(host = ""): boolean {
+  const name = host.replace(/:\d+$/, "").replace(/^\[(.*)\]$/, "$1");
+  return isIP(name) !== 0 || /^[A-Za-z0-9-]{1,63}$/.test(name);
 }

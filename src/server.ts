@@ -339,6 +339,10 @@ function snapshotName(body: Record<string, unknown>): string {
   return snap;
 }
 
+/** The health check reads a lot of Proxmox, so each person's result is kept briefly (security review L8). */
+const HEALTH_CACHE_MS = 45_000;
+const healthCache = new WeakMap<Session, { at: number; value: Promise<ReturnType<typeof buildHealth>>; running: boolean }>();
+
 /** BossMox's own address comes from DHCP when its VM's network file says so. Null when it isn't running in its VM. */
 function ownAddressFromDhcp(): boolean | null {
   try {
@@ -594,7 +598,8 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
    * reset, so a shut-down VM is started and then reset. UEFI ignores repeats of F2, so it's pressed throughout.
    */
   "guest-boot-menu": async (name, who, body) => {
-    const { path } = guestPath(name, { ...body, type: "qemu" });
+    const { id, path } = guestPath(name, { ...body, type: "qemu" });
+    if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
     const [current, config] = await Promise.all([pve.get<{ status?: string }>(`${path}/status/current`, who.ticket), pve.get<RawConfig>(`${path}/config`, who.ticket)]);
     const uefi = config.bios === "ovmf";
     const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -1164,7 +1169,19 @@ const handler: http.RequestListener = async (req, res) => {
           });
           return json(res, 200, { list: buildStorageList(config, usage) });
         }
-        if (route === "/api/health") return json(res, 200, { checks: await loadHealth(session) });
+        if (route === "/api/health") {
+          const hit = healthCache.get(session);
+          const fresh = params.get("again") !== "1" && hit && Date.now() - hit.at <= HEALTH_CACHE_MS;
+          if (!fresh && !hit?.running) {
+            const value = loadHealth(session);
+            healthCache.set(session, { at: Date.now(), value, running: true });
+            value.finally(() => {
+              const now = healthCache.get(session);
+              if (now?.value === value) now.running = false;
+            }).catch(() => healthCache.delete(session));
+          }
+          return json(res, 200, { checks: await healthCache.get(session)!.value });
+        }
         if (route === "/api/setup-plan") {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });

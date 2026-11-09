@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { sameOrigin } from "./config.js";
 import { call, probe } from "./pinned.js";
 import { saveSettings, settingsPath } from "./settings.js";
-import { Wizard, WizardError } from "./wizard.js";
+import { setupHostAllowed, Wizard, WizardError } from "./wizard.js";
 
 /**
  * What runs before BossMox knows its cluster. It serves the wizard and nothing else, so nothing that needs a
@@ -94,13 +94,14 @@ function cookie(req: http.IncomingMessage): string | undefined {
 }
 
 async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, route: string) {
+  if (!setupHostAllowed(req.headers.host)) return json(res, 403, { error: "Open setup by BossMox's address, as the installer showed it." });
   const origin = req.headers.origin;
   if (req.headers["x-bossmox"] !== "1" || (origin && !sameOrigin(origin, req.headers.host, true))) {
     return json(res, 403, { error: "This request didn't come from BossMox." });
   }
   const body = await readJson(req);
   if (route === "/setup/code") {
-    const token = wizard.enterCode(text(body.code, 32));
+    const token = wizard.enterCode(text(body.code, 32), req.socket.remoteAddress ?? "");
     log(`code accepted from ${req.socket.remoteAddress}`);
     return json(res, 200, { ok: true }, { "Set-Cookie": `${COOKIE}=${token}; HttpOnly; SameSite=Strict; Secure; Path=/; Max-Age=3600` });
   }
