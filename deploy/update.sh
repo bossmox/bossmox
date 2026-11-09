@@ -11,13 +11,16 @@ TLS_NAME=${5:-}
 
 npm test >/dev/null
 TMPFILE=$(mktemp -d)
+trap 'rm -rf "$TMPFILE"' EXIT
 tar -czf "$TMPFILE/bossmox.tgz" dist/src public deploy package.json node_modules/ws
-scp -q "$TMPFILE/bossmox.tgz" deploy/install-in-lxc.sh "$HOST:/tmp/"
-rm -rf "$TMPFILE"
-ssh -o BatchMode=yes "$HOST" "pct push $CT /tmp/bossmox.tgz /tmp/bossmox.tgz \
-  && pct push $CT /etc/pve/pve-root-ca.pem /tmp/pve-root-ca.pem \
-  && pct push $CT /tmp/install-in-lxc.sh /tmp/install-in-lxc.sh \
-  && rm /tmp/bossmox.tgz /tmp/install-in-lxc.sh \
-  && pct exec $CT -- bash /tmp/install-in-lxc.sh '$ADDRESS' '$PVE_URL' '$TLS_NAME' \
-  && pct exec $CT -- rm /tmp/install-in-lxc.sh \
-  && pct exec $CT -- systemctl is-active bossmox"
+# Private folders on the node and in the container, which only root can reach. A shared /tmp could let the
+# container's bossmox account swap a file between it arriving and root running it (pre-public review 2026-11-09).
+REMOTE=$(ssh -o BatchMode=yes "$HOST" 'mktemp -d /root/bossmox-stage.XXXXXX')
+scp -q "$TMPFILE/bossmox.tgz" deploy/install-in-lxc.sh "$HOST:$REMOTE/"
+ssh -o BatchMode=yes "$HOST" "STAGE=\$(pct exec $CT -- mktemp -d /root/bossmox-stage.XXXXXX) \
+  && pct push $CT $REMOTE/bossmox.tgz \$STAGE/bossmox.tgz \
+  && pct push $CT /etc/pve/pve-root-ca.pem \$STAGE/pve-root-ca.pem \
+  && pct push $CT $REMOTE/install-in-lxc.sh \$STAGE/install-in-lxc.sh \
+  && rm -rf $REMOTE \
+  && pct exec $CT -- bash \$STAGE/install-in-lxc.sh '$ADDRESS' '$PVE_URL' '$TLS_NAME'; R=\$?; \
+  pct exec $CT -- rm -rf \$STAGE; [ \$R = 0 ] && pct exec $CT -- systemctl is-active bossmox"

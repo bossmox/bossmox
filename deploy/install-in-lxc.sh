@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Run inside the container. Expects /tmp/bossmox.tgz and /tmp/pve-root-ca.pem.
+# Run inside the container. Expects bossmox.tgz and pve-root-ca.pem next to this script, in a folder only root
+# can write to (update.sh makes one).
 # Usage: install-in-lxc.sh <address people use> <proxmox url> [certificate name]
 set -euo pipefail
 
+HERE=$(cd "$(dirname -- "$0")" && pwd)
 PUBLIC_ADDRESS=$1
 PVE_URL=$2
 PVE_TLS_NAME=${3:-}
@@ -20,21 +22,23 @@ apt-get update -qq
 apt-get install -y -qq curl xz-utils ca-certificates openssl unattended-upgrades >/dev/null
 
 if [ "$(/opt/node/bin/node -v 2>/dev/null)" != "v$NODE_VERSION" ]; then
-  cd /tmp
+  NODE_DL=$(mktemp -d)
+  cd "$NODE_DL"
   FILE="node-v$NODE_VERSION-linux-x64.tar.xz"
   curl -fsSLO "https://nodejs.org/dist/v$NODE_VERSION/$FILE"
   curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt" | grep " $FILE\$" | sha256sum -c - >/dev/null
   rm -rf /opt/node
   mkdir -p /opt/node
   tar -xJf "$FILE" -C /opt/node --strip-components=1
-  rm -f "$FILE"
+  cd /
+  rm -rf "$NODE_DL"
 fi
 
 id bossmox >/dev/null 2>&1 || useradd --system --home-dir /opt/bossmox --shell /usr/sbin/nologin bossmox
 mkdir -p /opt/bossmox /etc/bossmox
-tar --no-same-owner -xzf /tmp/bossmox.tgz -C /opt/bossmox
+tar --no-same-owner -xzf "$HERE/bossmox.tgz" -C /opt/bossmox
 chown -R root:root /opt/bossmox
-install -m 644 /tmp/pve-root-ca.pem /etc/bossmox/pve-root-ca.pem
+install -m 644 "$HERE/pve-root-ca.pem" /etc/bossmox/pve-root-ca.pem
 
 if [ ! -f /etc/bossmox/tls.key ]; then
   SAN=""
@@ -73,4 +77,4 @@ install -m 644 /opt/bossmox/deploy/bossmox.service /etc/systemd/system/bossmox.s
 systemctl daemon-reload
 systemctl enable --now bossmox >/dev/null 2>&1
 systemctl restart bossmox
-rm -f /tmp/bossmox.tgz /tmp/pve-root-ca.pem
+rm -f "$HERE/bossmox.tgz" "$HERE/pve-root-ca.pem"

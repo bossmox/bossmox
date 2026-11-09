@@ -8,7 +8,13 @@
 set -euo pipefail
 
 LABEL=${1-preview}
+# A clean build, so nothing compiled from a deleted source file can ship (pre-public review 2026-11-09).
+rm -rf dist
 npm test >/dev/null
+# The WebSocket library is packaged from node_modules, so it has to be exactly the version the lockfile pins.
+WANT=$(node -p 'require("./package-lock.json").packages["node_modules/ws"].version')
+HAVE=$(node -p 'require("./node_modules/ws/package.json").version')
+[ "$WANT" = "$HAVE" ] || { echo "node_modules/ws is $HAVE but the lockfile says $WANT. Run npm ci first." >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "Commit first, so the release matches a commit." >&2; exit 1; }
 BASE=$(node -p 'require("./package.json").version')
 COMMIT=$(git rev-parse --short HEAD)

@@ -16,7 +16,12 @@
 #   --yes             Don't ask before creating the VM.
 set -euo pipefail
 
-HERE=$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)
+# Where this script sits, only when it was run as a file. Run as a one-liner (bash -c "$(curl ...)") there's no
+# file, so HERE stays empty and the package is always downloaded: a bossmox.tgz that happens to be in the current
+# folder is never used (pre-public review 2026-11-09). BASH_SOURCE, not $0: with options, bash -c sets $0 to "--".
+SCRIPT=${BASH_SOURCE[0]:-}
+HERE=""
+if [ -n "$SCRIPT" ] && [ -f "$SCRIPT" ]; then HERE=$(cd "$(dirname -- "$SCRIPT")" && pwd); fi
 ALPINE=https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/cloud
 VMID=""
 STORAGE=""
@@ -54,7 +59,7 @@ command -v qm >/dev/null && command -v pvesm >/dev/null || die "this isn't a Pro
 RELEASE_URL=${BOSSMOX_RELEASE_URL:-https://github.com/bossmox/bossmox/releases/latest/download}
 PKG=""
 trap '[ -z "$PKG" ] || rm -rf "$PKG"' EXIT
-if [ ! -f "$HERE/bossmox.tgz" ]; then
+if [ -z "$HERE" ] || [ ! -f "$HERE/bossmox.tgz" ]; then
   echo "Downloading BossMox."
   PKG=$(mktemp -d /var/tmp/bossmox-pkg.XXXXXX)
   curl -fsSL -o "$PKG/bossmox.tgz" "$RELEASE_URL/bossmox.tgz" && curl -fsSL -o "$PKG/bossmox.tgz.sha256" "$RELEASE_URL/bossmox.tgz.sha256" \
