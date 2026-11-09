@@ -574,7 +574,7 @@ function poolBlock(p) {
   const open = S.openPools?.has(`${S.storeNode}/${p.id}`);
   return `<div class="stpool ${p.overGivenGb ? "warnpool" : ""}">
     <div class="sthead"><div><b>${esc(p.id)}</b> <span class="inl">${esc(p.title)}</span></div>
-      ${listed ? `<div class="actions"><button class="btn" data-stedit="${esc(p.id)}">Change use</button><button class="btn" data-stremove="${esc(p.id)}">Remove</button></div>` : ""}</div>
+      ${listed ? `<div class="actions"><button class="btn" data-stedit="${esc(p.id)}">Change use</button>${p.shared || !p.disks.length ? `<button class="btn" data-stremove="${esc(p.id)}">Remove</button>` : `<button class="btn" data-pooldel="${esc(p.id)}">Delete</button>`}</div>` : ""}</div>
     ${p.active ? `<small>${sizeWords(p.usedGb)} used of ${sizeWords(p.totalGb)}, ${sizeWords(p.freeGb)} free</small><div class="meter"><i style="width:${pct}%"></i></div>` : `<p class="loginerr">This node can't reach it right now.</p>`}
     ${using.length ? `<small>Using it: ${esc(using.join(", "))}</small>` : ""}
     <small>Holds ${esc(holds.join(", ").toLowerCase().replace(/\bvm\b/g, "VM") || "nothing yet")}.</small>
@@ -597,6 +597,74 @@ function poolItemsList(p) {
     ${p.otherGb ? `<p class="meta">${esc(p.otherLabel)} take ${sizeWords(p.otherGb)}. Proxmox only lists what it keeps track of, so those can't be shown here.</p>` : ""}
     ${holdsDiscs ? `<div class="row-end"><button class="btn" data-itemupload="${esc(p.id)}">Upload an installer disc</button></div>` : ""}</div>`;
 }
+/* Guided Add storage (ADR 0015): plain questions, BossMox picks the type, the server says what will happen. */
+const PURPOSES = [
+  ["vms", "VMs and containers", "Their disks, with snapshots."],
+  ["files", "Backups and installer discs", "Backups, ISOs and container templates."],
+  ["both", "Both", "One drive for everything. Fine to start with; backups are safer on a different drive from the guests."],
+];
+const POOL_NAMES = { vms: "vmpool", files: "backups", both: "storage" };
+function askSetup() {
+  S.setup = { where: "", devices: new Set(), purpose: "vms", name: POOL_NAMES.vms, named: false };
+  drawSetup();
+}
+function drawSetup(problem = "") {
+  const st = S.setup;
+  const node = S.storeNode;
+  const drives = (S.diskData?.[node] ?? []).filter((d) => d.free || d.canWipe);
+  const choice = (key, value, title, line, on, disabled = false) => `<button class="choice ${on ? "on" : ""}" role="radio" aria-checked="${on}" data-setup="${key}" data-setupval="${value}" ${disabled ? "disabled" : ""}><b>${esc(title)}</b><small>${esc(line)}</small></button>`;
+  const where = `<p class="stq">Where is it?</p><div class="choices" role="radiogroup" aria-label="Where is it">
+    ${choice("where", "drive", "A drive in this computer", drives.length ? `${drives.length} on ${node} can be used.` : `${node} has no drive that can be used. Every drive already holds something.`, st.where === "drive", !drives.length)}
+    ${choice("where", "nas", "A NAS or file server", "Shared folders over the network. Every node can use them.", st.where === "nas")}</div>`;
+  const drivePart = st.where !== "drive" ? "" : `
+    <p class="stq">Which ${drives.length > 1 ? "drives" : "drive"}?</p><fieldset class="uses"><legend class="sr">Drives</legend>${drives.map((d) => `<label class="createcheck"><input type="checkbox" data-setupdisk="${esc(d.path)}" ${st.devices.has(d.path) ? "checked" : ""}> ${esc(d.model || d.path)}, ${sizeWords(d.sizeGb)}${d.model ? ` <small class="inl">${esc(d.path)}</small>` : ""} <small class="inl">${d.free ? "empty" : `has old data (${esc(d.used)})`}</small></label>`).join("")}</fieldset>
+    <p class="stq">What's it for?</p><div class="choices" role="radiogroup" aria-label="What it's for" style="grid-template-columns:1fr">${PURPOSES.map(([k, t, l]) => choice("purpose", k, t, l, st.purpose === k)).join("")}</div>
+    <label class="field restartname"><span>Name</span><input id="setupname" maxlength="31" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(st.name)}"></label>
+    ${(S.diskData?.[node] ?? []).some((d) => d.free) ? `<p class="meta"><button class="linkbtn" data-diskmake="1">Choose the type myself</button></p>` : ""}`;
+  dialog(`<h3>Add storage to ${esc(node)}</h3>${problem ? `<p class="loginerr">${esc(problem)}</p>` : ""}${where}${drivePart}
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button>${st.where === "drive" ? `<button class="btn primary" data-setupnext="1">Continue</button>` : ""}</div>`);
+}
+async function setupSummary() {
+  const st = S.setup;
+  st.name = $("#setupname")?.value.trim() ?? st.name;
+  if (!st.devices.size) return drawSetup("Pick a drive.");
+  const node = S.storeNode;
+  const q = new URLSearchParams({ server: node, devices: [...st.devices].join(","), purpose: st.purpose, name: st.name });
+  const res = await fetch(`api/setup-plan?${q}`);
+  const plan = await res.json().catch(() => ({}));
+  if (!res.ok) return drawSetup(plan.error || "BossMox couldn't work that out.");
+  dialog(`<h3>Make ${esc(st.name)}?</h3><p>${esc(plan.summary)}</p>
+    <label class="field restartname"><span>Type erase to go ahead</span><input id="setupconfirm" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-setupback="1">Back</button><button class="btn danger" id="setupgo" data-setupgo="1" disabled>Erase and make ${esc(st.name)}</button></div>`);
+}
+function setupGo() {
+  const st = S.setup;
+  const node = S.storeNode;
+  runAction("storage-setup", node, `Making ${st.name} on ${node}. This can take a minute.`, { devices: [...st.devices], purpose: st.purpose, name: st.name, confirm: "erase" }, async () => {
+    await loadDisks(node);
+    await afterStorage();
+  });
+}
+/* Deleting a pool on a local drive: explained when it can't be done, typed name when it can. */
+function askPoolDelete(id) {
+  const m = S.storeMaps?.[S.storeNode];
+  const g = m?.groups.find((x) => x.pools.some((p) => p.id === id));
+  const p = g?.pools.find((x) => x.id === id);
+  if (!p) return;
+  const node = S.storeNode;
+  const users = (S.data?.vms ?? []).filter((v) => v.usesStorage.includes(id)).map((v) => v.name);
+  const why = g.disks.some((d) => d.system)
+    ? `${id} is on the system disk, alongside Proxmox itself, so BossMox won't delete it. A fresh install splits the system disk into a folder (local) and a pool for guests (local-lvm). That's normal, and both are useful.`
+    : users.length ? `${users.join(", ")} still ${users.length === 1 ? "uses" : "use"} it. Move or remove ${users.length === 1 ? "that" : "those"} first.`
+      : p.items.length ? `There's still something on it. Open What's on it, and delete or move ${p.items.length === 1 ? "it" : "them"} first.` : "";
+  if (why) return dialog(`<h3>${esc(id)} can't be deleted yet</h3><p>${esc(why)}</p>${closeRow}`);
+  const drives = g.disks.map((d) => d.model || d.path).join(" and ");
+  S.poolDelete = id;
+  dialog(`<h3>Delete ${esc(id)}?</h3><p>This erases ${esc(id)} from ${esc(drives)}. The ${g.disks.length === 1 ? "drive becomes" : "drives become"} empty, ready to use for something else. It can't be undone.</p>
+    <label class="field restartname"><span>Type ${esc(id)} to go ahead</span><input id="pooldelconfirm" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="pooldelgo" data-pooldelgo="1" disabled>Delete ${esc(id)}</button></div>`);
+  S.poolDeleteNode = node;
+}
 function askItemDelete(pool, volid) {
   const i = S.storeMaps?.[S.storeNode] && [...S.storeMaps[S.storeNode].groups.flatMap((g) => g.pools), ...S.storeMaps[S.storeNode].unplaced, ...S.storeMaps[S.storeNode].network].find((p) => p.id === pool)?.items.find((x) => x.volid === volid);
   if (!i) return;
@@ -612,12 +680,12 @@ function mapPane() {
   const m = S.storeMaps?.[S.storeNode];
   const free = S.diskData?.[S.storeNode]?.filter((d) => d.free) ?? [];
   const pick = nodes.length > 1 ? `<label class="field stnode"><span>Node</span><select id="stnode">${nodes.map((n) => `<option ${n === S.storeNode ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : `<div></div>`;
-  const top = `<div class="sttop">${pick}<div class="actions">${free.length ? `<button class="btn" data-diskmake="1">Make storage</button>` : ""}<button class="btn primary" data-stadd="1">Add network storage</button></div></div>`;
+  const top = `<div class="sttop">${pick}<div class="actions"><button class="btn primary" data-setupstart="1">Add storage</button></div></div>`;
   if (!m) return `${top}<p class="empty">${esc(S.mapError || "Looking at this node's disks and storage.")}</p>`;
   const section = (heading, body) => `<h3 class="sthd">${heading}</h3>${body}`;
   return `${top}
     ${m.groups.map((g) => `<section class="stgroup">${g.disks.length > 1 ? `<p class="stmany">${g.disks.length} disks working together</p>` : ""}${g.disks.map(diskLine).join("")}${g.pools.map(poolBlock).join("")}</section>`).join("")}
-    ${m.empty.length ? section("Empty disks", `<section class="stgroup">${m.empty.map(diskLine).join("")}<small class="stnote">Nothing is on these yet. Make storage turns them into a pool.</small></section>`) : ""}
+    ${m.empty.length ? section("Empty disks", `<section class="stgroup">${m.empty.map(diskLine).join("")}<small class="stnote">Nothing is on these yet. Add storage turns them into a pool.</small></section>`) : ""}
     ${m.otherDisks.length ? section("Disks used by something else", `<section class="stgroup">${m.otherDisks.map(diskLine).join("")}</section>`) : ""}
     ${m.unplaced.length ? section("On this node, disk not identified", `<section class="stgroup">${m.unplaced.map(poolBlock).join("")}</section>`) : ""}
     ${m.network.length ? section("Network storage", `<section class="stgroup">${m.network.map(poolBlock).join("")}</section>`) : ""}`;
@@ -2483,6 +2551,29 @@ document.addEventListener("click", (e) => {
   if (d.stsave) return saveShare();
   if (d.stedit) return askEditStorage(d.stedit);
   if (d.stuses) return saveUses();
+  if (d.setupstart) return askSetup();
+  if (d.setup) {
+    if (d.setup === "where" && d.setupval === "nas") return askAddShare();
+    if (d.setup === "where") S.setup.where = d.setupval;
+    if (d.setup === "purpose") {
+      S.setup.name = $("#setupname")?.value.trim() || S.setup.name;
+      if (!S.setup.named || Object.values(POOL_NAMES).includes(S.setup.name)) S.setup.name = POOL_NAMES[d.setupval];
+      S.setup.purpose = d.setupval;
+    }
+    return drawSetup();
+  }
+  if (d.setupnext) return setupSummary();
+  if (d.setupback) return drawSetup();
+  if (d.setupgo) return setupGo();
+  if (d.pooldel) return askPoolDelete(d.pooldel);
+  if (d.pooldelgo) {
+    const id = S.poolDelete;
+    const node = S.poolDeleteNode;
+    return runAction("pool-delete", node, `Deleting ${id}`, { storage: id, confirm: id }, async () => {
+      await loadDisks(node);
+      await afterStorage();
+    });
+  }
   if (d.poolopen) {
     S.openPools ??= new Set();
     const key = `${S.storeNode}/${d.poolopen}`;
@@ -2640,7 +2731,19 @@ document.addEventListener("click", (e) => {
     return renderDetail();
   }
 });
+document.addEventListener("input", (e) => {
+  if (e.target.id === "setupconfirm") $("#setupgo").disabled = e.target.value.trim().toLowerCase() !== "erase";
+  if (e.target.id === "pooldelconfirm") $("#pooldelgo").disabled = e.target.value.trim() !== S.poolDelete;
+  if (e.target.id === "setupname" && S.setup) {
+    S.setup.name = e.target.value.trim();
+    S.setup.named = true;
+  }
+});
 document.addEventListener("change", (e) => {
+  if (e.target.dataset?.setupdisk && S.setup) {
+    if (e.target.checked) S.setup.devices.add(e.target.dataset.setupdisk);
+    else S.setup.devices.delete(e.target.dataset.setupdisk);
+  }
   if (e.target.closest?.("#setform")) settingsTouched();
   if (e.target.id === "stnode") {
     S.storeNode = e.target.value;
