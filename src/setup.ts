@@ -20,7 +20,7 @@ const COOKIE = "__Host-bossmox_setup";
 const MAX_BODY = 8 * 1024;
 const CA_FILE = path.join(path.dirname(settingsPath(env)), "pve-root-ca.pem");
 const HEADERS = {
-  "Content-Security-Policy": "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "Content-Security-Policy": "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
   "Cache-Control": "no-store",
@@ -31,6 +31,9 @@ const STATIC: Record<string, [string, string]> = {
   "/setup.js": ["setup.js", "text/javascript; charset=utf-8"],
   "/style.css": ["style.css", "text/css; charset=utf-8"],
   "/vendor/figtree.woff2": ["vendor/figtree.woff2", "font/woff2"],
+  "/favicon.ico": ["icons/favicon.ico", "image/x-icon"],
+  "/icons/icon-32.png": ["icons/icon-32.png", "image/png"],
+  "/icons/icon-180.png": ["icons/icon-180.png", "image/png"],
 };
 
 const wizard = new Wizard(env.BOSSMOX_SETUP_HASH ?? path.join(path.dirname(settingsPath(env)), "setup.hash"), {
