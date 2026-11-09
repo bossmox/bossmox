@@ -547,37 +547,72 @@ function storeView() {
 }
 const USE_WORDS = { images: "VM disks", rootdir: "Container disks", backup: "Backups", iso: "Installer discs", vztmpl: "Container templates" };
 const onlineNodes = () => (S.data?.nodes ?? []).filter((n) => n.online).map((n) => n.name);
-function storagePane() {
-  if (!S.storeList) return `<p class="empty">${esc(S.storeError || "Looking at your storage.")}</p>`;
-  const row = (s) => {
-    const used = s.totalGb ? Math.round(((s.totalGb - s.freeGb) / s.totalGb) * 100) : 0;
-    return `<div class="stcard"><div class="sthead"><div><b>${esc(s.id)}</b><small>${esc(s.kind)}${s.where ? `, ${esc(s.where)}` : ""}</small></div>
-      <div class="actions"><button class="btn" data-stedit="${esc(s.id)}">Change use</button><button class="btn" data-stremove="${esc(s.id)}">Remove</button></div></div>
-      ${s.totalGb ? `<small>${s.freeGb} GB free of ${s.totalGb} GB</small><div class="meter"><i style="width:${used}%"></i></div>` : ""}
-      <small>Holds ${esc(s.uses.map((u) => USE_WORDS[u]).join(", ") || "nothing yet")}${s.nodes.length ? `. On ${esc(s.nodes.join(", "))}` : ""}</small>
-      ${s.missing.length ? `<p class="loginerr">Not available on ${esc(s.missing.join(", "))}.</p>` : ""}</div>`;
-  };
-  return `<div class="row-end" style="margin:0 0 12px"><button class="btn primary" data-stadd="1">Add network storage</button></div>${S.storeList.map(row).join("") || `<p class="empty">No storage yet.</p>`}`;
+/* Storage as disks and pools (ADR 0014): one view, shaped like a disk manager, with every action on it. */
+const guestName = (vmid) => S.data?.vms.find((v) => v.id === vmid)?.name ?? `Guest ${vmid}`;
+const sizeWords = (n) => (n >= 1000 ? `${Math.round(n / 100) / 10} TB` : `${n >= 10 ? Math.round(n) : n} GB`);
+function diskLine(d) {
+  const facts = [d.kind, sizeWords(d.sizeGb)];
+  const wipe = S.diskData?.[S.storeNode]?.find((x) => x.path === d.path)?.canWipe;
+  return `<div class="stdisk"><div><b>${esc(d.model || d.path)}</b>${d.system ? `<span class="sttag">System disk</span>` : ""}
+      <small>${esc(facts.join(", "))}${d.model ? `, ${esc(d.path)}` : ""}${d.wearLeft === null ? "" : `, ${d.wearLeft}% life left`}</small>
+      ${d.otherUses.length ? `<small>Also has ${esc(d.otherUses.join(", "))}, which isn't Proxmox storage.</small>` : ""}</div>
+    <div class="actions"><button class="linkbtn healthbtn ${d.failing ? "bad" : ""}" data-diskhealth="${esc(d.path)}"><span class="dot ${d.failing ? "warn" : d.health === "UNKNOWN" ? "" : "running"}"></span>${d.failing ? "Failing" : d.health === "UNKNOWN" ? "Health unknown" : "Healthy"}</button>${wipe ? `<button class="btn" data-diskwipe="${esc(d.path)}">Wipe</button>` : ""}</div></div>`;
 }
-function disksPane() {
+function poolBlock(p) {
+  const pct = p.totalGb ? Math.min(100, Math.round((p.usedGb / p.totalGb) * 100)) : 0;
+  const using = [...p.guests.map((g) => `${guestName(g.vmid)} ${sizeWords(g.gb)}`), ...p.files.filter((f) => f.gb >= 0.1).map((f) => `${f.label} ${sizeWords(f.gb)}`), ...(p.otherGb ? [`${p.otherLabel} ${sizeWords(p.otherGb)}`] : [])];
+  const facts = [
+    p.layout,
+    p.thin ? "Disks here take space only as they fill." : "",
+    p.overGivenGb ? `The disks given out here add up to ${sizeWords(p.overGivenGb)}, more than the pool holds. If they all fill up, guests on it stop.` : "",
+    p.snapshots,
+    p.otherNodes,
+  ].filter(Boolean);
+  const holds = p.uses.map((u) => USE_WORDS[u]).filter(Boolean);
+  const listed = S.storeList?.some((s) => s.id === p.id);
+  return `<div class="stpool ${p.overGivenGb ? "warnpool" : ""}">
+    <div class="sthead"><div><b>${esc(p.id)}</b> <span class="inl">${esc(p.title)}</span></div>
+      ${listed ? `<div class="actions"><button class="btn" data-stedit="${esc(p.id)}">Change use</button><button class="btn" data-stremove="${esc(p.id)}">Remove</button></div>` : ""}</div>
+    ${p.active ? `<small>${sizeWords(p.usedGb)} used of ${sizeWords(p.totalGb)}, ${sizeWords(p.freeGb)} free</small><div class="meter"><i style="width:${pct}%"></i></div>` : `<p class="loginerr">This node can't reach it right now.</p>`}
+    ${using.length ? `<small>Using it: ${esc(using.join(", "))}</small>` : ""}
+    <small>Holds ${esc(holds.join(", ").toLowerCase() || "nothing yet")}.</small>
+    ${facts.map((f) => `<small>${esc(f)}</small>`).join("")}
+    ${p.details ? `<small class="stdetails">${esc(p.details)}</small>` : ""}</div>`;
+}
+function mapPane() {
   const nodes = onlineNodes();
   S.storeNode = nodes.includes(S.storeNode) ? S.storeNode : nodes[0];
-  const list = S.diskData?.[S.storeNode];
-  const row = (d) => `<div class="snap"><div>${esc(d.path)}${d.model ? ` <small class="inl">${esc(d.model)}</small>` : ""}<small>${d.sizeGb} GB${d.kind ? ` ${esc(d.kind)}` : ""}, ${d.free ? "empty" : `in use (${esc(d.used)})`}${d.wearLeft === null ? "" : `, ${d.wearLeft}% life left`}</small></div>
-    <div class="actions"><button class="linkbtn healthbtn ${d.failing ? "bad" : ""}" data-diskhealth="${esc(d.path)}"><span class="dot ${d.failing ? "warn" : d.health === "UNKNOWN" ? "" : "running"}"></span>${d.failing ? "Failing" : d.health === "UNKNOWN" ? "Health unknown" : "Healthy"}</button>${d.canWipe ? `<button class="btn" data-diskwipe="${esc(d.path)}">Wipe</button>` : ""}</div></div>`;
-  const pick = `<label class="field stnode"><span>Node</span><select id="stnode">${nodes.map((n) => `<option ${n === S.storeNode ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>`;
-  if (!list) return `${pick}<p class="empty">Looking at this node's disks.</p>`;
-  const free = list.filter((d) => d.free);
-  return `<div class="sttop">${pick}${free.length ? `<button class="btn primary" data-diskmake="1">Make storage</button>` : ""}</div>
-    ${list.map(row).join("") || `<p class="empty">This node didn't report any disks.</p>`}
-    ${free.length ? "" : `<p class="meta">Nothing's empty on this node, so there's nothing to turn into storage. Wipe a disk you no longer need to use it.</p>`}`;
+  const m = S.storeMaps?.[S.storeNode];
+  const free = S.diskData?.[S.storeNode]?.filter((d) => d.free) ?? [];
+  const pick = nodes.length > 1 ? `<label class="field stnode"><span>Node</span><select id="stnode">${nodes.map((n) => `<option ${n === S.storeNode ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : `<div></div>`;
+  const top = `<div class="sttop">${pick}<div class="actions">${free.length ? `<button class="btn" data-diskmake="1">Make storage</button>` : ""}<button class="btn primary" data-stadd="1">Add network storage</button></div></div>`;
+  if (!m) return `${top}<p class="empty">${esc(S.mapError || "Looking at this node's disks and storage.")}</p>`;
+  const section = (heading, body) => `<h3 class="sthd">${heading}</h3>${body}`;
+  return `${top}
+    ${m.groups.map((g) => `<section class="stgroup">${g.disks.length > 1 ? `<p class="stmany">${g.disks.length} disks working together</p>` : ""}${g.disks.map(diskLine).join("")}${g.pools.map(poolBlock).join("")}</section>`).join("")}
+    ${m.empty.length ? section("Empty disks", `<section class="stgroup">${m.empty.map(diskLine).join("")}<small class="stnote">Nothing is on these yet. Make storage turns them into a pool.</small></section>`) : ""}
+    ${m.otherDisks.length ? section("Disks used by something else", `<section class="stgroup">${m.otherDisks.map(diskLine).join("")}</section>`) : ""}
+    ${m.unplaced.length ? section("On this node, disk not identified", `<section class="stgroup">${m.unplaced.map(poolBlock).join("")}</section>`) : ""}
+    ${m.network.length ? section("Network storage", `<section class="stgroup">${m.network.map(poolBlock).join("")}</section>`) : ""}`;
+}
+async function loadStorageMap(node) {
+  if (!node) return;
+  const run = S.loadRun;
+  try {
+    const { map } = await signal(`api/storage-map?server=${encodeURIComponent(node)}`);
+    if (run !== S.loadRun) return;
+    S.storeMaps = { ...S.storeMaps, [node]: map };
+    S.mapError = "";
+  } catch (err) {
+    if (err.message === "signed out" || run !== S.loadRun) return;
+    S.mapError = err.message || "BossMox lost contact with Proxmox.";
+  }
+  drawStore();
 }
 function drawStore() {
   const box = $("#stbox");
   if (!box) return;
-  S.stTab ??= "storage";
-  const html = `<div class="tabs" role="tablist">${[["storage", "Storage"], ["disks", "Disks"]].map(([k, l]) => `<button role="tab" aria-selected="${S.stTab === k}" class="${S.stTab === k ? "on" : ""}" data-sttab="${k}">${l}</button>`).join("")}</div>
-    <div class="tabpane">${S.stTab === "storage" ? storagePane() : disksPane()}</div>`;
+  const html = mapPane();
   if (html === box.dataset.drawn) return;
   box.innerHTML = html;
   box.dataset.drawn = html;
@@ -594,6 +629,7 @@ async function loadStorage() {
     S.storeError = err.message || "BossMox lost contact with Proxmox.";
   }
   drawStore();
+  if ($("#stbox")) await loadStorageMap(S.storeNode ?? onlineNodes()[0]);
 }
 async function loadDisks(node) {
   const run = S.loadRun;
@@ -2404,10 +2440,6 @@ document.addEventListener("click", (e) => {
   }
   if (d.protect) return askProtect();
   if (d.protectgo) return saveProtect();
-  if (d.sttab) {
-    S.stTab = d.sttab;
-    return drawStore();
-  }
   if (d.stadd) return askAddShare();
   if (d.stscan) return scanShares();
   if (d.stsave) return saveShare();
@@ -2423,7 +2455,10 @@ document.addEventListener("click", (e) => {
   if (d.diskwipego) {
     t.disabled = true;
     const node = S.storeNode;
-    return runAction("disk-wipe", node, `Wiping ${S.editDisk}`, { disk: S.editDisk, confirm: "erase" }, () => loadDisks(node));
+    return runAction("disk-wipe", node, `Wiping ${S.editDisk}`, { disk: S.editDisk, confirm: "erase" }, async () => {
+      await loadDisks(node);
+      await loadStorageMap(node);
+    });
   }
   if (d.diskmake) return askMakeStorage();
   if (d.mkgo) return makeStorage();
@@ -2557,6 +2592,7 @@ document.addEventListener("change", (e) => {
     S.storeNode = e.target.value;
     drawStore();
     loadDisks(S.storeNode);
+    loadStorageMap(S.storeNode);
   }
   if (e.target.id === "sharekind") $("#smbfields").hidden = e.target.value !== "smb";
   if (e.target.id === "mkkind" || e.target.closest?.("#mkdisks")) drawMakeChoices();

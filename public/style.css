@@ -248,6 +248,19 @@ summary{cursor:pointer;font-weight:650}
 .sthead b{font-weight:650}
 .sttop{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;margin-bottom:6px}
 .stnode{max-width:240px;margin:0}
+.stgroup{border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface);padding:4px 16px 8px;margin:12px 0}
+.stdisk{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:12px 0 10px}
+.stdisk small{display:block;color:var(--muted)}
+.stdisk b{font-weight:650}
+.sttag{margin-left:8px;font-size:12px;padding:1px 8px;border-radius:10px;background:var(--surface2);color:var(--muted);white-space:nowrap}
+.stmany{margin:10px 0 0;font-size:13px;color:var(--muted)}
+.stpool{border-left:3px solid var(--accent);padding:8px 0 8px 14px;margin:4px 0 10px;display:grid;gap:4px}
+.stpool small{display:block;color:var(--muted)}
+.stpool.warnpool{border-left-color:var(--bad)}
+.stdetails{font-size:12px;opacity:.8}
+.sthd{font-size:15px;font-weight:650;margin:18px 0 0}
+.stnote{display:block;color:var(--muted);padding-bottom:6px}
+@media (max-width:760px){.stdisk,.stpool .sthead{flex-wrap:wrap}}
 .uses{border:0;padding:0;margin:0 0 12px;display:grid;gap:6px}
 .uses legend{font-weight:600;font-size:13.5px;margin-bottom:6px;padding:0}
 .uses .createcheck{margin:0}

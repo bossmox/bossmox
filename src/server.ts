@@ -16,6 +16,7 @@ import { assertCanWipe, buildStorageList, deviceIsValid, diskStorageForm, hostIs
 import { addDiskForm, addNicForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { applyChannel, ChannelError } from "./update-channel.js";
+import { buildStorageMap, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import {
   buildMovePlan,
   buildRebootPlan,
@@ -331,6 +332,44 @@ function snapshotName(body: Record<string, unknown>): string {
   const snap = text(body.snapshot, 40);
   if (!SNAPSHOT_NAME.test(snap)) throw new AuthError(400, "A snapshot name starts with a letter, then letters, numbers, dashes or underscores.");
   return snap;
+}
+
+/**
+ * Everything one node says about its disks and storage, asked in parallel (ADR 0014). A part the person's account
+ * can't read comes back empty, so the map still shows what it can, with those pools under "disk not identified".
+ */
+async function loadStorageMap(name: string, session: Session) {
+  const base = `/nodes/${encodeURIComponent(name)}`;
+  const t = session.ticket;
+  const quiet = <T>(p: Promise<T>, fallback: T) => p.catch((err) => {
+    if (err instanceof PveError && err.status === 401) throw err;
+    return fallback;
+  });
+  const [disks, lvm, zfsList, directory, config, status, nodeStatus, data] = await Promise.all([
+    quiet(pve.get<RawDisk[]>(`${base}/disks/list?include-partitions=1`, t), []),
+    quiet(pve.get<RawLvm>(`${base}/disks/lvm`, t), null),
+    quiet(pve.get<{ name: string }[]>(`${base}/disks/zfs`, t), []),
+    quiet(pve.get<RawMount[]>(`${base}/disks/directory`, t), []),
+    pve.get<RawStorageConfig[]>("/storage", t),
+    pve.get<RawStorageStatus[]>(`${base}/storage`, t),
+    quiet(pve.get<{ rootfs?: { total?: number } }>(`${base}/status`, t), {}),
+    overview(session),
+  ]);
+  const zfsEntries = await Promise.all(zfsList.map(async (z) => [z.name, await quiet(pve.get<RawZfsDetail>(`${base}/disks/zfs/${encodeURIComponent(z.name)}`, t), {})] as const));
+  const active = status.filter((s) => s.enabled !== 0 && s.active === 1);
+  const contentEntries = await Promise.all(active.map(async (s) => [s.storage, await quiet(pve.get<RawVolume[]>(`${base}/storage/${encodeURIComponent(s.storage)}/content`, t), [])] as const));
+  const map = buildStorageMap({
+    node: name,
+    disks,
+    lvm,
+    zfs: Object.fromEntries(zfsEntries),
+    directory,
+    config,
+    status,
+    rootfs: nodeStatus.rootfs ?? null,
+    content: Object.fromEntries(contentEntries),
+  }, data.nodes.length > 1);
+  return { map, diskList: readHardDisks(disks) };
 }
 
 /** Whether a storage keeps VM disks as files, from the node's own list, which only shows what the person can use. */
@@ -905,7 +944,7 @@ const handler: http.RequestListener = async (req, res) => {
       }
       return json(res, 200, { realms });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -965,6 +1004,11 @@ const handler: http.RequestListener = async (req, res) => {
             return r?.status === "fulfilled" ? r.value.filter((s) => s.enabled !== 0).map((s) => ({ name: s.storage, node, freeGb: (s.avail ?? 0) / 1024 ** 3, totalGb: (s.total ?? 0) / 1024 ** 3, online: s.active === 1 })) : [];
           });
           return json(res, 200, { list: buildStorageList(config, usage) });
+        }
+        if (route === "/api/storage-map") {
+          const name = params.get("server") ?? "";
+          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          return json(res, 200, await loadStorageMap(name, session));
         }
         if (route === "/api/disks" || route === "/api/disk-smart") {
           const name = params.get("server") ?? "";
