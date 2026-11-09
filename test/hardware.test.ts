@@ -89,3 +89,8 @@ test("raw disks on a folder are the ones to convert for snapshots, and only when
   assert.deepEqual(snapshotFix({ scsi0: "files:962/vm-962-disk-1.raw", scsi1: "lvm:vm-962-disk-5" }, types), [], "a thick LVM disk still blocks it, so converting wouldn't help");
   assert.deepEqual(snapshotFix({ scsi0: "files:962/vm-962-disk-1.qcow2" }, types), []);
 });
+
+test("a storage named only with dots is refused (pre-public review 2026-11-09)", () => {
+  for (const storage of [".", ".."]) assert.throws(() => addDiskForm("qemu", { scsi0: "x" }, { storage, sizeGb: 2, mount: "" }), /Pick a storage/);
+  assert.equal(addDiskForm("qemu", { scsi0: "x" }, { storage: "my.pool", sizeGb: 2, mount: "" }).scsi1, "my.pool:2");
+});

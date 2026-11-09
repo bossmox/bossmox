@@ -72,6 +72,8 @@ export class PveClient {
     }
 
     return new Promise<T>((resolve, reject) => {
+      // Errors name the path but never its query string, which can hold an SMB scan's password, so it can't reach a log.
+      const where = path.split("?")[0];
       const onResponse = (res: http.IncomingMessage) => {
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
@@ -79,13 +81,13 @@ export class PveClient {
         res.on("end", () => {
           const status = res.statusCode ?? 0;
           if (status < 200 || status >= 300) {
-            reject(new PveError(status, `Proxmox answered ${status} for ${path}`, res.statusMessage));
+            reject(new PveError(status, `Proxmox answered ${status} for ${where}`, res.statusMessage));
             return;
           }
           try {
             resolve((JSON.parse(Buffer.concat(chunks).toString("utf8")) as { data: T }).data);
           } catch {
-            reject(new PveError(status, `Proxmox sent an unreadable reply for ${path}`));
+            reject(new PveError(status, `Proxmox sent an unreadable reply for ${where}`));
           }
         });
       };

@@ -326,7 +326,8 @@ const nodeDisks = async (name: string, ticket: string, data: Overview) =>
 const usesStorageNames = (body: unknown) => (Array.isArray(body) ? body.filter((d): d is string => typeof d === "string").slice(0, 32) : []);
 const kindOf = (body: Record<string, unknown>) => (body.type === "lxc" ? "lxc" as const : "qemu" as const);
 const VOLUME = /^[\w.-]+:[\w./-]+$/;
-const STORAGE = /^[\w.-]{1,64}$/;
+// Dot-only names ("." and "..") are refused: addresses fold them into the path around them (pre-public review 2026-11-09).
+const STORAGE = /^(?!\.+$)[\w.-]{1,64}$/;
 const JOB_ID = /^[\w-]{1,64}$/;
 const SCHEDULE = /^((mon|tue|wed|thu|fri|sat|sun) )?([01]\d|2[0-3]):[0-5]\d$/;
 const SNAPSHOT_NAME = /^[A-Za-z][\w-]{1,39}$/;

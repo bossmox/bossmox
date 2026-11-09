@@ -77,3 +77,18 @@ test("reads still fail over after a reset", async () => {
   first.close();
   second.close();
 });
+
+test("an error from Proxmox never carries the query string, where an SMB scan's password travels", async () => {
+  // Pre-public review 2026-11-09: a refused SMB scan's error reached the log with the password in it.
+  const refuse = (_: http.IncomingMessage, res: http.ServerResponse) => { res.statusCode = 401; res.end(); };
+  const p = await fake(refuse);
+  try {
+    await assert.rejects(client(p.url).get("/nodes/a/scan/cifs?server=nas&username=bob&password=hunter2", "t"), (err: Error) => {
+      assert.doesNotMatch(err.message, /hunter2|username|\?/);
+      assert.match(err.message, /\/nodes\/a\/scan\/cifs/);
+      return true;
+    });
+  } finally {
+    p.close();
+  }
+});

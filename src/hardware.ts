@@ -6,7 +6,8 @@ const QEMU_DISK = /^(scsi|virtio|sata|ide)\d+$/;
 const LXC_DISK = /^(rootfs|mp\d+)$/;
 const NIC = /^net\d+$/;
 const NAME_LIMITS: Record<string, number> = { scsi: 31, virtio: 16, sata: 6, ide: 4, mp: 256, net: 32 };
-const STORAGE = /^[\w.-]{1,64}$/;
+// Dot-only names ("." and "..") are refused: addresses fold them into the path around them (pre-public review 2026-11-09).
+const STORAGE = /^(?!\.+$)[\w.-]{1,64}$/;
 const MOUNT = /^\/[\w./-]{0,200}$/;
 const BRIDGE = /^[\w.-]{1,32}$/;
 
