@@ -28,4 +28,6 @@ cp deploy/install.sh deploy/update-bossmox.sh "$OUT/"
 
 echo "Built $VERSION in $OUT"
 echo "To make the draft release (read it over on GitHub, then publish):"
-echo "  gh release create $TAG --repo bossmox/bossmox --draft ${LABEL:+--prerelease }--title \"BossMox $BASE${LABEL:+ $LABEL}\" --notes-file docs/release-notes/$TAG.md $OUT/install.sh $OUT/update-bossmox.sh $OUT/bossmox.tgz $OUT/bossmox.tgz.sha256"
+# Not marked as a pre-release even for a preview: GitHub's releases/latest, which the one-line install downloads
+# from, skips pre-releases. The version and title say "preview" instead.
+echo "  gh release create $TAG --repo bossmox/bossmox --draft --title \"BossMox $BASE${LABEL:+ $LABEL}\" --notes-file docs/release-notes/$TAG.md $OUT/install.sh $OUT/update-bossmox.sh $OUT/bossmox.tgz $OUT/bossmox.tgz.sha256"
