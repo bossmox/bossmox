@@ -541,6 +541,7 @@ function renderDetail() {
     <div class="tabpane">${TAB[S.tab](v)}</div>`;
   if (S.tab === "snapshots") checkSnapshots(v);
   if (S.tab === "overview" && v.running) loadAddress(v);
+  if (S.tab === "overview") loadUsage();
   if (S.tab === "settings") {
     if (!S.cpuTypes) loadCpuTypes(v.node);
     loadWaiting(v);
@@ -563,7 +564,8 @@ const TAB = {
       ${v.running && v.type === "qemu" ? `<dd class="agenthelp" id="vmagent">${agentHelp(v)}</dd>` : ""}
       <dt>Starts at boot</dt><dd>${v.startsAtBoot ? "Yes" : "No"}</dd>
       <dt>Snapshots</dt><dd>${v.snapshots.length || "None"}</dd>
-    </dl>`,
+    </dl>
+    ${v.template ? "" : usagePane(`guest:${v.node}:${v.type}:${v.id}`)}`,
   hardware: (v) => {
     const lock = v.template ? "" : "1";
     const disk = (d) => `<div class="snap"><div>${d.boot ? "Boot disk" : d.mount ? esc(d.mount) : "Disk"}<small>${d.sizeGb} GB on ${esc(d.storage)}, ${esc(d.slot)}</small></div>${lock ? `<div class="actions"><button class="btn" data-diskgrow="${esc(d.slot)}">Grow</button>${d.boot ? "" : `<button class="btn" data-diskremove="${esc(d.slot)}">Remove</button>`}</div>` : ""}</div>`;
@@ -730,7 +732,8 @@ const SERVER_TAB = {
       <dt>Running for</dt><dd>${esc(a.uptime)}</dd>
       <dt>Processor</dt><dd>${esc(a.processor)}, ${a.cpus} threads</dd>
       ${d.channel ? `<dt>Update channel</dt><dd>${esc(d.channel.name)}</dd>` : ""}
-    </dl>` : noAccess("this node's status", "Sys.Audit")}
+    </dl>
+    ${usagePane(`node:${d.name}`)}` : noAccess("this node's status", "Sys.Audit")}
     <article class="server" style="margin-top:20px"><header><span>Running here</span><small>${on.filter((v) => v.running).length} of ${on.length}</small></header>
       <div class="bays">${on.map((v) => `<button class="bay ${v.running ? "" : "stopped"} ${v.issues.length ? "warn" : ""}" data-vm="${v.id}"><i></i>${esc(v.name)}</button>`).join("")}<span class="spare"></span></div></article>`;
   },
@@ -777,7 +780,111 @@ function renderServerDetail() {
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["updates", d?.updates?.total ? `Updates (${d.updates.total})` : "Updates"], ["services", "Services"], ["activity", "Activity"]].map(([k, l]) => `<button role="tab" aria-selected="${S.serverTab === k}" class="${S.serverTab === k ? "on" : ""}" data-servertab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${body}</div>`;
   box.scrollTop = top;
+  if (S.serverTab === "overview") loadUsage();
 }
+/*
+ * Usage graphs (ADR 0022): Proxmox's own history for a node or guest, one small chart per measure, one scale each.
+ * The screens around them redraw every 10 seconds, so the data is cached here and fetched at most once a minute.
+ */
+const USAGE_RANGES = [["hour", "Last hour"], ["day", "Last day"], ["week", "Last week"]];
+S.usage = {};
+S.usageRange = "hour";
+const usageKey = (key) => `${key}|${S.usageRange}`;
+function usagePane(key) {
+  return `<section class="usage" data-usage="${esc(key)}">
+    <div class="uhead"><h3>Usage</h3><div class="seg" role="group" aria-label="Time range">${USAGE_RANGES.map(([k, l]) => `<button class="${S.usageRange === k ? "on" : ""}" data-urange="${k}" aria-pressed="${S.usageRange === k}">${l}</button>`).join("")}</div></div>
+    <div class="ubody">${usageCharts(S.usage[usageKey(key)])}</div></section>`;
+}
+async function loadUsage() {
+  const el = document.querySelector("[data-usage]");
+  if (!el) return;
+  const key = el.dataset.usage;
+  const k = usageKey(key);
+  const hit = S.usage[k];
+  if (hit && (hit.loading || Date.now() - hit.at < 60000)) return;
+  S.usage[k] = { ...hit, loading: true, at: hit?.at ?? 0 };
+  const [kind, node, type, id] = key.split(":");
+  const q = new URLSearchParams({ server: node, range: S.usageRange, ...(kind === "guest" ? { type, vmid: id } : {}) });
+  try {
+    const res = await fetch(`api/usage?${q}`);
+    const body = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    S.usage[k] = res.ok ? { at: Date.now(), data: body } : { at: Date.now(), error: body.error || "Proxmox didn't return this history." };
+  } catch {
+    S.usage[k] = { at: Date.now(), error: "BossMox lost contact with Proxmox." };
+  }
+  const now = document.querySelector(`[data-usage="${CSS.escape(key)}"] .ubody`);
+  if (now && usageKey(key) === k) now.innerHTML = usageCharts(S.usage[k]);
+}
+const fmt = (v, unit) => (v === null || v === undefined ? "no data" : `${v >= 100 || unit === "%" ? Math.round(v) : v >= 10 ? v.toFixed(1) : v.toFixed(2)}${unit === "%" ? "%" : ` ${unit}`}`);
+/** A round top for the scale, so gridlines land on numbers people read easily. */
+function niceMax(v) {
+  if (!(v > 0)) return 1;
+  const p = 10 ** Math.floor(Math.log10(v));
+  return [1, 2, 2.5, 5, 10].map((m) => m * p).find((m) => m >= v);
+}
+const whenLabel = (t, range) => new Date(t * 1000).toLocaleString([], range === "week" ? { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" } : { hour: "numeric", minute: "2-digit" });
+function usageCharts(hit) {
+  if (!hit?.data) return hit?.error ? `<p class="empty">${esc(hit.error)}</p>` : `<p class="empty">Loading usage.</p>`;
+  const u = hit.data;
+  if (!u.points.length) return `<p class="empty">Proxmox has no history for this yet.</p>`;
+  const charts = [
+    { title: "Processor", unit: "%", max: 100, series: [["cpu", "Busy"]], note: u.cores ? `of ${u.cores} ${u.cores === 1 ? "core" : "cores"}` : "" },
+    { title: "Memory", unit: "GB", max: u.memTotalGb || null, series: [["memGb", "In use"]], note: u.memTotalGb ? `of ${u.memTotalGb} GB` : "" },
+    { title: "Network", unit: "Mbit/s", max: null, series: [["netIn", "In"], ["netOut", "Out"]] },
+    ...(u.kind === "guest" ? [{ title: "Disk activity", unit: "MB/s", max: null, series: [["diskRead", "Read"], ["diskWrite", "Write"]] }] : []),
+  ];
+  return `<div class="ugrid">${charts.map((c) => usageChart(u, c)).join("")}</div>`;
+}
+function usageChart(u, c) {
+  const W = 600, H = 120, pts = u.points;
+  const values = c.series.flatMap(([k]) => pts.map((p) => p[k]).filter((v) => v !== null && v !== undefined));
+  const top = c.max ?? niceMax(Math.max(0, ...values));
+  const x = (i) => (pts.length === 1 ? W : (i / (pts.length - 1)) * W);
+  const y = (v) => H - (Math.min(v, top) / top) * H;
+  const path = (k) => pts.reduce((d, p, i) => (p[k] === null || p[k] === undefined ? d : `${d}${i && pts[i - 1][k] !== null && pts[i - 1][k] !== undefined ? "L" : "M"}${x(i).toFixed(1)},${y(p[k]).toFixed(1)}`), "");
+  const latest = (k) => [...pts].reverse().find((p) => p[k] !== null && p[k] !== undefined)?.[k] ?? null;
+  const peak = (k) => Math.max(...pts.map((p) => p[k] ?? 0));
+  const summary = `${c.title}, ${USAGE_RANGES.find(([r]) => r === u.range)[1].toLowerCase()}: ${c.series.map(([k, l]) => `${c.series.length > 1 ? `${l} ` : ""}now ${fmt(latest(k), c.unit)}, peak ${fmt(peak(k), c.unit)}`).join("; ")}.`;
+  const data = esc(JSON.stringify({ unit: c.unit, range: u.range, series: c.series, t: pts.map((p) => p.t), v: c.series.map(([k]) => pts.map((p) => p[k] ?? null)) }));
+  return `<figure class="uchart">
+    <figcaption><b>${c.title}</b>${c.series.length === 1 ? `<span>${fmt(latest(c.series[0][0]), c.unit)} ${c.note ?? ""}</span>` : `<span class="ukey">${c.series.map(([k, l], i) => `<span><i class="s${i + 1}"></i>${l} ${fmt(latest(k), c.unit)}</span>`).join("")}</span>`}</figcaption>
+    <div class="uplot" data-uplot="${data}">
+      <span class="uscale">${fmt(top, c.unit)}</span>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(summary)}">
+        <line class="ugridline" x1="0" x2="${W}" y1="0.5" y2="0.5"/><line class="ugridline" x1="0" x2="${W}" y1="${H / 2}" y2="${H / 2}"/><line class="ubase" x1="0" x2="${W}" y1="${H - 0.5}" y2="${H - 0.5}"/>
+        ${c.series.map(([k], i) => `<path class="uline s${i + 1}" d="${path(k)}"/>`).join("")}
+        <line class="ucross" x1="0" x2="0" y1="0" y2="${H}" hidden/>
+      </svg>
+      <div class="utip" hidden></div>
+    </div>
+    <div class="uaxis"><span>${esc(whenLabel(pts[0].t, u.range))}</span><span>Now</span></div>
+  </figure>`;
+}
+/* Hovering a chart shows the time and every series' value there. */
+document.addEventListener("pointermove", (e) => {
+  const plot = e.target.closest?.(".uplot");
+  document.querySelectorAll(".uplot").forEach((p) => {
+    if (p === plot) return;
+    p.querySelector(".ucross")?.setAttribute("hidden", "");
+    p.querySelector(".utip")?.setAttribute("hidden", "");
+  });
+  if (!plot) return;
+  const d = JSON.parse(plot.dataset.uplot);
+  const box = plot.querySelector("svg").getBoundingClientRect();
+  const f = Math.min(1, Math.max(0, (e.clientX - box.left) / box.width));
+  const i = Math.round(f * (d.t.length - 1));
+  const cross = plot.querySelector(".ucross");
+  const cx = d.t.length === 1 ? 600 : (i / (d.t.length - 1)) * 600;
+  cross.setAttribute("x1", cx);
+  cross.setAttribute("x2", cx);
+  cross.removeAttribute("hidden");
+  const tip = plot.querySelector(".utip");
+  tip.innerHTML = `<b>${esc(whenLabel(d.t[i], d.range))}</b>${d.series.map(([, l], s) => `<span>${d.series.length > 1 ? `<i class="s${s + 1}"></i>${esc(l)} ` : ""}${fmt(d.v[s][i], d.unit)}</span>`).join("")}`;
+  tip.hidden = false;
+  const left = (cx / 600) * box.width;
+  tip.style.left = `${Math.min(Math.max(left, 60), box.width - 60)}px`;
+});
 function storeView() {
   return `<div id="stbox" class="stbox"></div>`;
 }
@@ -2803,6 +2910,12 @@ document.addEventListener("click", (e) => {
     const n = readNotices();
     saveNotices({ ...n, collapsed: !n.collapsed });
     return renderHealth();
+  }
+  if (d.urange) {
+    S.usageRange = d.urange;
+    if (wins.vms) renderDetail();
+    if (wins.monitor) renderServerDetail();
+    return;
   }
   if (d.lineup) {
     closeDeskMenu();

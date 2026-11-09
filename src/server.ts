@@ -21,6 +21,7 @@ import { buildHealth } from "./health.js";
 import { canChangeCluster, preferencesPath, readPreferences, scheduleWarnings, writePreferences, type Preferences } from "./preferences.js";
 import { settingsPath } from "./settings.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
+import { buildUsage, RANGES, type Range, type RawPoint } from "./usage.js";
 import { buildStorageMap, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import {
   buildMovePlan,
@@ -1158,7 +1159,7 @@ const handler: http.RequestListener = async (req, res) => {
       }
       return json(res, 200, { realms });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/health" || route === "/api/setup-plan" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
+    if (route === "/api/usage" || route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/health" || route === "/api/setup-plan" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -1243,6 +1244,18 @@ const handler: http.RequestListener = async (req, res) => {
             if (err instanceof StorageError) return json(res, 400, { error: err.message });
             throw err;
           }
+        }
+        if (route === "/api/usage") {
+          // Proxmox's own usage history, with the person's own rights: Sys.Audit for a node, VM.Audit for a guest.
+          const name = params.get("server") ?? "";
+          const range = params.get("range") ?? "";
+          const vmid = params.get("vmid");
+          const type = params.get("type");
+          if (!NODE_NAME.test(name) || !(RANGES as readonly string[]).includes(range)) return json(res, 400, { error: "That usage request isn't valid." });
+          if (vmid !== null && (!/^\d{1,9}$/.test(vmid) || (type !== "qemu" && type !== "lxc"))) return json(res, 400, { error: "That usage request isn't valid." });
+          const base = `/nodes/${encodeURIComponent(name)}${vmid === null ? "" : `/${type}/${vmid}`}`;
+          const raw = await pve.get<RawPoint[]>(`${base}/rrddata?timeframe=${range}&cf=AVERAGE`, session.ticket);
+          return json(res, 200, buildUsage(Array.isArray(raw) ? raw : [], vmid === null ? "node" : "guest", range as Range));
         }
         if (route === "/api/storage-map") {
           const name = params.get("server") ?? "";

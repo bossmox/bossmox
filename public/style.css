@@ -394,3 +394,30 @@ dd.agenthelp code{font-size:12px}
 .restartname input{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface)}
 
 #mtarget{width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface)}
+
+/* Usage graphs (ADR 0022). Series colours checked for colour-blind separation and contrast on each look's surface. */
+:root[data-look="daylight"]{--series1:#0E7EA6;--series2:#eb6834}
+:root[data-look="dusk"]{--series1:#3987e5;--series2:#d95926}
+:root[data-look="workbench"]{--series1:#2747C4;--series2:#eb6834}
+.usage{margin-top:22px}
+.uhead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.uhead h3{margin:0}
+.uhead .seg{flex:none}
+.ugrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px 20px}
+.uchart{margin:0;min-width:0}
+.uchart figcaption{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:13px;margin-bottom:6px;flex-wrap:wrap}
+.uchart figcaption span{color:var(--muted);font-variant-numeric:tabular-nums}
+.ukey{display:flex;gap:12px}
+.ukey i,.utip i{display:inline-block;width:10px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
+i.s1{background:var(--series1)}i.s2{background:var(--series2)}
+.uplot{position:relative;height:96px;padding-left:0}
+.uplot svg{display:block;width:100%;height:100%;overflow:visible}
+.uscale{position:absolute;top:-2px;left:2px;font-size:11px;color:var(--muted);background:color-mix(in srgb,var(--surface) 80%,transparent);padding:0 3px;border-radius:3px;pointer-events:none}
+.ugridline{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke;stroke-dasharray:3 4}
+.ubase{stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke}
+.uline{fill:none;stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round}
+.uline.s1{stroke:var(--series1)}.uline.s2{stroke:var(--series2)}
+.ucross{stroke:var(--muted);stroke-width:1;vector-effect:non-scaling-stroke}
+.utip{position:absolute;top:4px;transform:translateX(-50%);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-s);box-shadow:var(--shadow);padding:5px 8px;font-size:12px;white-space:nowrap;pointer-events:none;display:grid;gap:1px;z-index:2;font-variant-numeric:tabular-nums}
+.utip[hidden]{display:none}
+.uaxis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px}
