@@ -17,12 +17,33 @@ A fresh Proxmox install points at the paid (enterprise) update channel, for both
 - **Plain words for the half-broken case.** With the free channel on and Ceph's paid source still on, updates do download (13 listed in the lab), but every check ends in an error. The screen says that, rather than "can't download".
 - Per node, from the node's screen, because each node has its own sources. Proxmox needs Sys.Modify on the node; without it the person gets Proxmox's refusal in plain words.
 
+## In the setup wizard
+
+Rocky (2026-11-09): "the wizard should ask if they have a license, and default to the free tier." Step 5 of 6, after the cluster and before Finish, asks "Do you have a Proxmox subscription?" with three choices: **No, use the free channel** (picked to start with), **Yes, I have a subscription**, and **Leave it as it is** for anyone with their own sources.
+
+- It switches every online node in the cluster through the same function as the Nodes screen.
+- For Yes, every node's subscription is checked before anything changes, so a missing key never leaves the cluster half switched. The message names the node and says where the key goes.
+- An offline node, or one that fails, is listed in plain words; the others still switch, and the person can try again or finish anyway.
+- Entering a subscription key in BossMox isn't offered yet. The key goes in on the node's Subscription page in Proxmox.
+
 ## Plan
 
 1. Pure functions: what to add and what to turn off, given Proxmox's answer and the target. Tested against the real answer captured from a lab node.
 2. One named action, `update-channel`, with the target as its only input.
 3. The Overview's warning gets a button; the Updates tab's channel line gets one when a switch makes sense.
 4. Lab: put a test node back to a fresh install's sources, switch from the browser, check the files and that the update check finishes clean. Then switch back to make sure nothing is left behind.
+
+## Tested
+
+- 153 unit tests pass. The new ones use Proxmox's real answer from a lab node with a fresh install's sources (`test/apt-fresh-install.json`), and the wizard tests run against a pretend node whose sources change the way Proxmox's do, refusing a stale digest. Proven able to fail: dropping the Ceph add, turning off everything, and skipping the subscription check each break a test.
+- **Nodes screen, in the browser:** bmx-node3 set to a fresh install's sources showed "Updates can't download" and Use the free channel. The switch finished with the check for updates ending TASK OK and 13 updates listed. On the node, the paid sources were off but still there and `apt-get update` gave no errors. Node put back afterward.
+- **Wizard, in the browser:** a throwaway BossMox installed on bmx-solo, the node set to a fresh install's sources. Free was picked to start with. Yes was refused with "bmx-solo doesn't have an active subscription..." and nothing changed. Free then switched the node, Proxmox's check for updates finished OK, and setup finished to the sign-in page. VM removed and sources put back afterward.
+- **Found on the way:** on a phone-width screen the sign-in and setup box ran off the right edge, on every wizard screen. The page's grid grew to fit the box. Fixed and checked at 390 px wide: the box sits 16 px in from each edge.
+
+## Not tested
+
+- A node with a real subscription, so the enterprise switch itself has only run in the unit tests.
+- A node with Ceph actually installed.
 
 ## Found while building
 
