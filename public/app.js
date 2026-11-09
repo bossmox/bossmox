@@ -2732,9 +2732,12 @@ document.addEventListener("click", (e) => {
   if (d.bmupdate) {
     const u = S.data?.update;
     if (!u?.available) return;
-    const first = onlineNodes()[0];
+    // The update script looks for the BossMox VM on the node it runs on, so it has to run where that VM is.
+    const home = S.data.vms.filter((v) => v.name === "bossmox");
+    const first = home.length === 1 && onlineNodes().includes(home[0].node) ? home[0].node : null;
+    const where = first ? `on ${esc(first)}, the node that holds the BossMox VM` : "on the node that holds the BossMox VM";
     return dialog(`<h3>Update to BossMox ${esc(u.available.version)}</h3>
-      <p>Run this on any Proxmox node, in its console or over SSH. It downloads the new version, checks it, and restarts BossMox. Your settings stay, and your guests aren't touched. Anyone signed in is signed out once.</p>
+      <p>Run this as root ${where}, in its console or over SSH. It downloads the new version, checks it, and restarts BossMox. Your settings stay, your guests aren't touched, and if the new version doesn't start, the old one comes back. Anyone signed in is signed out once.</p>
       <pre class="tasklog whole updcmd">${esc(u.command)}</pre>
       <p class="meta"><a href="${esc(u.available.url)}" target="_blank" rel="noopener noreferrer">What's new in ${esc(u.available.version)}</a></p>
       <div class="row-end"><button class="btn" data-dlg="cancel">Close</button>${first ? `<button class="btn" data-updconsole="${esc(first)}">Open ${esc(first)}'s console</button>` : ""}<button class="btn primary" data-copyupdate="1">Copy the command</button></div>`);

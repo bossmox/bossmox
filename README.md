@@ -106,6 +106,8 @@ Found a security problem? Please report it privately; see [SECURITY.md](SECURITY
 
 ## Updating, starting over, and removing it
 
+BossMox checks GitHub for a new version every 6 hours and tells you on the desktop and in the health check. Each check tells GitHub this BossMox's internet address; you can turn it off in the health check.
+
 To update, run this as root on the node that holds the BossMox VM. Your settings stay, everyone is signed out while it restarts, and if the new version doesn't start, the old one comes back:
 
 ```sh
