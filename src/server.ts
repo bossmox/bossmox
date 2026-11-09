@@ -17,6 +17,7 @@ import { snapshotFix, addDiskForm, addNicForm, growForm, HardwareError, pickAddr
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { applyChannel, ChannelError } from "./update-channel.js";
 import { plainError } from "./plain-errors.js";
+import { buildHealth } from "./health.js";
 import { buildStorageMap, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import {
   buildMovePlan,
@@ -335,6 +336,52 @@ function snapshotName(body: Record<string, unknown>): string {
   return snap;
 }
 
+/** BossMox's own address comes from DHCP when its VM's network file says so. Null when it isn't running in its VM. */
+function ownAddressFromDhcp(): boolean | null {
+  try {
+    const text = readFileSync("/etc/network/interfaces", "utf8");
+    return /^\s*iface\s+eth0\s+inet\s+dhcp/m.test(text) ? true : /^\s*iface\s+eth0\s+inet\s+static/m.test(text) ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Everything the health check looks at (ADR 0017), asked in parallel. A part that can't be read is left out, not failed. */
+async function loadHealth(session: Session) {
+  const t = session.ticket;
+  const data = await overview(session);
+  const online = data.nodes.filter((n) => n.online).map((n) => n.name);
+  const weekAgo = Date.now() / 1000 - 7 * 86400;
+  const [status, nodeConfig, qdevice, jobs, tasks, details, maps] = await Promise.all([
+    pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", t).catch(() => []),
+    pve.get<{ node?: string; quorum_votes?: string | number }[]>("/cluster/config/nodes", t).catch(() => []),
+    pve.get<Record<string, unknown>>("/cluster/config/qdevice", t).catch(() => ({})),
+    pve.get<{ id?: string; storage?: string; enabled?: number }[]>("/cluster/backup", t).catch(() => []),
+    pve.get<(RawTask & { node?: string })[]>("/cluster/tasks", t).catch(() => []),
+    Promise.all(online.map((n) => loadServerDetail(n, t).catch(() => null))),
+    Promise.all(online.map((n) => storageMapFor(n, t, data).then((r) => r.map).catch(() => null))),
+  ]);
+  const cluster = status.find((x) => x.type === "cluster");
+  const names = new Map(data.vms.map((v) => [String(v.id), v.name]));
+  return buildHealth({
+    nodes: data.nodes.map((n) => ({ name: n.name, online: n.online })),
+    ...(cluster ? { cluster: { quorate: cluster.quorate === 1 } } : {}),
+    votes: nodeConfig.map((n) => ({ node: n.node ?? "", votes: Number(n.quorum_votes ?? 1) })),
+    tieBreaker: Object.keys(qdevice ?? {}).length > 0,
+    channels: details.flatMap((d) => (d?.channel ? [{ node: d.name, ...d.channel }] : [])),
+    updates: details.flatMap((d) => (d?.updates ? [{ node: d.name, total: d.updates.total }] : [])),
+    guests: data.vms,
+    unscheduled: data.vms.filter((v) => v.issues.some((i) => i.kind === "no-backup")).map((v) => v.id),
+    jobs: jobs.map((j) => ({ id: j.id ?? "", storage: j.storage ?? "", enabled: j.enabled !== 0 })),
+    failedBackups: tasks
+      .filter((x) => x.type === "vzdump" && x.status && x.status !== "OK" && (x.endtime ?? 0) > weekAgo)
+      .sort((a, b) => (b.endtime ?? 0) - (a.endtime ?? 0))
+      .map((x) => ({ node: x.node ?? "", guest: names.get(x.id ?? "") ?? "", at: x.endtime ?? 0 })),
+    maps: maps.filter((m): m is NonNullable<typeof m> => m !== null),
+    ownDhcp: ownAddressFromDhcp(),
+  });
+}
+
 /** Waits for a Proxmox task to finish, and fails with its own words if it didn't end OK. */
 async function finishTask(node: string, upid: string, who: Identity, seconds: number) {
   const path = `/nodes/${encodeURIComponent(node)}/tasks/${encodeURIComponent(upid)}/status`;
@@ -449,6 +496,17 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
     // Force off has to win over a shutdown that's stuck waiting for the guest.
     return pve.post<string>(`${path}/status/${power}`, who, power === "stop" ? { "overrule-shutdown": "1" } : {});
+  },
+  "boot-on": async (_name, who, body) => {
+    const ids = text(body.guests, 400);
+    if (!/^\d+(,\d+)*$/.test(ids)) throw new AuthError(400, "That request isn't valid.");
+    const data = await loadOverview(who.ticket);
+    for (const id of ids.split(",").map(Number)) {
+      const v = data.vms.find((g) => g.id === id);
+      if (!v) continue;
+      await pve.put<null>(`/nodes/${encodeURIComponent(v.node)}/${v.type}/${id}/config`, who, { onboot: "1" });
+    }
+    return null;
   },
   "snapshot-fix": async (name, who, body) => {
     const { id, path } = guestPath(name, { ...body, type: "qemu" });
@@ -1036,7 +1094,7 @@ const handler: http.RequestListener = async (req, res) => {
       }
       return json(res, 200, { realms });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/setup-plan" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/health" || route === "/api/setup-plan" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -1097,6 +1155,7 @@ const handler: http.RequestListener = async (req, res) => {
           });
           return json(res, 200, { list: buildStorageList(config, usage) });
         }
+        if (route === "/api/health") return json(res, 200, { checks: await loadHealth(session) });
         if (route === "/api/setup-plan") {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });

@@ -8,6 +8,7 @@ const GLYPHS = {
   storage: '<ellipse cx="16" cy="8" rx="11" ry="4"/><path d="M5 8v16c0 2 5 4 11 4s11-2 11-4V8M5 16c0 2 5 4 11 4s11-2 11-4"/>',
   network: '<circle cx="16" cy="6" r="3"/><circle cx="6" cy="25" r="3"/><circle cx="26" cy="25" r="3"/><path d="M16 9v8M16 17H6v5M16 17h10v5"/>',
   backups: '<path d="M5 16a11 11 0 1 0 4-8.5L5 11V5"/><path d="M16 10v7l5 3"/>',
+  health: '<path d="M16 27s-10-6-10-13a5.5 5.5 0 0 1 10-3 5.5 5.5 0 0 1 10 3c0 7-10 13-10 13z"/><path d="M9 16h4l2-4 3 7 2-3h3"/>',
 };
 const APPS = {
   vms: { title: "Virtual Machines", color: "#0E7EA6", w: 920, h: 610 },
@@ -17,6 +18,7 @@ const APPS = {
   network: { title: "Network", color: "#2F7A7E", w: 860, h: 580 },
   tasklog: { title: "All tasks", color: "#3C6E9E", w: 860, h: 610, noIcon: true },
   backups: { title: "Backups", color: "#C43838", w: 860, h: 610 },
+  health: { title: "Health check", color: "#178A5F", w: 760, h: 640 },
   terminal: { title: "Install updates", color: "#20262A", w: 860, h: 560, noIcon: true },
   console: { title: "Console", color: "#20262A", w: 980, h: 680, noIcon: true },
 };
@@ -154,6 +156,7 @@ function renderHealth() {
   const shown = issues.filter((i) => !kept.includes(noticeKey(i)));
   const heading = shown.length ? `${count(shown.length)} worth a look` : issues.length ? "Nothing new worth a look" : "Everything looks good";
   const controls = [
+    `<button class="linkbtn" data-open="health">Open the health check</button>`,
     shown.length ? `<button class="linkbtn" data-noticetoggle="1" aria-expanded="${!notes.collapsed}">${notes.collapsed ? "Show notices" : "Hide notices"}</button>` : "",
     kept.length ? `<button class="linkbtn" data-noticerestore="1">Bring back ${kept.length} dismissed</button>` : "",
   ].filter(Boolean).join("");
@@ -169,6 +172,54 @@ function renderHealth() {
     }).join("")}</div>
     ${shown.length && !notes.collapsed ? `<div class="look-items">${shown.map((i) => `<div class="look-row"><button class="look-item" ${i.vmId ? `data-vm="${i.vmId}"` : 'data-open="storage"'}><span class="dot warn"></span><span>${esc(i.title)}</span></button><button class="look-x" data-noticex="${esc(noticeKey(i))}" aria-label="Dismiss ${esc(i.title)}" title="Dismiss">&times;</button></div>`).join("")}</div>` : ""}
     ${controls ? `<div class="look-controls">${controls}</div>` : ""}`;
+}
+
+/* Health check (ADR 0017): every check, the passes included, each problem with its fix. */
+const HC_ORDER = { bad: 0, warn: 1, ok: 2 };
+const HC_WORDS = { bad: "Needs attention", warn: "Worth a look", ok: "Looks good" };
+function healthFix(f) {
+  if (!f) return "";
+  const b = (attrs) => `<button class="btn" ${attrs}>${esc(f.label)}</button>`;
+  switch (f.kind) {
+    case "channel": return b(`data-channel="${esc(f.channel)}" data-channelserver="${esc(f.node)}"`);
+    case "updates": return b(`data-hcupdates="${esc(f.node)}"`);
+    case "protect": return b(`data-protect="1"`);
+    case "add-storage": return b(`data-hcadd="1"`);
+    case "open-storage": return b(`data-hcstore="${esc(f.node ?? "")}"`);
+    case "tasks": return b(`data-tasklog="${esc(f.node)}"`);
+    case "boot-on": return b(`data-hcboot="${esc(f.vmids.join(","))}"`);
+    case "open-vm": return b(`data-vm="${f.vmids[0]}"`);
+    default: return "";
+  }
+}
+function drawHealthCheck() {
+  const box = $("#hcbox");
+  if (!box) return;
+  const checks = S.healthChecks;
+  if (!checks) {
+    box.innerHTML = `<p class="empty">${esc(S.healthError || "Checking everything. This takes a few seconds.")}</p>`;
+    return;
+  }
+  const bad = checks.filter((c) => c.status === "bad").length;
+  const warn = checks.filter((c) => c.status === "warn").length;
+  const head = bad ? `${bad === 1 ? "One thing needs" : `${bad} things need`} attention` : warn ? `${warn === 1 ? "One thing is" : `${warn} things are`} worth a look` : "Everything looks good";
+  const groups = ["Nodes", "Backups", "Storage", "Guests", "BossMox"].map((g) => [g, checks.filter((c) => c.group === g).sort((a, b) => HC_ORDER[a.status] - HC_ORDER[b.status])]).filter(([, l]) => l.length);
+  box.innerHTML = `<div class="sttop"><div><h2 class="hchead">${esc(head)}</h2><p class="meta" style="margin:2px 0 0">${checks.length} checks, ${checks.filter((c) => c.status === "ok").length} passed.</p></div><div class="actions"><button class="btn" data-hcagain="1">Check again</button></div></div>
+    ${groups.map(([g, list]) => `<h3 class="sthd">${esc(g)}</h3><div class="stgroup hcgroup">${list.map((c) => `<div class="hcrow ${c.status}"><span class="dot ${c.status === "ok" ? "running" : "warn"}" aria-hidden="true"></span>
+      <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" ? "" : healthFix(c.fix)}</div></div>`).join("")}</div>`).join("")}`;
+}
+async function loadHealthCheck() {
+  const run = S.loadRun;
+  try {
+    const { checks } = await signal("api/health");
+    if (run !== S.loadRun) return;
+    S.healthChecks = checks;
+    S.healthError = "";
+  } catch (err) {
+    if (err.message === "signed out" || run !== S.loadRun) return;
+    S.healthError = err.message || "BossMox lost contact with Proxmox.";
+  }
+  drawHealthCheck();
 }
 
 /* Notices are one person's view, so this lives in the browser. The problem itself stays on the guest's own page. */
@@ -253,6 +304,10 @@ function render(app) {
   if (app === "backups") {
     drawBackups();
     loadBackups();
+  }
+  if (app === "health") {
+    drawHealthCheck();
+    loadHealthCheck();
   }
   if (app === "storage") {
     drawStore();
@@ -2507,6 +2562,7 @@ const RENDER = {
   tasklog: () => `<div class="vms"><aside><div id="tlnodes"></div></aside><div id="tlbox"><div class="tltools"><input class="search" id="tlq" type="search" placeholder="Find a task" aria-label="Find a task" value="${esc(S.tlQ ?? "")}"><select id="tlshow" aria-label="Which tasks"><option value="all">All tasks</option><option value="problems">Problems only</option></select></div><div id="tlrows"></div></div></div>`,
   network: () => `<div class="vms"><aside><div id="netlist"></div></aside><div id="netdetail"></div></div>`,
   backups: () => `<div id="bkbox" class="bkbox"></div>`,
+  health: () => `<div id="hcbox" class="bkbox"></div>`,
 };
 
 /* Events */
@@ -2655,6 +2711,34 @@ document.addEventListener("click", (e) => {
       await loadDisks(node);
       await afterStorage();
     });
+  }
+  if (d.hcagain) {
+    S.healthChecks = null;
+    drawHealthCheck();
+    return loadHealthCheck();
+  }
+  if (d.hcupdates) {
+    openWin("monitor");
+    pickServer(d.hcupdates);
+    S.serverTab = "updates";
+    return renderServerDetail();
+  }
+  if (d.hcadd) {
+    openWin("storage");
+    return askSetup();
+  }
+  if (d.hcstore !== undefined) {
+    if (d.hcstore) S.storeNode = d.hcstore;
+    openWin("storage");
+    return drawStore();
+  }
+  if (d.hcboot) {
+    const ids = d.hcboot.split(",").map(Number);
+    const names = ids.map((id) => S.data?.vms.find((v) => v.id === id)?.name).filter(Boolean);
+    return confirmAction(`Start ${names.length === 1 ? names[0] : `${names.length} guests`} at boot?`, `${names.join(", ")} will start by themselves whenever ${names.length === 1 ? "its node" : "their nodes"} start, after a power cut or an update restart. Nothing changes while ${names.length === 1 ? "it's" : "they're"} running now.`, "Start at boot", () => runAction("boot-on", onlineNodes()[0], "Saving", { guests: ids.join(",") }, async () => {
+      await refresh();
+      await loadHealthCheck();
+    }));
   }
   if (d.snapfix) {
     const v = S.data?.vms.find((g) => g.id === +d.snapfix);
