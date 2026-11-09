@@ -269,6 +269,7 @@ dd.agenthelp{grid-column:1/-1;margin:-4px 0 6px}
 dd.agenthelp small{display:block;color:var(--muted);line-height:1.5}
 dd.agenthelp code{font-size:12px}
 .choice[disabled]{opacity:.55;cursor:not-allowed}
+.choice .soon{display:inline-block;margin-top:6px;font-size:12px;font-weight:650;padding:1px 8px;border-radius:10px;background:var(--surface2);color:var(--muted)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .stitems .snap{padding:7px 0}
 @media (max-width:760px){.stdisk,.stpool .sthead,.sttop{flex-wrap:wrap}.sttop .stnode{max-width:none;flex:1 1 100%}}

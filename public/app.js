@@ -623,13 +623,18 @@ function drawSetup(problem = "") {
   const choice = (key, value, title, line, on, disabled = false) => `<button class="choice ${on ? "on" : ""}" role="radio" aria-checked="${on}" data-setup="${key}" data-setupval="${value}" ${disabled ? "disabled" : ""}><b>${esc(title)}</b><small>${esc(line)}</small></button>`;
   const where = `<p class="stq">Where is it?</p><div class="choices" role="radiogroup" aria-label="Where is it">
     ${choice("where", "drive", "A drive in this computer", drives.length ? `${drives.length} on ${node} can be used.` : `${node} has no drive that can be used. Every drive already holds something.`, st.where === "drive", !drives.length)}
-    ${choice("where", "nas", "A NAS or file server", "Shared folders over the network. Every node can use them.", st.where === "nas")}</div>`;
+    ${choice("where", "nas", "A NAS or file server", "Storage over the network. Every node can use it.", st.where === "nas")}</div>`;
+  // iSCSI is on the way (Rocky, 2026-11-09): shown so people know, greyed out until it's built and tested.
+  const nasPart = st.where !== "nas" ? "" : `<p class="stq">How does it share?</p><div class="choices" role="radiogroup" aria-label="How it shares" style="grid-template-columns:1fr">
+    ${choice("share", "nfs", "NFS", "Shared folders, the usual choice for Linux and most NAS boxes.", false)}
+    ${choice("share", "smb", "SMB", "Windows file sharing. Needs a username and password.", false)}
+    <button class="choice" role="radio" aria-checked="false" aria-disabled="true" disabled><b>iSCSI</b><small>A disk on the NAS, used as if it were inside the node.</small><span class="soon">Coming soon</span></button></div>`;
   const drivePart = st.where !== "drive" ? "" : `
     <p class="stq">Which ${drives.length > 1 ? "drives" : "drive"}?</p><fieldset class="uses"><legend class="sr">Drives</legend>${drives.map((d) => `<label class="createcheck"><input type="checkbox" data-setupdisk="${esc(d.path)}" ${st.devices.has(d.path) ? "checked" : ""}> ${esc(d.model || d.path)}, ${sizeWords(d.sizeGb)}${d.model ? ` <small class="inl">${esc(d.path)}</small>` : ""} <small class="inl">${d.free ? "empty" : `has old data (${esc(d.used)})`}</small></label>`).join("")}</fieldset>
     <p class="stq">What's it for?</p><div class="choices" role="radiogroup" aria-label="What it's for" style="grid-template-columns:1fr">${PURPOSES.map(([k, t, l]) => choice("purpose", k, t, l, st.purpose === k)).join("")}</div>
     <label class="field restartname"><span>Name</span><input id="setupname" maxlength="31" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(st.name)}"></label>
     ${(S.diskData?.[node] ?? []).some((d) => d.free) ? `<p class="meta"><button class="linkbtn" data-diskmake="1">Choose the type myself</button></p>` : ""}`;
-  dialog(`<h3>Add storage to ${esc(node)}</h3>${problem ? `<p class="loginerr">${esc(problem)}</p>` : ""}${where}${drivePart}
+  dialog(`<h3>Add storage to ${esc(node)}</h3>${problem ? `<p class="loginerr">${esc(problem)}</p>` : ""}${where}${nasPart}${drivePart}
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button>${st.where === "drive" ? `<button class="btn primary" data-setupnext="1">Continue</button>` : ""}</div>`);
 }
 async function setupSummary() {
@@ -748,14 +753,15 @@ const afterStorage = async () => {
   await refresh();
   await loadStorage();
 };
-function askAddShare() {
+function askAddShare(kind = "") {
   S.scan = null;
-  dialog(`<h3>Add network storage</h3><p>BossMox looks at what the NAS shares, so you can pick from a list.</p>
+  dialog(`<h3>Add ${kind === "smb" ? "an SMB share" : kind === "nfs" ? "an NFS share" : "network storage"}</h3><p>BossMox looks at what the NAS shares, so you can pick from a list.</p>
     <p class="loginerr" id="formerr" hidden></p>
-    <label class="field restartname"><span>Type</span><select id="sharekind"><option value="nfs">NFS</option><option value="smb">SMB (Windows sharing)</option></select></label>
+    <label class="field restartname" ${kind ? "hidden" : ""}><span>Type</span><select id="sharekind"><option value="nfs" ${kind === "smb" ? "" : "selected"}>NFS</option><option value="smb" ${kind === "smb" ? "selected" : ""}>SMB (Windows sharing)</option></select></label>
     <label class="field restartname"><span>NAS address</span><input id="sharehost" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="192.168.1.20"></label>
     <div id="smbfields" hidden><div class="createrow"><label class="field"><span>Username</span><input id="shareuser" autocomplete="off" autocapitalize="none" spellcheck="false"></label><label class="field"><span>Password</span><input id="sharepass" type="password" autocomplete="new-password"></label></div></div>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-stscan="1">Look for shares</button></div>`);
+  $("#smbfields").hidden = kind !== "smb";
   $("#sharehost").focus();
 }
 async function scanShares() {
@@ -2629,7 +2635,7 @@ document.addEventListener("click", (e) => {
   if (d.stuses) return saveUses();
   if (d.setupstart) return askSetup();
   if (d.setup) {
-    if (d.setup === "where" && d.setupval === "nas") return askAddShare();
+    if (d.setup === "share") return askAddShare(d.setupval);
     if (d.setup === "where") S.setup.where = d.setupval;
     if (d.setup === "purpose") {
       S.setup.name = $("#setupname")?.value.trim() || S.setup.name;
