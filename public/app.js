@@ -2228,7 +2228,7 @@ async function openTerminal(server) {
     dialog(`<h3>Couldn't start the install</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
   }
 }
-function showTerminal(server, id, title, help, guest = null) {
+function showTerminal(server, id, title, help, guest = null, typed = null) {
   const isConsole = guest !== null;
   const buttons = typeof guest === "number" ? `<div class="actions conacts" data-guest="${guest}"></div>` : "";
   APPS.terminal.title = title;
@@ -2255,9 +2255,23 @@ function showTerminal(server, id, title, help, guest = null) {
     };
     const decoder = new TextDecoder();
     let recent = "";
+    let waiting = typed;
+    if (typed) setTimeout(() => {
+      if (!waiting || term?.socket !== socket) return;
+      waiting = null;
+      const h = $(".vnctools span", wins.terminal);
+      if (h) h.textContent = "The prompt didn't appear, so nothing was typed. Paste the command from the update window and press Enter.";
+    }, 20000);
     socket.onmessage = (e) => {
       const bytes = new Uint8Array(e.data);
       xterm.write(bytes);
+      if (waiting) {
+        recent = (recent + decoder.decode(bytes, { stream: true })).slice(-400);
+        if (atPrompt(recent)) {
+          socket.send(`0:${utf8.encode(waiting).length}:${waiting}`);
+          waiting = null;
+        }
+      }
       if (term?.done || isConsole) return;
       // Proxmox prints this when the updater finishes, then leaves a root shell open.
       recent = (recent + decoder.decode(bytes)).slice(-200);
@@ -2283,6 +2297,9 @@ function showTerminal(server, id, title, help, guest = null) {
     drawConsoleActions();
   }
 }
+
+/** True when a terminal's latest output ends at a shell prompt (root's # or a user's $), colours stripped. */
+const atPrompt = (text) => /[#$] ?$/.test(text.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "").replace(/\r/g, ""));
 
 /* Console: a container gets a terminal, and a VM shows its screen */
 let vnc = null;
@@ -2321,14 +2338,18 @@ function loadNoVnc() {
     document.head.append(s);
   });
 }
-async function openNodeConsole(server) {
+/** typed: a command to type at the node's prompt without pressing Enter, so the person still starts it (ADR 0020). */
+async function openNodeConsole(server, typed = null) {
   if (term) return dialog(`<h3>A terminal is already open</h3><p>Close it first, then open this console.</p>${closeRow}`);
   try {
     const res = await post("api/action/node-console", { server });
     const body = await res.json();
     if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
     if (!res.ok) throw new Error(body.error);
-    showTerminal(server, body.terminal, `Console: ${server}`, `Console for ${esc(server)}. Anything you run here changes the node right away.`, "node");
+    const help = typed
+      ? `The BossMox update command is typed in for you. Press Enter to start it, then type y when it asks. Near the end BossMox restarts: this window closes, and you sign in again on the new version.`
+      : `Console for ${esc(server)}. Anything you run here changes the node right away.`;
+    showTerminal(server, body.terminal, typed ? `Update BossMox on ${server}` : `Console: ${server}`, help, "node", typed);
   } catch (err) {
     dialog(`<h3>Couldn't open the console</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
   }
@@ -2740,11 +2761,14 @@ document.addEventListener("click", (e) => {
       <p>Run this as root ${where}, in its console or over SSH. It downloads the new version, checks it, and restarts BossMox. Your settings stay, your guests aren't touched, and if the new version doesn't start, the old one comes back. Anyone signed in is signed out once.</p>
       <pre class="tasklog whole updcmd">${esc(u.command)}</pre>
       <p class="meta"><a href="${esc(u.available.url)}" target="_blank" rel="noopener noreferrer">What's new in ${esc(u.available.version)}</a></p>
-      <div class="row-end"><button class="btn" data-dlg="cancel">Close</button>${first ? `<button class="btn" data-updconsole="${esc(first)}">Open ${esc(first)}'s console</button>` : ""}<button class="btn primary" data-copyupdate="1">Copy the command</button></div>`);
+      ${first ? `<p class="meta">Update now opens ${esc(first)}'s console here with the command typed in. Press Enter, then type y when it asks.</p>` : ""}
+      <div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn ${first ? "" : "primary"}" data-copyupdate="1">Copy the command</button>${first ? `<button class="btn primary" data-updnow="${esc(first)}">Update now</button>` : ""}</div>`);
   }
-  if (d.updconsole) {
+  if (d.updnow) {
+    const cmd = S.data?.update?.command;
+    if (!cmd) return;
     closeDialog();
-    return openNodeConsole(d.updconsole);
+    return openNodeConsole(d.updnow, cmd);
   }
   if (d.copyupdate) {
     const cmd = S.data?.update?.command ?? "";
