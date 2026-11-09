@@ -2,86 +2,103 @@
 
 **BossMox: management app for Proxmox Virtual Environment.**
 
-A desktop-style web interface for Proxmox VE, organized around what you came to do. Everyday tasks stay in plain English, and advanced settings stay one click away.
+[![Tests](https://github.com/bossmox/bossmox/actions/workflows/test.yml/badge.svg)](https://github.com/bossmox/bossmox/actions/workflows/test.yml)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+![Status: preview](https://img.shields.io/badge/status-preview-orange.svg)
+
+A desktop in your browser for running Proxmox VE, organized around what you came to do. It's for people who know Windows, Hyper-V or ESXi and would rather not learn Linux storage and networking words to run a home lab or a small office. Everyday tasks are in plain English, and BossMox checks for itself before it erases anything.
+
+![The BossMox desktop, with a container open and the cluster's health beside it](docs/screenshots/desktop.png)
 
 BossMox is an independent project. It is not affiliated with or endorsed by Proxmox Server Solutions GmbH. Proxmox is a registered trademark of Proxmox Server Solutions GmbH.
 
-## Status
+## Install
 
-Early. Sign in with your normal Proxmox account, including authenticator-app 2FA. You see and do what your Proxmox permissions allow. You can start, stop, create, change, delete and open a console on VMs and containers, take snapshots, back up and restore on a schedule, and update a whole cluster one node at a time. It also shows nodes, storage, network, services and recent activity, and points out things worth a look. It can check a server for updates and install them in a live terminal. Everything it can change is listed in `ACTIONS` and the install route in `src/server.ts`.
-
-Hardware security keys (WebAuthn) and recovery codes don't work in BossMox yet. The setup wizard can't sign in with a one-time code yet, so finish setup as a root account without 2FA.
-
-## Install on a Proxmox node
-
-Run as root on a node, with `bossmox.tgz` beside the script. It creates one small Alpine VM and changes nothing else, then prints the address and a setup code. `--help` isn't needed: the options are at the top of the script.
+Run this as root on any Proxmox node, in the node's shell:
 
 ```sh
-bash install.sh --storage local-lvm --ip 192.168.1.20/24 --gateway 192.168.1.1
+bash -c "$(curl -fsSL https://github.com/bossmox/bossmox/releases/latest/download/install.sh)"
 ```
 
-Open the address, enter the code and follow the wizard. Use a fixed address or a DHCP reservation, because BossMox only answers on the address it was set up on.
+It shows what it will create and asks before doing anything. Then it makes one small VM (1 core, 256 MB of memory, 1 GB of disk), puts BossMox in it and changes nothing else on the node. It finishes by printing BossMox's address, a one-time setup code and the certificate's fingerprint. Open the address, check that the fingerprint your browser shows matches, enter the code, and a short setup wizard does the rest. Sign in with your normal Proxmox account from then on.
 
-To update it later, run this as root on the same node, with the new `bossmox.tgz` beside it. Settings stay, everyone is signed out when it restarts, and if the new version doesn't start, the old one goes back.
+To give it a fixed address, which is a good idea since your bookmark depends on it, add the options after `--`:
 
 ```sh
-bash update-bossmox.sh
+bash -c "$(curl -fsSL https://github.com/bossmox/bossmox/releases/latest/download/install.sh)" -- --ip 192.168.1.20/24 --gateway 192.168.1.1
 ```
 
-If a node has moved to a new network since Proxmox was installed, its `/etc/hosts` and certificate still name the old address. BossMox copes on a single node, but correct them before building a cluster.
+Other options (`--storage`, `--bridge`, `--vlan`, `--vmid`) are listed at the top of [install.sh](deploy/install.sh). A reservation in your router's DHCP settings works too.
 
-## Run it yourself
+**Needs:** Proxmox VE 9 (tested on 9.2), a node that can reach the internet during the install, and a storage that holds VM disks. Proxmox VE 8 isn't tested yet.
 
-1. Copy `/etc/pve/pve-root-ca.pem` from Proxmox to `./pve-root-ca.pem`.
-2. Copy `.env.example` to `.env` and fill in `PVE_URL`.
-3. Run:
+## What it does
+
+**Guests.** Make VMs and containers from an installer disc or a template, start, stop, restart, open a console, change settings in plain words, add disks and network cards, take and roll back snapshots, clone, make templates, move to another node, and delete with an honest answer about whether a backup exists.
+
+**Storage as disks and pools.** Each drive with the pools on it, what's using the space by name, whether snapshots work there and whether other nodes can use it. Add storage asks where it is and what it's for, then picks the type for you. See what's on a pool and clean up leftovers BossMox can prove nothing uses.
+
+![Storage shown as drives and the pools on them](docs/screenshots/storage.png)
+
+**Backups.** Protect everything in one step with a nightly schedule that covers new guests too, back up now, restore as a copy or in place, and warnings when backups would sit on the same computer as the guests.
+
+**Nodes and updates.** Switch to the free update channel in one click, check for and install updates in a live terminal, and update a whole cluster one node at a time, moving guests out of the way and back.
+
+**Health check.** Every check BossMox can make, the passes included, with the fix for each problem one click away.
+
+![The health check, with problems first and a fix beside each](docs/screenshots/health-check.png)
+
+**Setup.** A one-command install, a wizard that can build a cluster, and a question about your Proxmox subscription that sets the update channel for you.
+
+![Add storage asks where the storage is, then how a NAS shares it](docs/screenshots/add-storage.png)
+
+**Three looks.** Daylight, Dusk and Workbench, picked in the top bar.
+
+![The same desktop in Daylight, Dusk and Workbench](docs/screenshots/three-looks.png)
+
+## This is a preview
+
+It does a lot already, and everything in it is tested on a real Proxmox cluster, but there's more to come before a 1.0. Next up, in roughly this order: iSCSI storage, usage graphs, email alerts, USB passthrough, changing a node's or BossMox's own address safely, adding a node and a tie-breaker to a cluster, and high availability. Proxmox's own interface keeps working alongside BossMox for anything it doesn't cover yet.
+
+Hardware security keys (WebAuthn) and recovery codes don't work in BossMox yet; authenticator-app codes do. The setup wizard needs a root account without 2FA.
+
+## Keeping it safe
+
+- BossMox signs you in with your Proxmox account and does everything as you, so Proxmox's own permissions apply. There's no back door: it can only do the actions written into it.
+- Anything that erases or changes something asks you first and names it. BossMox checks for itself instead of trusting Proxmox to refuse, because sometimes Proxmox doesn't.
+- Its VM has no logins. Setup is unlocked by a code shown only on its console, and the root password used during setup isn't kept.
+- **Treat the BossMox VM like a node.** Every admin's password passes through it at sign-in, so only full admins should have any rights on it.
+
+Found a security problem? Please report it privately; see [SECURITY.md](SECURITY.md).
+
+## Updating, starting over, and removing it
+
+To update, run this as root on the node that holds the BossMox VM. Your settings stay, everyone is signed out while it restarts, and if the new version doesn't start, the old one comes back:
 
 ```sh
-docker build -t bossmox .
-docker run --rm --env-file .env -e PVE_CA_FILE=/ca.pem -e BOSSMOX_ALLOW_HTTP=1 \
-  -v "$PWD/pve-root-ca.pem:/ca.pem:ro" -p 127.0.0.1:8080:8080 bossmox
+bash -c "$(curl -fsSL https://github.com/bossmox/bossmox/releases/latest/download/update-bossmox.sh)"
 ```
 
-Then open http://localhost:8080.
-
-On a Proxmox cluster, the smallest setup is the Alpine VM in `deploy/`: 256 MB of memory and 1 GB of disk. A VM can move between servers while it runs, so BossMox stays online. List every server in `PVE_URL`, comma separated.
-
-Running BossMox outside the cluster is the most robust choice, because it keeps working when a node restarts.
-
-**Treat wherever BossMox runs like a node.** Every admin's password passes through it at sign-in, so anyone who controls that VM or container could capture them. If it runs on the cluster, give only full admins any rights on it, including console, power, backup and cloud-init rights. Running it off-cluster avoids this.
-
-The first time you visit a self-signed address, your browser warns you. Before you enter the setup code, open the certificate's details in the browser and compare its SHA-256 fingerprint with the one the install command printed, which the VM's console also shows next to the setup code. Clicking through without checking could hand your password to someone in the middle.
-
-Give BossMox its own name or address. Browsers share cookies across every port on a host, so an untrusted site on another port of the same address could interfere with sign-in.
-
-Behind a reverse proxy, pass the original `Host` header through, set `BOSSMOX_TRUSTED_PROXY` to the proxy's address, and add the public name to `BOSSMOX_ALLOWED_HOSTS`. The proxy must add the real client address to `X-Forwarded-For`.
-
-To use it from other machines, it needs HTTPS because passwords pass through it. Set `TLS_CERT_FILE` and `TLS_KEY_FILE`, or put it behind an HTTPS proxy and set `BOSSMOX_BEHIND_HTTPS_PROXY=1`. List the host names you use in `BOSSMOX_ALLOWED_HOSTS`. BossMox refuses to start on a network address without one of those, or `BOSSMOX_ALLOW_HTTP=1`, which is only for a port published to `127.0.0.1` as above.
-
-To try it without Proxmox, run `npm run mock`, and set `PVE_URL=http://127.0.0.1:8079`. Sign in as `demo` with the password `demo`.
-
-## How it's built
-
-Rocky Lott directs the product: what to build, the conventions, and what works and what doesn't. Claude, an AI model from Anthropic, writes much of the code.
-
-## Development
+To start setup again with a new code, run this on that node, with the VM's ID. Your nodes and guests aren't touched:
 
 ```sh
-npm ci
-npm test
-npm run build && npm start
-```
-
-## Starting setup over
-
-Nobody can log in to the BossMox VM itself: its accounts are locked. To start setup again with a new code, for example after losing it, run this as root on the Proxmox node that holds the VM, with the VM's ID:
-
-```
 qm guest exec <VM ID> -- bossmox-reset
 ```
 
-That clears BossMox's settings, and the VM's console shows a new setup code. Your Proxmox nodes and guests aren't touched.
+To remove BossMox completely: `qm destroy <VM ID> --purge 1`. Nothing else was changed, so nothing else needs undoing.
+
+## Running it somewhere else
+
+Docker, another machine, reverse proxies and development: see [docs/running-elsewhere.md](docs/running-elsewhere.md).
+
+## How it's built
+
+Rocky Lott directs the product: what to build, the conventions, and what works and what doesn't. Claude, an AI model from Anthropic, writes much of the code. Every change is tested, including on a real Proxmox cluster, and the reasons behind each decision are written down in [docs/adr](docs/adr).
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how, and for the terms contributions come under, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## License
 
-BossMox is free and open source under the [GNU Affero General Public License, version 3](LICENSE). You can use it, change it and share it. If you share a changed version, or run one for other people to use, you have to publish your changes under the same license. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) for how, and for the terms they come under.
+BossMox is free and open source under the [GNU Affero General Public License, version 3](LICENSE). You can use it, change it and share it. If you share a changed version, or run one for other people to use, you have to publish your changes under the same license.

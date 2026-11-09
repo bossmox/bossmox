@@ -1,0 +1,40 @@
+name: Something isn't working
+description: BossMox did something wrong, or something you expected didn't happen.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: For a security problem, please don't use an issue. Use the Security tab's private report instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. A screenshot helps.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: BossMox version
+      description: Shown beside the BossMox name in the top bar after you sign in, or on the VM's console.
+    validations:
+      required: true
+  - type: input
+    id: proxmox
+    attributes:
+      label: Proxmox VE version
+      placeholder: "9.2"
+  - type: dropdown
+    id: setup
+    attributes:
+      label: Your setup
+      options:
+        - One node
+        - A cluster
+    validations:
+      required: true
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
+      description: The browser you used, error text, or what's in the node's task log. Leave out passwords and addresses you don't want public.
