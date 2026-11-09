@@ -18,6 +18,8 @@ import { PveClient, PveError, type Identity } from "./pve.js";
 import { applyChannel, ChannelError } from "./update-channel.js";
 import { plainError } from "./plain-errors.js";
 import { buildHealth } from "./health.js";
+import { canChangeCluster, preferencesPath, readPreferences, scheduleWarnings, writePreferences, type Preferences } from "./preferences.js";
+import { settingsPath } from "./settings.js";
 import { buildStorageMap, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import {
   buildMovePlan,
@@ -97,8 +99,13 @@ const secureCookie = Boolean(config.tls) || config.behindProxy;
 const COOKIE = secureCookie ? "__Host-bossmox_session" : "bossmox_session";
 // A proxy on a custom port often drops that port from Host, so behind one the configured names are enough.
 const proxiedNames = config.behindProxy || config.trustedProxies.size > 0 ? config.publicNames : new Set<string>();
-type Loaded = Overview & { tasks: TaskFeed };
-const cache = new WeakMap<Session, { at: number; value: Promise<Loaded> }>();
+type Loaded = Overview & { tasks: TaskFeed; preferences: Preferences };
+const cache = new WeakMap<Session, { at: number; value: Promise<Loaded>; epoch: number }>();
+
+/** Cluster-wide preferences (ADR 0018), read once at start. A change bumps the epoch, so no cached view outlives it. */
+const PREFERENCES_FILE = preferencesPath(settingsPath(process.env));
+let preferences: Preferences = readPreferences(PREFERENCES_FILE);
+let preferencesEpoch = 0;
 
 async function fetchGuest(r: RawResource, ticket: string): Promise<[number, Guest]> {
   const base = `/nodes/${encodeURIComponent(r.node ?? "")}/${r.type}/${r.vmid}`;
@@ -121,15 +128,16 @@ async function loadOverview(ticket: string): Promise<Loaded> {
     pve.get<{ vmid: number }[]>("/cluster/backup-info/not-backed-up", ticket).catch(() => []),
     pve.get<(RawTask & { node?: string })[]>("/cluster/tasks", ticket).catch(() => []),
   ]);
-  const view = buildOverview(resources, new Map(details), notBackedUp);
-  return { ...view, tasks: buildTaskFeed(tasks, view.vms) };
+  // With backups done another way, nobody is warned about guests missing a Proxmox schedule (ADR 0018).
+  const view = buildOverview(resources, new Map(details), scheduleWarnings(preferences, notBackedUp));
+  return { ...view, tasks: buildTaskFeed(tasks, view.vms), preferences };
 }
 
 function overview(session: Session): Promise<Loaded> {
   const hit = cache.get(session);
-  if (hit && Date.now() - hit.at <= CACHE_MS) return hit.value;
+  if (hit && hit.epoch === preferencesEpoch && Date.now() - hit.at <= CACHE_MS) return hit.value;
   const value = loadOverview(session.ticket);
-  cache.set(session, { at: Date.now(), value });
+  cache.set(session, { at: Date.now(), value, epoch: preferencesEpoch });
   value.catch(() => cache.delete(session));
   return value;
 }
@@ -191,7 +199,7 @@ async function loadBackups(ticket: string) {
     pve.get<RawBackupJob[]>("/cluster/backup", ticket).catch(() => []),
     pve.get<{ vmid: number }[]>("/cluster/backup-info/not-backed-up", ticket).catch(() => []),
   ]);
-  return buildBackups(files.flat(), data.vms.map((v) => ({ id: v.id, name: v.name })), jobs, notBackedUp);
+  return { ...buildBackups(files.flat(), data.vms.map((v) => ({ id: v.id, name: v.name })), jobs, scheduleWarnings(preferences, notBackedUp)), backupsElsewhere: preferences.backupsElsewhere };
 }
 
 async function loadRestorePlan(name: string, type: "qemu" | "lxc", ticket: string) {
@@ -347,7 +355,7 @@ function snapshotName(body: Record<string, unknown>): string {
 
 /** The health check reads a lot of Proxmox, so each person's result is kept briefly (security review L8). */
 const HEALTH_CACHE_MS = 45_000;
-const healthCache = new WeakMap<Session, { at: number; value: Promise<ReturnType<typeof buildHealth>>; running: boolean }>();
+const healthCache = new WeakMap<Session, { at: number; value: Promise<ReturnType<typeof buildHealth>>; running: boolean; epoch: number }>();
 
 /** BossMox's own address comes from DHCP when its VM's network file says so. Null when it isn't running in its VM. */
 function ownAddressFromDhcp(): boolean | null {
@@ -385,6 +393,7 @@ async function loadHealth(session: Session) {
     updates: details.flatMap((d) => (d?.updates ? [{ node: d.name, total: d.updates.total }] : [])),
     guests: data.vms,
     unscheduled: data.vms.filter((v) => v.issues.some((i) => i.kind === "no-backup")).map((v) => v.id),
+    backupsElsewhere: preferences.backupsElsewhere,
     jobs: jobs.map((j) => ({ id: j.id ?? "", storage: j.storage ?? "", enabled: j.enabled !== 0 })),
     failedBackups: tasks
       .filter((x) => x.type === "vzdump" && x.status && x.status !== "OK" && (x.endtime ?? 0) > weekAgo)
@@ -522,6 +531,21 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
     // Force off has to win over a shutdown that's stuck waiting for the guest.
     return pve.post<string>(`${path}/status/${power}`, who, power === "stop" ? { "overrule-shutdown": "1" } : {});
+  },
+  "preferences-set": async (_name, who, body) => {
+    if (typeof body.backupsElsewhere !== "boolean") throw new AuthError(400, "That request isn't valid.");
+    // A cluster-wide choice needs the right to change the cluster's own settings in Proxmox (ADR 0018).
+    const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", who.ticket).catch((): Record<string, Record<string, number>> => ({}));
+    if (!canChangeCluster(perms)) throw new AuthError(403, "Your Proxmox account can't change settings for the whole cluster. That needs the Sys.Modify permission on the whole cluster (/).");
+    const next = { ...preferences, backupsElsewhere: body.backupsElsewhere };
+    try {
+      writePreferences(PREFERENCES_FILE, next);
+    } catch {
+      throw new AuthError(500, "BossMox couldn't save that setting. Nothing changed.");
+    }
+    preferences = next;
+    preferencesEpoch += 1;
+    return null;
   },
   "boot-on": async (_name, who, body) => {
     const ids = text(body.guests, 400);
@@ -1184,10 +1208,10 @@ const handler: http.RequestListener = async (req, res) => {
         }
         if (route === "/api/health") {
           const hit = healthCache.get(session);
-          const fresh = params.get("again") !== "1" && hit && Date.now() - hit.at <= HEALTH_CACHE_MS;
-          if (!fresh && !hit?.running) {
+          const fresh = params.get("again") !== "1" && hit && hit.epoch === preferencesEpoch && Date.now() - hit.at <= HEALTH_CACHE_MS;
+          if (!fresh && !(hit?.running && hit.epoch === preferencesEpoch)) {
             const value = loadHealth(session);
-            healthCache.set(session, { at: Date.now(), value, running: true });
+            healthCache.set(session, { at: Date.now(), value, running: true, epoch: preferencesEpoch });
             value.finally(() => {
               const now = healthCache.get(session);
               if (now?.value === value) now.running = false;
