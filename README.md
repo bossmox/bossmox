@@ -71,3 +71,7 @@ npm ci
 npm test
 npm run build && npm start
 ```
+
+## License
+
+BossMox is free and open source under the [GNU Affero General Public License, version 3](LICENSE). You can use it, change it and share it. If you share a changed version, or run one for other people to use, you have to publish your changes under the same license. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) for how, and for the terms they come under.
