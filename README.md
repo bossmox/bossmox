@@ -22,9 +22,9 @@ Run this as root on any Proxmox node, in the node's shell:
 bash -c "$(curl -fsSL https://github.com/bossmox/bossmox/releases/latest/download/install.sh)"
 ```
 
-It shows what it will create and asks before doing anything. Then it makes one small VM (1 core, 256 MB of memory, 1 GB of disk), puts BossMox in it and changes nothing else on the node. It finishes by printing BossMox's address, a one-time setup code and the certificate's fingerprint. Open the address, check that the fingerprint your browser shows matches, enter the code, and a short setup wizard does the rest. Sign in with your normal Proxmox account from then on.
+It asks for a fixed address for BossMox, with the gateway filled in from the node (press Enter to let your router pick one instead, though that can change after a restart and break your bookmark). Then it shows what it will create and asks before doing anything. It makes one small VM (1 core, 256 MB of memory, 1 GB of disk), puts BossMox in it and changes nothing else on the node. It finishes by printing BossMox's address, a one-time setup code and the certificate's fingerprint. Open the address, check that the fingerprint your browser shows matches, enter the code, and a short setup wizard does the rest. Sign in with your normal Proxmox account from then on.
 
-To give it a fixed address, which is a good idea since your bookmark depends on it, add the options after `--`:
+To set the address without being asked, for a script, add the options after `--`:
 
 ```sh
 bash -c "$(curl -fsSL https://github.com/bossmox/bossmox/releases/latest/download/install.sh)" -- --ip 192.168.1.20/24 --gateway 192.168.1.1
