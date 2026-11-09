@@ -77,3 +77,13 @@ test("a nearly full pool, an over-promised thin pool and a worn drive each show"
   assert.equal(by(checks, "wear-rockylab-/dev/nvme0n1")!.status, "warn");
   assert.equal(by(checks, "storage"), undefined, "no all-clear line while something's wrong");
 });
+
+test("with backups done another way, the schedule check is turned off, never passed, and says how to turn it back on", () => {
+  const input = { ...base(), unscheduled: [], backupsElsewhere: true, failedBackups: [{ node: "rockylab", guest: "HomeAssistant", at: 1 }] };
+  const checks = buildHealth(input);
+  const scheduled = by(checks, "scheduled")!;
+  assert.equal(scheduled.status, "off");
+  assert.match(scheduled.detail, /Check schedules again/);
+  assert.deepEqual(scheduled.fix, { kind: "backups-elsewhere", label: "Check schedules again" });
+  assert.equal(by(checks, "backup-failed")!.status, "bad", "failed Proxmox backups are still reported");
+});

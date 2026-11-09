@@ -175,8 +175,8 @@ function renderHealth() {
 }
 
 /* Health check (ADR 0017): every check, the passes included, each problem with its fix. */
-const HC_ORDER = { bad: 0, warn: 1, ok: 2 };
-const HC_WORDS = { bad: "Needs attention", warn: "Worth a look", ok: "Looks good" };
+const HC_ORDER = { bad: 0, warn: 1, ok: 2, off: 3 };
+const HC_WORDS = { bad: "Needs attention", warn: "Worth a look", ok: "Looks good", off: "Turned off" };
 function healthFix(f) {
   if (!f) return "";
   const b = (attrs) => `<button class="btn" ${attrs}>${esc(f.label)}</button>`;
@@ -189,6 +189,7 @@ function healthFix(f) {
     case "tasks": return b(`data-tasklog="${esc(f.node)}"`);
     case "boot-on": return b(`data-hcboot="${esc(f.vmids.join(","))}"`);
     case "open-vm": return b(`data-vm="${f.vmids[0]}"`);
+    case "backups-elsewhere": return b(`data-backupselsewhere="off"`);
     default: return "";
   }
 }
@@ -204,9 +205,9 @@ function drawHealthCheck() {
   const warn = checks.filter((c) => c.status === "warn").length;
   const head = bad ? `${bad === 1 ? "One thing needs" : `${bad} things need`} attention` : warn ? `${warn === 1 ? "One thing is" : `${warn} things are`} worth a look` : "Everything looks good";
   const groups = ["Nodes", "Backups", "Storage", "Guests", "BossMox"].map((g) => [g, checks.filter((c) => c.group === g).sort((a, b) => HC_ORDER[a.status] - HC_ORDER[b.status])]).filter(([, l]) => l.length);
-  box.innerHTML = `<div class="sttop"><div><h2 class="hchead">${esc(head)}</h2><p class="meta" style="margin:2px 0 0">${checks.length} checks, ${checks.filter((c) => c.status === "ok").length} passed.</p></div><div class="actions"><button class="btn" data-hcagain="1">Check again</button></div></div>
-    ${groups.map(([g, list]) => `<h3 class="sthd">${esc(g)}</h3><div class="stgroup hcgroup">${list.map((c) => `<div class="hcrow ${c.status}"><span class="dot ${c.status === "ok" ? "running" : "warn"}" aria-hidden="true"></span>
-      <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" ? "" : healthFix(c.fix)}</div></div>`).join("")}</div>`).join("")}`;
+  box.innerHTML = `<div class="sttop"><div><h2 class="hchead">${esc(head)}</h2><p class="meta" style="margin:2px 0 0">${checks.length} checks, ${checks.filter((c) => c.status === "ok").length} passed${checks.some((c) => c.status === "off") ? `, ${checks.filter((c) => c.status === "off").length} turned off` : ""}.</p></div><div class="actions"><button class="btn" data-hcagain="1">Check again</button></div></div>
+    ${groups.map(([g, list]) => `<h3 class="sthd">${esc(g)}</h3><div class="stgroup hcgroup">${list.map((c) => `<div class="hcrow ${c.status}"><span class="dot ${c.status === "ok" ? "running" : c.status === "off" ? "" : "warn"}" aria-hidden="true"></span>
+      <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" ? "" : healthFix(c.fix)}${c.id === "scheduled" && c.status === "warn" ? `<button class="btn" data-backupselsewhere="on">We back up another way</button>` : ""}</div></div>`).join("")}</div>`).join("")}`;
 }
 async function loadHealthCheck() {
   const run = S.loadRun;
@@ -1917,7 +1918,10 @@ function backupsPane() {
   const row = (x) => `<div class="snap"><div>${esc(when(x.takenAt))}<small>${esc(x.size)} on ${esc(x.storage)}, ${esc(x.node)}${x.notes ? `, ${esc(x.notes)}` : ""}</small></div><div class="actions"><button class="btn" data-bkrestore="${esc(x.volid)}">Restore</button><button class="btn" data-bkdelete="${esc(x.volid)}" ${x.locked ? "disabled title=\"This backup is protected\"" : ""}>Delete</button></div></div>`;
   const group = (g) => `<details class="upgroup"><summary>${esc(g.name)} (${g.backups.length}), latest ${esc(when(g.backups[0]?.takenAt))}</summary>
     ${g.exists ? `<div class="actions bknow"><button class="btn" data-bknow="${g.id}">Back up now</button></div>` : ""}${g.backups.map(row).join("")}</details>`;
-  return `${protectBanner()}${b.unscheduled.length ? `<div class="advice"><div><b>${b.unscheduled.length} ${b.unscheduled.length === 1 ? "isn't" : "aren't"} on a backup schedule</b>${esc(b.unscheduled.join(", "))}</div><button class="btn" data-jobadd="1">Add a schedule</button></div>` : ""}
+  const elsewhere = b.backupsElsewhere
+    ? `<p class="meta bkelse">BossMox isn't checking backup schedules, because you back up your guests another way. Failed Proxmox backups are still reported. <button class="linkbtn" data-backupselsewhere="off">Check schedules again</button></p>`
+    : "";
+  return `${elsewhere}${protectBanner()}${b.unscheduled.length ? `<div class="advice"><div><b>${b.unscheduled.length} ${b.unscheduled.length === 1 ? "isn't" : "aren't"} on a backup schedule</b>${esc(b.unscheduled.join(", "))}</div><div class="actions"><button class="btn" data-jobadd="1">Add a schedule</button><button class="btn" data-backupselsewhere="on">We back up another way</button></div></div>` : ""}
     ${b.groups.map(group).join("")}
     ${missing.length ? `<h3 class="bkhead">No backups yet</h3>${missing.map((v) => `<div class="snap"><div>${esc(v.name)}<small>On ${esc(v.node)}</small></div><button class="btn" data-bknow="${v.id}">Back up now</button></div>`).join("")}` : ""}
     ${!b.groups.length && !missing.length ? `<p class="empty">There's nothing to back up yet.</p>` : ""}`;
@@ -2721,6 +2725,20 @@ document.addEventListener("click", (e) => {
       await loadDisks(node);
       await afterStorage();
     });
+  }
+  if (d.backupselsewhere) {
+    const on = d.backupselsewhere === "on";
+    const after = async () => {
+      await refresh();
+      if (wins.backups) await loadBackups();
+      if (wins.health) {
+        S.healthAgain = true;
+        await loadHealthCheck();
+      }
+    };
+    return on
+      ? confirmAction("Stop warning about backup schedules?", "Use this if your guests are backed up by something Proxmox doesn't know about, such as Veeam, a script or another backup server. BossMox stops warning about guests without a Proxmox backup schedule, for everyone who uses it, in every browser. Failed Proxmox backups are still reported, and you can turn the warnings back on any time.", "Stop the warnings", () => runAction("preferences-set", onlineNodes()[0], "Saving", { backupsElsewhere: true }, after))
+      : confirmAction("Check backup schedules again?", "BossMox will warn again about any guest that isn't on a Proxmox backup schedule, for everyone who uses it.", "Check schedules again", () => runAction("preferences-set", onlineNodes()[0], "Saving", { backupsElsewhere: false }, after));
   }
   if (d.hcagain) {
     S.healthChecks = null;

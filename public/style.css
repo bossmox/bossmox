@@ -276,6 +276,8 @@ summary{cursor:pointer;font-weight:650}
 .hctext b{display:block;font-weight:650}
 .hctext small{display:block;color:var(--muted);margin-top:2px;line-height:1.45}
 .hcrow.ok .hctext b{font-weight:500}
+.hcrow.off .hctext b{font-weight:500;color:var(--muted)}
+.bkelse{margin:0 0 12px}
 @media (max-width:760px){.hcrow{flex-wrap:wrap}.hcrow .actions{width:100%;padding-left:20px}}
 .warnline:empty{display:none}
 dd.agenthelp{grid-column:1/-1;margin:-4px 0 6px}

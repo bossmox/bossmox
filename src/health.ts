@@ -5,10 +5,11 @@
  */
 import type { StorageMap } from "./storage-map.js";
 
-export type Status = "ok" | "warn" | "bad";
+/** "off" is a check the person turned off: never counted as passed, and it says how to turn it back on. */
+export type Status = "ok" | "warn" | "bad" | "off";
 export interface Fix {
   /** Which button the screen shows: each maps to something BossMox already does. */
-  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm";
+  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere";
   label: string;
   node?: string;
   channel?: string;
@@ -33,6 +34,8 @@ export interface HealthInput {
   updates: { node: string; total: number }[];
   guests: { id: number; name: string; node: string; running: boolean; template: boolean; startsAtBoot: boolean; issues: { kind: string; title: string }[] }[];
   unscheduled: number[];
+  /** The person said the guests are backed up another way, so schedules aren't checked (ADR 0018). */
+  backupsElsewhere?: boolean;
   jobs: { id: string; storage: string; enabled: boolean }[];
   /** Backup tasks that ended badly lately, newest first. */
   failedBackups: { node: string; guest: string; at: number }[];
@@ -69,9 +72,13 @@ export function buildHealth(h: HealthInput): Check[] {
   // Backups
   const guests = h.guests.filter((g) => !g.template);
   const unscheduled = guests.filter((g) => h.unscheduled.includes(g.id)).map((g) => g.name);
-  add(unscheduled.length
-    ? { id: "scheduled", group: "Backups", status: "warn", title: `${plural(unscheduled.length, "guest")} ${unscheduled.length === 1 ? "isn't" : "aren't"} on a backup schedule`, detail: `${list(unscheduled)}. Nothing is keeping a copy current, so a mistake or a failed drive could lose ${unscheduled.length === 1 ? "it" : "them"}.`, fix: { kind: "protect", label: "Protect everything" } }
-    : { id: "scheduled", group: "Backups", status: "ok", title: guests.length ? "Every guest is on a backup schedule" : "No guests to back up yet", detail: "" });
+  if (h.backupsElsewhere) {
+    add({ id: "scheduled", group: "Backups", status: "off", title: "Backup schedules aren't being checked", detail: "You told BossMox your guests are backed up another way, so it doesn't warn about guests without a Proxmox backup schedule. Failed Proxmox backups are still reported. To have it check again, use Check schedules again.", fix: { kind: "backups-elsewhere", label: "Check schedules again" } });
+  } else {
+    add(unscheduled.length
+      ? { id: "scheduled", group: "Backups", status: "warn", title: `${plural(unscheduled.length, "guest")} ${unscheduled.length === 1 ? "isn't" : "aren't"} on a backup schedule`, detail: `${list(unscheduled)}. Nothing is keeping a copy current, so a mistake or a failed drive could lose ${unscheduled.length === 1 ? "it" : "them"}.`, fix: { kind: "protect", label: "Protect everything" } }
+      : { id: "scheduled", group: "Backups", status: "ok", title: guests.length ? "Every guest is on a backup schedule" : "No guests to back up yet", detail: "" });
+  }
   const shared = new Set(h.maps.flatMap((m) => m.network.map((p) => p.id)));
   const local = h.jobs.filter((j) => j.enabled && !shared.has(j.storage));
   if (local.length) add({ id: "backup-place", group: "Backups", status: "warn", title: `Backups are saved on the same computer as the guests`, detail: `The schedule saving to ${list([...new Set(local.map((j) => j.storage))])} keeps backups on a node's own drives. If that computer fails or is stolen, the backups go with it. A NAS is safer.`, fix: { kind: "add-storage", label: "Add a NAS" } });
