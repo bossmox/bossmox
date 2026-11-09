@@ -33,6 +33,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 # thing can run as one line. A download has to pass its checksum; one copied by hand is checked when it has one.
 RELEASE_URL=${BOSSMOX_RELEASE_URL:-https://github.com/bossmox/bossmox/releases/latest/download}
 PKG=""
+trap '[ -z "$PKG" ] || rm -rf "$PKG"' EXIT
 if [ ! -f "$HERE/bossmox.tgz" ]; then
   echo "Downloading BossMox."
   PKG=$(mktemp -d /var/tmp/bossmox-pkg.XXXXXX)
@@ -45,7 +46,6 @@ if [ -f "$HERE/bossmox.tgz.sha256" ]; then
 elif [ -n "$PKG" ]; then
   die "the download came without its checksum, so it wasn't used."
 fi
-trap '[ -z "$PKG" ] || rm -rf "$PKG"' EXIT
 
 if [ -z "$VMID" ]; then
   FOUND=$(qm list | awk 'NR>1 && $2=="bossmox" {print $1}')

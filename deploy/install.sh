@@ -53,6 +53,7 @@ command -v qm >/dev/null && command -v pvesm >/dev/null || die "this isn't a Pro
 # thing can run as one line. A download has to pass its checksum; one copied by hand is checked when it has one.
 RELEASE_URL=${BOSSMOX_RELEASE_URL:-https://github.com/bossmox/bossmox/releases/latest/download}
 PKG=""
+trap '[ -z "$PKG" ] || rm -rf "$PKG"' EXIT
 if [ ! -f "$HERE/bossmox.tgz" ]; then
   echo "Downloading BossMox."
   PKG=$(mktemp -d /var/tmp/bossmox-pkg.XXXXXX)
@@ -65,7 +66,6 @@ if [ -f "$HERE/bossmox.tgz.sha256" ]; then
 elif [ -n "$PKG" ]; then
   die "the download came without its checksum, so it wasn't used."
 fi
-trap '[ -z "$PKG" ] || rm -rf "$PKG"' EXIT
 [ -z "$ADDRESS" ] || [ -n "$GATEWAY" ] || die "--ip needs --gateway too."
 [[ "$VLAN" =~ ^[0-9]*$ ]] || die "--vlan has to be a number."
 [[ "$ADDRESS" =~ ^[0-9./]*$ ]] && [[ "$GATEWAY" =~ ^[0-9.]*$ ]] || die "that address isn't valid."
