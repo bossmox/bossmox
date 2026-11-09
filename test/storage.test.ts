@@ -147,3 +147,21 @@ test("drives of different sizes are only as big as the smallest, and the summary
   const plan = setupPlan([hd("/dev/sdb", 500), hd("/dev/sdc", 1000)], ["/dev/sdb", "/dev/sdc"], "vms", "fast");
   assert.match(plan.summary, /aren't the same size/);
 });
+
+test("a drive given to a VM, a RAID member or an encrypted drive can't be wiped or used (security review M2)", () => {
+  const raw = [
+    { devpath: "/dev/sdb", size: 500 * 1024 ** 3, used: "partitions", by_id_link: "/dev/disk/by-id/ata-Disk_B" },
+    { devpath: "/dev/sdb1", parent: "/dev/sdb", used: "ntfs" },
+    { devpath: "/dev/sdc", size: 500 * 1024 ** 3, used: "linux_raid_member" },
+    { devpath: "/dev/sdd", size: 500 * 1024 ** 3, used: "crypto_LUKS" },
+    { devpath: "/dev/sde", size: 500 * 1024 ** 3, used: "partitions" },
+    { devpath: "/dev/sde1", parent: "/dev/sde", used: "ext4" },
+  ];
+  const disks = readHardDisks(raw as never, [{ device: "/dev/disk/by-id/ata-Disk_B", guest: "windows-vm" }]);
+  const d = (p: string) => disks.find((x) => x.path === p)!;
+  assert.deepEqual([d("/dev/sdb").canWipe, d("/dev/sdb").used], [false, "given to windows-vm"]);
+  assert.equal(d("/dev/sdc").canWipe, false);
+  assert.equal(d("/dev/sdd").canWipe, false);
+  assert.equal(d("/dev/sde").canWipe, true, "old data nobody uses can still be wiped");
+  assert.throws(() => setupPlan(disks, ["/dev/sdb"], "vms", "x"), /won't erase/);
+});

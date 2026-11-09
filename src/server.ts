@@ -313,8 +313,11 @@ function rule<T>(run: () => T): T {
     throw err;
   }
 }
-const nodeDisks = async (name: string, ticket: string) =>
-  readHardDisks(await pve.get<RawDisk[]>(`/nodes/${encodeURIComponent(name)}/disks/list?include-partitions=1`, ticket));
+/** Drives guests on this node use directly, by device path, so they never look free to wipe. */
+const passedThrough = (name: string, data: Overview) => data.vms.filter((v) => v.node === name).flatMap((v) => v.devices.map((device) => ({ device, guest: v.name })));
+/** The node's drives. Anything that can erase one passes a fresh overview, so a guest added a moment ago counts. */
+const nodeDisks = async (name: string, ticket: string, data: Overview) =>
+  readHardDisks(await pve.get<RawDisk[]>(`/nodes/${encodeURIComponent(name)}/disks/list?include-partitions=1`, ticket), passedThrough(name, data));
 const usesStorageNames = (body: unknown) => (Array.isArray(body) ? body.filter((d): d is string => typeof d === "string").slice(0, 32) : []);
 const kindOf = (body: Record<string, unknown>) => (body.type === "lxc" ? "lxc" as const : "qemu" as const);
 const VOLUME = /^[\w.-]+:[\w./-]+$/;
@@ -420,7 +423,11 @@ async function storageMapFor(name: string, t: string, data: Overview) {
   ]);
   const zfsEntries = await Promise.all(zfsList.map(async (z) => [z.name, await quiet(pve.get<RawZfsDetail>(`${base}/disks/zfs/${encodeURIComponent(z.name)}`, t), {})] as const));
   const active = status.filter((s) => s.enabled !== 0 && s.active === 1);
-  const contentEntries = await Promise.all(active.map(async (s) => [s.storage, await quiet(pve.get<RawVolume[]>(`${base}/storage/${encodeURIComponent(s.storage)}/content`, t), [])] as const));
+  const unreadable: string[] = [];
+  const contentEntries = await Promise.all(active.map(async (s) => [s.storage, await quiet(pve.get<RawVolume[]>(`${base}/storage/${encodeURIComponent(s.storage)}/content`, t), null).then((v) => {
+    if (v === null) unreadable.push(s.storage);
+    return v ?? [];
+  })] as const));
   const map = buildStorageMap({
     node: name,
     disks,
@@ -431,10 +438,12 @@ async function storageMapFor(name: string, t: string, data: Overview) {
     status,
     rootfs: nodeStatus.rootfs ?? null,
     content: Object.fromEntries(contentEntries),
+    contentUnknown: unreadable,
+    passedThrough: passedThrough(name, data),
     guests: guestRefs(data),
     allNodesOnline: data.nodes.every((n) => n.online),
   }, data.nodes.length > 1);
-  return { map, diskList: readHardDisks(disks), config, directory };
+  return { map, diskList: readHardDisks(disks, passedThrough(name, data)), config, directory };
 }
 
 const guestRefs = (data: Overview): GuestRefs[] => data.vms.map((v) => ({ vmid: v.id, name: v.name, known: v.configLoaded, refs: v.refs }));
@@ -677,7 +686,7 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     const devices = usesStorageNames(body.devices);
     const poolName = text(body.name, 32);
     const node = encodeURIComponent(name);
-    const disks = await nodeDisks(name, who.ticket);
+    const disks = await nodeDisks(name, who.ticket, await loadOverview(who.ticket));
     const plan = rule(() => setupPlan(disks, devices, text(body.purpose, 8), poolName));
     const configs = await pve.get<RawStorageConfig[]>("/storage", who.ticket);
     if (configs.some((c) => c.storage === poolName)) throw new AuthError(400, `There's already storage called ${poolName}. Pick another name.`);
@@ -686,7 +695,7 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
       rule(() => assertCanWipe(disks, disk));
       await finishTask(name, await pve.put<string>(`/nodes/${node}/disks/wipedisk`, who, { disk }), who, 120);
     }
-    const fresh = plan.wipe.length ? await nodeDisks(name, who.ticket) : disks;
+    const fresh = plan.wipe.length ? await nodeDisks(name, who.ticket, await loadOverview(who.ticket)) : disks;
     const form = rule(() => diskStorageForm(plan.kind, fresh, { name: poolName, devices, raid: plan.raid, filesystem: plan.filesystem }));
     await finishTask(name, await pve.post<string>(`/nodes/${node}/disks/${plan.kind}`, who, form), who, 300);
     // What it's for. Proxmox gives a new folder every use, which isn't what the person picked.
@@ -728,14 +737,14 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
   "disk-storage": async (name, who, body) => {
     if (body.confirm !== "erase") throw new AuthError(400, "That wasn't confirmed.");
     const kind = text(body.kind, 12);
-    const disks = await nodeDisks(name, who.ticket);
+    const disks = await nodeDisks(name, who.ticket, await loadOverview(who.ticket));
     const form = rule(() => diskStorageForm(kind, disks, { name: text(body.name, 32), devices: usesStorageNames(body.devices), raid: text(body.raid, 8), filesystem: text(body.filesystem, 8) }));
     return pve.post<string>(`/nodes/${encodeURIComponent(name)}/disks/${kind}`, who, form);
   },
   "disk-wipe": async (name, who, body) => {
     const disk = text(body.disk, 64);
     if (body.confirm !== "erase" || !deviceIsValid(disk)) throw new AuthError(400, "That wasn't confirmed.");
-    const disks = await nodeDisks(name, who.ticket);
+    const disks = await nodeDisks(name, who.ticket, await loadOverview(who.ticket));
     rule(() => assertCanWipe(disks, disk));
     return pve.put<string>(`/nodes/${encodeURIComponent(name)}/disks/wipedisk`, who, { disk });
   },
@@ -1159,7 +1168,7 @@ const handler: http.RequestListener = async (req, res) => {
         if (route === "/api/setup-plan") {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          const disks = await nodeDisks(name, session.ticket);
+          const disks = await nodeDisks(name, session.ticket, await overview(session));
           try {
             const devices = (params.get("devices") ?? "").split(",").filter((d) => deviceIsValid(d));
             return json(res, 200, setupPlan(disks, devices, params.get("purpose") ?? "", params.get("name") ?? ""));
@@ -1176,7 +1185,7 @@ const handler: http.RequestListener = async (req, res) => {
         if (route === "/api/disks" || route === "/api/disk-smart") {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          if (route === "/api/disks") return json(res, 200, { disks: await nodeDisks(name, session.ticket) });
+          if (route === "/api/disks") return json(res, 200, { disks: await nodeDisks(name, session.ticket, await overview(session)) });
           const disk = params.get("disk") ?? "";
           if (!deviceIsValid(disk)) return json(res, 400, { error: "That disk isn't valid." });
           return json(res, 200, await pve.get<unknown>(`/nodes/${encodeURIComponent(name)}/disks/smart?disk=${encodeURIComponent(disk)}`, session.ticket));

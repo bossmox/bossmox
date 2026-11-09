@@ -153,3 +153,25 @@ test("deleting a ZFS mirror erases the whole pool, never rpool or part of one", 
   assert.deepEqual(poolRemoval(m, "tank", tank, [], []).disks, ["/dev/sdb", "/dev/sdc"]);
   assert.throws(() => poolRemoval(m, "tank", { ...tank, pool: "tank/data" }, [], []), /part of a bigger ZFS pool/);
 });
+
+test("Delete pool won't erase what BossMox can't see (security review M1)", () => {
+  const input = fixture("storage-zfs-mirror");
+  const tank = input.config.find((c) => c.storage === "tank")!;
+  const empty = { ...input, content: { ...input.content, tank: [] } };
+  // A pool that didn't mount.
+  const down = { ...empty, status: empty.status.map((s) => (s.storage === "tank" ? { ...s, active: 0 } : s)) };
+  assert.throws(() => poolRemoval(buildStorageMap(down, true), "tank", tank, [], []), /isn't reachable right now/);
+  // Its contents couldn't be read: never taken as empty.
+  assert.throws(() => poolRemoval(buildStorageMap({ ...empty, contentUnknown: ["tank"] }, true), "tank", tank, [], []), /couldn't read what's on tank/);
+  // Another dataset (tank/photos) uses 3 GB that Proxmox doesn't list.
+  const photos = { ...empty, status: empty.status.map((s) => (s.storage === "tank" ? { ...s, used: 3 * 1024 ** 3 } : s)) };
+  assert.throws(() => poolRemoval(buildStorageMap(photos, true), "tank", tank, [], []), /doesn't keep track of is using 3 GB/);
+});
+
+test("a drive given to a VM directly is never empty in the storage view", () => {
+  const input = fixture("storage-thin-and-folder");
+  input.disks.push({ devpath: "/dev/sdd", size: 16 * 1024 ** 3, model: "Spare", by_id_link: "/dev/disk/by-id/ata-Spare_123" } as never);
+  const m = buildStorageMap({ ...input, passedThrough: [{ device: "/dev/disk/by-id/ata-Spare_123", guest: "nas-vm" }] }, true);
+  assert.deepEqual(m.empty.map((d) => d.path), []);
+  assert.equal(m.otherDisks.find((d) => d.path === "/dev/sdd")?.givenTo, "nas-vm");
+});

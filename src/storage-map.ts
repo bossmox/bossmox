@@ -100,6 +100,10 @@ export interface NodeStorageInput {
   status: RawStorageStatus[];
   rootfs: { total?: number } | null;
   content: Record<string, RawVolume[]>;
+  /** Storages whose contents couldn't be read. Never treated as empty (security review 2026-11-09, M1). */
+  contentUnknown?: string[];
+  /** Drives guests use directly, by path, with the guest's name. */
+  passedThrough?: { device: string; guest: string }[];
   guests?: GuestRefs[];
   allNodesOnline?: boolean;
 }
@@ -199,6 +203,7 @@ export interface Pool {
   otherNodes: string;
   disks: string[];
   items: PoolItem[];
+  contentKnown: boolean;
 }
 export interface Disk {
   path: string;
@@ -211,6 +216,8 @@ export interface Disk {
   system: boolean;
   /** Partitions on it that no storage accounts for, in Proxmox's words (an unused ext4 partition, a Ceph OSD). */
   otherUses: string[];
+  /** The guest this whole drive is given to directly, if any. */
+  givenTo: string;
 }
 
 /**
@@ -225,6 +232,13 @@ export function poolRemoval(map: StorageMap, id: string, config: RawStorageConfi
   const { p, g } = found;
   if (g.disks.some((d) => d.system)) throw new Error(`${id} is on the system disk, alongside Proxmox itself. Deleting it would mean changing the system disk, which BossMox doesn't do.`);
   if (usedBy.length) throw new Error(`${usedBy.join(", ")} still ${usedBy.length === 1 ? "uses" : "use"} it. Move or remove ${usedBy.length === 1 ? "that" : "those"} first.`);
+  // What Proxmox lists is only what it tracks. A pool that isn't mounted, or whose contents couldn't be read, or
+  // with space nothing listed accounts for (another ZFS dataset, loose files), may hold things BossMox never saw.
+  if (!p.active) throw new Error(`${id} isn't reachable right now, so BossMox can't see what's on it and won't erase it.`);
+  if (!p.contentKnown) throw new Error(`BossMox couldn't read what's on ${id}, so it won't erase it. Try again in a moment.`);
+  const unseen = p.thin ? p.usedGb : p.otherGb;
+  const allowance = p.thin ? 0.1 : Math.max(1, p.totalGb * 0.015);
+  if (!p.items.length && unseen > allowance) throw new Error(`Something Proxmox doesn't keep track of is using ${unseen} GB of ${id}, such as files or other data put there outside Proxmox. BossMox won't erase what it can't see. Check it in Proxmox's own screen.`);
   if (p.items.length) {
     const counts = Object.entries(p.items.reduce<Record<string, number>>((a, i) => ({ ...a, [i.kind]: (a[i.kind] ?? 0) + 1 }), {})).map(([k, n]) => `${n} ${k}${n === 1 ? "" : "s"}`);
     throw new Error(`There's still something on it: ${counts.join(", ")}. Delete or move ${p.items.length === 1 ? "it" : "them"} first.`);
@@ -351,6 +365,7 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
       otherNodes: otherNodes(type, shared, clustered),
       disks: [...new Set(disks)],
       items: poolItems(volumes, input.guests ?? [], input.allNodesOnline ?? true),
+      contentKnown: s.active === 1 && !(input.contentUnknown ?? []).includes(c.storage),
     });
   }
 
@@ -371,9 +386,14 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
   }
   const used = new Set(parts.filter((p) => claimed.has(p.devpath as string)).map((p) => p.devpath));
   const claimedDisks = new Set(local.flatMap((p) => p.disks));
+  const givenTo = (d: RawDisk) => {
+    const names = [d.devpath, (d as RawDisk & { by_id_link?: string }).by_id_link, ...parts.filter((p) => p.parent === d.devpath).map((p) => p.devpath)];
+    return (input.passedThrough ?? []).find((x) => names.includes(x.device) || names.includes(x.device.replace(/-part\d+$/, "")))?.guest ?? "";
+  };
   const disk = (d: RawDisk): Disk => {
     const path = d.devpath as string;
     const mine = parts.filter((p) => p.parent === path);
+    const vm = givenTo(d);
     const otherUses = system.includes(path) || claimedDisks.has(path)
       ? mine.filter((p) => p.mounted && MOUNTED_FS.has(p.used ?? "") && !used.has(p.devpath) && !system.includes(path)).map((p) => `${p.used} partition ${p.devpath}`)
       : mine.filter((p) => p.used && !/^(EFI|BIOS boot)$/.test(p.used)).map((p) => `${p.used} partition ${p.devpath}`);
@@ -387,6 +407,7 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
       wearLeft: typeof d.wearout === "number" ? d.wearout : null,
       system: system.includes(path),
       otherUses,
+      givenTo: vm,
     };
   };
   const byPath = new Map(whole.map((d) => [d.devpath as string, d]));
@@ -400,9 +421,9 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
       }))
       .sort((a, b) => Number(b.disks.some((d) => d.system)) - Number(a.disks.some((d) => d.system)) || (a.disks[0]?.path ?? "").localeCompare(b.disks[0]?.path ?? "")),
     // Nothing on them at all: these are what Make storage can use.
-    empty: whole.filter((d) => !groupOf.has(d.devpath as string) && !d.used && !parts.some((p) => p.parent === d.devpath)).map(disk),
+    empty: whole.filter((d) => !groupOf.has(d.devpath as string) && !d.used && !parts.some((p) => p.parent === d.devpath) && !givenTo(d)).map(disk),
     // In use by something that isn't Proxmox storage BossMox can place, such as a Ceph OSD or a leftover partition.
-    otherDisks: whole.filter((d) => !groupOf.has(d.devpath as string) && (d.used || parts.some((p) => p.parent === d.devpath))).map(disk),
+    otherDisks: whole.filter((d) => !groupOf.has(d.devpath as string) && (d.used || parts.some((p) => p.parent === d.devpath) || givenTo(d))).map(disk),
     unplaced: local.filter((p) => !p.disks.length),
     network: pools.filter((p) => p.shared),
   };

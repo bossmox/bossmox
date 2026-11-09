@@ -154,6 +154,8 @@ export function buildOverview(
         bridges: [...new Set(Object.entries(config ?? {}).filter(([k]) => /^net\d+$/.test(k)).map(([, v]) => String(v).match(/bridge=([^,]+)/)?.[1]).filter((b): b is string => Boolean(b)))],
         configLoaded: config !== undefined,
         // Every volume its settings name (disks, disc drives, a linked clone's base), so nothing in use gets deleted.
+        // Drives handed to it directly, which look unused from the node.
+        devices: Object.entries(config ?? {}).filter(([k, v]) => /^(scsi|virtio|sata|ide|mp)\d+$|^rootfs$/.test(k) && String(v).startsWith("/dev/")).map(([, v]) => String(v).split(",")[0] as string),
         refs: Object.values(config ?? {}).map((v) => String(v).split(",")[0] as string).filter((v) => /^[A-Za-z][\w.-]*:[^=\s]+$/.test(v)),
         tech: {
           "Machine type": config?.machine ?? "i440fx (default)",

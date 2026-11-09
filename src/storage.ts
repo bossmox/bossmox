@@ -96,22 +96,31 @@ export interface RawDisk {
 /** Health Proxmox reports when it knows a disk is in trouble, as opposed to not knowing at all. */
 const healthBad = (h = "") => h !== "" && !["OK", "PASSED", "UNKNOWN"].includes(h.toUpperCase());
 /** Wiping these takes live data with it even though nothing shows as mounted. */
-const HOLDS_DATA = /LVM|ZFS|Device Mapper|mounted|ceph/i;
+const HOLDS_DATA = /LVM|ZFS|Device Mapper|mounted|ceph|raid|crypt|LUKS|bcache/i;
 
-export function readHardDisks(raw: RawDisk[]) {
+/**
+ * `passedThrough` names devices guests use directly (/dev/disk/by-id/... or /dev/sdX, from their settings) with the
+ * guest's name. Such a drive looks unused on the node, but a VM is reading and writing it (security review M2).
+ */
+export function readHardDisks(raw: RawDisk[], passedThrough: { device: string; guest: string }[] = []) {
   const parts = raw.filter((d) => d.parent);
+  const ownerOf = (d: RawDisk) => {
+    const names = [d.devpath, (d as RawDisk & { by_id_link?: string }).by_id_link, ...parts.filter((p) => p.parent === d.devpath).map((p) => p.devpath)].filter(Boolean);
+    return passedThrough.find((x) => names.includes(x.device) || names.includes(x.device.replace(/-part\d+$/, "")))?.guest ?? "";
+  };
   return raw
     .filter((d) => !d.parent && d.devpath)
     .map((d) => {
       const children = parts.filter((p) => p.parent === d.devpath);
-      const busy = Boolean(d.mounted) || children.some((p) => Boolean(p.mounted) || HOLDS_DATA.test(p.used ?? "")) || HOLDS_DATA.test(d.used ?? "");
-      const free = !d.used && !children.length;
+      const vm = ownerOf(d);
+      const busy = Boolean(vm) || Boolean(d.mounted) || children.some((p) => Boolean(p.mounted) || HOLDS_DATA.test(p.used ?? "")) || HOLDS_DATA.test(d.used ?? "");
+      const free = !vm && !d.used && !children.length;
       return {
         path: d.devpath as string,
         sizeGb: Math.round(((d.size ?? 0) / 1024 ** 3) * 10) / 10,
         model: d.model && d.model !== "unknown" ? d.model.replace(/_/g, " ") : "",
         kind: d.type && d.type !== "unknown" ? d.type.toUpperCase() : "",
-        used: d.used ?? "",
+        used: vm ? `given to ${vm}` : d.used ?? "",
         health: d.health ?? "UNKNOWN",
         failing: healthBad(d.health),
         wearLeft: typeof d.wearout === "number" ? d.wearout : null,
