@@ -111,3 +111,9 @@ test("storage in use says who's using it", () => {
   assert.deepEqual(storageBlockers("nas", guests, [{ storage: "nas" }]), ["web", "a backup schedule"]);
   assert.deepEqual(storageBlockers("other", guests, [{ storage: "nas" }]), []);
 });
+
+test("changing what a storage holds keeps the uses BossMox doesn't show", () => {
+  // Found in the lab: saving local's uses dropped snippets, which BossMox doesn't list.
+  assert.equal(usesForm("dir", ["iso", "backup"], "backup,images,snippets,rootdir,import"), "iso,backup,snippets,import");
+  assert.equal(usesForm("dir", ["iso"]), "iso");
+});

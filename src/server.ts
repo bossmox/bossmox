@@ -568,7 +568,7 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     const list = await pve.get<RawStorageConfig[]>("/storage", who.ticket);
     const found = list.find((s) => s.storage === id);
     if (!found) throw new AuthError(400, "That storage doesn't exist.");
-    await pve.put<null>(`/storage/${encodeURIComponent(id)}`, who, { content: rule(() => usesForm(found.type ?? "", body.uses)) });
+    await pve.put<null>(`/storage/${encodeURIComponent(id)}`, who, { content: rule(() => usesForm(found.type ?? "", body.uses, found.content ?? "")) });
     return null;
   },
   "storage-remove": async (_name, who, body) => {

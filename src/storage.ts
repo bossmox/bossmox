@@ -32,11 +32,16 @@ const DEVICE = /^\/dev\/[a-z][a-z0-9/_-]{0,60}$/;
 export const hostIsValid = (host: string) => HOST.test(host);
 export const deviceIsValid = (disk: string) => DEVICE.test(disk);
 
-export function usesForm(type: string, uses: unknown): string {
+/**
+ * The storage's new content list. Uses BossMox doesn't show (snippets, imports) are kept as they were, so changing
+ * what a storage is for here never quietly turns off something set up in Proxmox.
+ */
+export function usesForm(type: string, uses: unknown, current = ""): string {
   const list = Array.isArray(uses) ? uses.filter((u): u is string => typeof u === "string" && Object.hasOwn(USES, u)) : [];
   const allowed = BLOCK_ONLY.has(type) ? list.filter((u) => u === "images" || u === "rootdir") : list;
   if (!allowed.length) throw new StorageError("Pick at least one thing to keep there.");
-  return [...new Set(allowed)].join(",");
+  const kept = current.split(",").filter((u) => u && !Object.hasOwn(USES, u));
+  return [...new Set([...allowed, ...kept])].join(",");
 }
 
 export interface NetworkShare {
