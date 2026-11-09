@@ -1514,10 +1514,19 @@ async function loadNetwork() {
   }
 }
 
+/** Redrawn only when it changes, so an opened explanation doesn't snap shut on the next address check. */
+function drawAgentHelp(v) {
+  const box = $("#vmagent");
+  const html = agentHelp(v);
+  if (box && box.dataset.drawn !== html) {
+    box.innerHTML = html;
+    box.dataset.drawn = html;
+  }
+}
 function agentHelp(v) {
   const a = S.addresses?.[v.id];
   if (!a || a.known) return "";
-  return `<small>The guest agent is a small program inside the VM that tells Proxmox its address and lets it shut down cleanly. To install it: on Debian or Ubuntu, <code>apt install qemu-guest-agent</code>; on Windows, the guest tools on the virtio-win disc. ${v.agent ? "Its setting is already on here, so once it's installed it should show up within a minute." : `Its setting is off here too. Turning it on takes effect after ${esc(v.name)} is shut down and started again.`}</small>${v.agent ? "" : `<button class="linkbtn" data-agenton="${v.id}">Turn on the guest agent setting</button>`}`;
+  return `<details class="agentmore"><summary>How to set that up</summary><small>The guest agent is a small program inside the VM that tells Proxmox its address and lets it shut down cleanly. To install it: on Debian or Ubuntu, <code>apt install qemu-guest-agent</code>; on Windows, the guest tools on the virtio-win disc. ${v.agent ? "Its setting is already on here, so once it's installed it should show up within a minute." : `Its setting is off here too. Turning it on takes effect after ${esc(v.name)} is shut down and started again.`}</small>${v.agent ? "" : `<button class="linkbtn" data-agenton="${v.id}">Turn on the guest agent setting</button>`}</details>`;
 }
 function snapshotAdvice(v) {
   const fix = S.snapFix?.[v.id] ?? [];
@@ -1539,14 +1548,14 @@ async function loadAddress(v) {
   if (v.type === "qemu" && !v.agent) {
     S.addresses[v.id].known = false;
     if (S.sel === v.id && $("#vmaddr")) $("#vmaddr").textContent = addressWords(v);
-    if (S.sel === v.id && $("#vmagent")) $("#vmagent").innerHTML = agentHelp(v);
+    if (S.sel === v.id) drawAgentHelp(v);
     return;
   }
   try {
     const r = await signal(`api/guest-addresses?server=${encodeURIComponent(v.node)}&guest=${v.id}&type=${v.type}`);
     S.addresses[v.id] = { list: r.addresses, known: r.known, at: Date.now() };
     if (S.sel === v.id && $("#vmaddr")) $("#vmaddr").textContent = addressWords(v);
-    if (S.sel === v.id && $("#vmagent")) $("#vmagent").innerHTML = agentHelp(v);
+    if (S.sel === v.id) drawAgentHelp(v);
   } catch { /* the next look asks again */ }
 }
 
