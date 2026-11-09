@@ -4,7 +4,7 @@ BossMox handles Proxmox sign-ins and can change, erase and restart things on a c
 
 ## Reporting a problem
 
-Please report it privately, not in a public issue: on this repository, open the **Security** tab and choose **Report a vulnerability**. You'll get an answer within a few days. Once it's fixed, you're credited in the release notes unless you'd rather not be.
+Please report it privately, not in a public issue: on this repository, open the **Security** tab and choose **Report a vulnerability**. Without a GitHub account, email hello.bossmox@gmail.com instead. You'll get an answer within a few days. Once it's fixed, you're credited in the release notes unless you'd rather not be.
 
 ## What's in scope
 
