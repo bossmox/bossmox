@@ -469,6 +469,8 @@ function renderServers() {
     <span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? `${n.cpuPct}% busy, ${n.memPct}% memory` : "Offline"}</small></button>`).join("") + (S.data.nodes.length > 1 ? `<button class="btn rollbtn" data-rolling="1">Update all nodes</button>` : "");
   if (S.serverTab === "overview") renderServerDetail();
 }
+const CHANNEL_WORDS = { free: "Use the free channel", enterprise: "Use the enterprise channel" };
+const channelButton = (d) => (d.channel?.offer ? `<button class="btn" data-channel="${d.channel.offer}" data-channelserver="${esc(d.name)}">${CHANNEL_WORDS[d.channel.offer]}</button>` : "");
 const noAccess = (what, perm) => `<p class="empty">Your Proxmox account can't see ${what}. It needs ${perm} on this node.</p>`;
 const SERVER_TAB = {
   overview: (d, node) => {
@@ -479,7 +481,7 @@ const SERVER_TAB = {
       const m = movedGuests(d.name);
       return m ? `<div class="advice"><div><b>${m.guests.length} moved to ${esc(m.target)} for a restart</b>${esc(m.guests.map((g) => g.name).join(", "))}</div><button class="btn" data-moveback="${esc(d.name)}">Move everything back</button></div>` : "";
     })()}
-    ${d.channel && !d.channel.ok ? `<div class="advice"><div><b>Updates can't download</b>${esc(d.channel.note)}</div></div>` : ""}
+    ${d.channel && !d.channel.ok ? `<div class="advice"><div><b>${esc(d.channel.headline)}</b>${esc(d.channel.note)}</div>${channelButton(d)}</div>` : ""}
     ${d.updates?.total ? `<div class="advice"><div><b>${d.updates.total} ${d.updates.total === 1 ? "update is" : "updates are"} waiting</b>${d.updates.rebootNeeded ? "This includes a new kernel, so the node will need a restart." : "No restart should be needed."}</div><button class="btn" data-servertab="updates">See updates</button></div>` : ""}
     ${a ? `<div class="facts">
       <div class="fact"><label>Processor</label><b>${node?.cpuPct ?? 0}% busy</b><div class="meter"><i style="width:${Math.min(node?.cpuPct ?? 0, 100)}%"></i></div></div>
@@ -502,7 +504,7 @@ const SERVER_TAB = {
       ${items.map((u) => `<div class="snap"><div>${esc(u.name)}<small>${esc(u.title)}</small></div><code class="ver">${esc(u.from)} to ${esc(u.to)}</code></div>`).join("")}</details>` : "";
     return `
     <div class="head"><div>${d.channel ? `<p class="meta" style="margin-top:0">Update channel: ${esc(d.channel.name)}. ${esc(d.channel.note)}</p>` : ""}</div>
-      <div class="actions"><button class="btn" data-check="${esc(d.name)}">Check for updates</button>${d.updates.total ? `<button class="btn primary" data-install="${esc(d.name)}">Install updates</button>` : ""}</div></div>
+      <div class="actions">${channelButton(d)}<button class="btn" data-check="${esc(d.name)}">Check for updates</button>${d.updates.total ? `<button class="btn primary" data-install="${esc(d.name)}">Install updates</button>` : ""}</div></div>
     ${d.updates.total ? `<p style="margin-top:10px"><b>${d.updates.total} waiting.</b> ${d.updates.rebootNeeded ? "The new kernel means a restart afterward." : "No restart should be needed."}</p>
       ${group("Kernel", d.updates.kernel, true)}${group("Proxmox", d.updates.proxmox, true)}${group("Everything else", d.updates.other, false)}
       <p class="meta">This list is from the node's last check for updates.</p>` : `<p class="empty">This node is up to date as of its last check for updates.</p>`}`;
@@ -2504,6 +2506,14 @@ document.addEventListener("click", (e) => {
     const ids = (S.restart?.guests ?? []).map((v) => v.id).join(",");
     const storage = $("#rstore").value;
     return confirmAction(`Back up ${S.restart.guests.length} on ${server}?`, `This saves a copy to ${storage}. They stay running, though they may feel slower while it runs.`, `Back up to ${storage}`, () => runAction("back-up-guests", server, `Backing up ${server}`, { guests: ids, storage }, () => startRestart(server)));
+  }
+  if (d.channel && d.channelserver) {
+    const server = d.channelserver;
+    const free = d.channel === "free";
+    const line = free
+      ? "Proxmox's free channel gets the same software as the paid one, sooner and with less testing. Proxmox suggests it for testing and non-production use, and a subscription for production. BossMox turns the paid sources off, without deleting them, and then checks for updates."
+      : "This node has an active subscription, so it can use Proxmox's tested enterprise channel. BossMox turns the free sources off, without deleting them, and then checks for updates.";
+    return confirmAction(`${CHANNEL_WORDS[d.channel]} on ${server}?`, line, CHANNEL_WORDS[d.channel], () => runAction("update-channel", server, `Switching ${server} to the ${d.channel} channel`, { channel: d.channel }));
   }
   if (d.check) {
     const server = d.check;

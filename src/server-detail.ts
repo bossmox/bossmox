@@ -25,7 +25,9 @@ export interface RawRepository {
   Components?: string[];
 }
 export interface RawRepositories {
+  digest?: string;
   files?: { path?: string; repositories?: RawRepository[] }[];
+  "standard-repos"?: { handle: string; status?: number }[];
 }
 export interface RawService {
   service?: string;
@@ -75,23 +77,33 @@ export function groupUpdates(updates: RawUpdate[]) {
   };
 }
 
+const FREE = "Free (no subscription)";
+/**
+ * The node's update channel in plain words, and which switch to offer (ADR 0013). Ceph counts too: a fresh
+ * install turns on Ceph's paid source even without Ceph, and that alone makes every check end in an error.
+ */
 export function updateChannel(repos: RawRepositories, subscription?: RawSubscription) {
   const enabled = (repos.files ?? [])
     .flatMap((f) => f.repositories ?? [])
-    .filter((r) => r.Enabled && (r.URIs ?? []).some((u) => /proxmox\.com\/debian\/pve/.test(u)));
-  const components = enabled.flatMap((r) => r.Components ?? []);
+    .filter((r) => r.Enabled && (r.URIs ?? []).some((u) => /proxmox\.com\/debian\/(pve|ceph-[a-z]+)\/?$/.test(u)));
+  const pveOnly = enabled.filter((r) => (r.URIs ?? []).some((u) => /\/debian\/pve\/?$/.test(u)));
+  const components = pveOnly.flatMap((r) => r.Components ?? []);
+  const known = subscription !== undefined;
   const active = subscription?.status?.toLowerCase() === "active";
-  if (components.includes("pve-no-subscription") && !active) {
-    return { name: "Free (no subscription)", ok: true, note: "" };
+  const paid = enabled.filter((r) => (r.URIs ?? []).some((u) => u.includes("enterprise.proxmox.com")));
+  const name = components.includes("pve-enterprise") && (active || !components.includes("pve-no-subscription"))
+    ? "Enterprise"
+    : components.includes("pve-no-subscription") ? FREE : components.includes("pve-test") ? "Test" : "None";
+  const offer = (ok: boolean) => (active ? (name === "Enterprise" ? null : "enterprise") : known && (!ok || name !== FREE) ? "free" : null);
+  const result = (ok: boolean, headline: string, note: string) => ({ name, ok, headline, note, offer: offer(ok) as "free" | "enterprise" | null });
+  if (name === "None") return result(false, "Updates can't download", "No Proxmox update channel is turned on, so Proxmox can't update.");
+  if (known && !active && paid.length) {
+    const cephOnly = paid.every((r) => !(r.URIs ?? []).some((u) => /\/debian\/pve\/?$/.test(u)));
+    if (name === "Enterprise") return result(false, "Updates can't download", "This channel needs a subscription, so updates can't download.");
+    return result(false, "Every check for updates ends in an error", `Updates still download, but ${cephOnly ? "Ceph's" : "the enterprise"} source is also turned on and needs a subscription.`);
   }
-  if (components.includes("pve-enterprise")) {
-    return subscription && !active
-      ? { name: "Enterprise", ok: false, note: "This channel needs a subscription, so updates can't download." }
-      : { name: "Enterprise", ok: true, note: "" };
-  }
-  if (components.includes("pve-no-subscription")) return { name: "Free (no subscription)", ok: true, note: "" };
-  if (components.includes("pve-test")) return { name: "Test", ok: true, note: "Test updates aren't meant for production." };
-  return { name: "None", ok: false, note: "No Proxmox update channel is turned on, so Proxmox can't update." };
+  if (name === "Test") return result(true, "", "Test updates aren't meant for production.");
+  return result(true, "", "");
 }
 
 const TASKS: Record<string, string> = {

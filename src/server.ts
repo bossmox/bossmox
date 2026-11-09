@@ -15,6 +15,7 @@ import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
 import { assertCanWipe, buildStorageList, deviceIsValid, diskStorageForm, hostIsValid, networkForm, readHardDisks, StorageError, storageBlockers, usesForm, type RawDisk, type RawStorageConfig } from "./storage.js";
 import { addDiskForm, addNicForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
+import { channelAdds, channelDisables, channelOn } from "./update-channel.js";
 import {
   buildMovePlan,
   buildRebootPlan,
@@ -335,6 +336,30 @@ function snapshotName(body: Record<string, unknown>): string {
 /** Everything BossMox can change on Proxmox is listed here. There is no general pass-through. */
 const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string, unknown>) => Promise<string | null>> = {
   "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
+  "update-channel": async (name, who, body) => {
+    const target = body.channel;
+    if (target !== "free" && target !== "enterprise") throw new AuthError(400, "That request isn't valid.");
+    const base = `/nodes/${encodeURIComponent(name)}`;
+    if (target === "enterprise") {
+      const sub = await pve.get<RawSubscription>(`${base}/subscription`, who.ticket);
+      if (sub.status?.toLowerCase() !== "active") throw new AuthError(400, "The enterprise channel needs an active Proxmox subscription on this node.");
+    }
+    const read = () => pve.get<RawRepositories>(`${base}/apt/repositories`, who.ticket);
+    // Add the new channel before turning the old one off, so a failure part way leaves both on, never neither.
+    // Each change carries Proxmox's digest, so a change made elsewhere at the same moment is refused.
+    let repos = await read();
+    for (const handle of channelAdds(repos, target)) {
+      await pve.put<null>(`${base}/apt/repositories`, who, { handle, ...(repos.digest ? { digest: repos.digest } : {}) });
+      repos = await read();
+    }
+    if (!channelOn(repos, target)) throw new AuthError(400, "Proxmox didn't turn on the new channel, so BossMox left the old one as it was.");
+    for (const off of channelDisables(repos, target)) {
+      await pve.post<null>(`${base}/apt/repositories`, who, { path: off.path, index: String(off.index), enabled: "0", ...(repos.digest ? { digest: repos.digest } : {}) });
+      repos = await read();
+    }
+    // Ends with a check for updates, so the person sees straight away whether downloads work now.
+    return pve.post<string>(`${base}/apt/update`, who);
+  },
   "restart-server": async (name, who, body) => {
     // The browser only sends this after the person types "reboot", so a stray click can't restart a server.
     if (body.confirm !== "reboot") throw new AuthError(400, "The restart wasn't confirmed.");

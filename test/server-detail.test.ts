@@ -29,12 +29,17 @@ test("the enterprise channel without a subscription is flagged", () => {
   assert.equal(updateChannel(repo(ENT, "pve-enterprise"), { status: "Active" }).ok, true);
 });
 
-test("having both channels on still counts as free without a subscription", () => {
+test("having both channels on counts as free, but flags the failing checks without a subscription", () => {
   const both: RawRepositories = { files: [{ repositories: [
     { Enabled: true, URIs: [ENT], Components: ["pve-enterprise"] },
     { Enabled: true, URIs: [PVE], Components: ["pve-no-subscription"] },
   ] }] };
-  assert.equal(updateChannel(both, { status: "notfound" }).ok, true);
+  // Measured in the lab: updates still download, but apt-get update exits 100 and the task fails.
+  const c = updateChannel(both, { status: "notfound" });
+  assert.equal(c.name, "Free (no subscription)");
+  assert.equal(c.ok, false);
+  assert.equal(c.headline, "Every check for updates ends in an error");
+  assert.equal(updateChannel(both, { status: "Active" }).name, "Enterprise");
 });
 
 test("corosync being off is only normal on a standalone server", () => {
