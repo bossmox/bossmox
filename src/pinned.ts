@@ -54,7 +54,7 @@ export interface Pinned {
  * One call to a server, only after its certificate matches the fingerprint a person confirmed. The check happens on
  * the open connection before the request exists, so a password can't reach the wrong machine.
  */
-export async function call<T>(to: Pinned, method: "GET" | "POST", path: string, opts: { ticket?: string; csrf?: string; form?: Record<string, string> } = {}): Promise<T> {
+export async function call<T>(to: Pinned, method: "GET" | "POST" | "PUT", path: string, opts: { ticket?: string; csrf?: string; form?: Record<string, string> } = {}): Promise<T> {
   const socket = await connect(to.host, to.port);
   if (socket.getPeerCertificate()?.fingerprint256 !== to.fingerprint) {
     socket.destroy();

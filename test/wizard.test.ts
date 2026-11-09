@@ -7,6 +7,42 @@ import { test } from "node:test";
 import { parseAddress, PinError, PveReply, type Pinned } from "../src/pinned.js";
 import { applySettings, saveSettings, type Saved } from "../src/settings.js";
 import { Wizard, WizardError, type Outside } from "../src/wizard.js";
+import type { RawRepositories } from "../src/server-detail.js";
+
+/** Proxmox's real answer from a lab node with a fresh install's sources. */
+const FRESH: RawRepositories = JSON.parse(readFileSync(new URL("../../test/apt-fresh-install.json", import.meta.url), "utf8"));
+const URIS: Record<string, [string, string, string]> = {
+  "no-subscription": ["proxmox.sources", "http://download.proxmox.com/debian/pve", "pve-no-subscription"],
+  enterprise: ["pve-enterprise.sources", "https://enterprise.proxmox.com/debian/pve", "pve-enterprise"],
+  "ceph-squid-no-subscription": ["ceph.sources", "http://download.proxmox.com/debian/ceph-squid", "no-subscription"],
+  "ceph-squid-enterprise": ["ceph.sources", "https://enterprise.proxmox.com/debian/ceph-squid", "enterprise"],
+};
+/** A node's update sources that change the way Proxmox's do when asked to add or turn off. */
+function aptNode() {
+  const r: RawRepositories = structuredClone(FRESH);
+  return {
+    repos: r,
+    get: () => structuredClone(r),
+    add(handle: string) {
+      const [file, uri, comp] = URIS[handle]!;
+      const std = r["standard-repos"]!.find((x) => x.handle === handle)!;
+      const path = `/etc/apt/sources.list.d/${file}`;
+      let f = r.files!.find((x) => x.path === path);
+      if (!f) r.files!.push((f = { path, repositories: [] }));
+      const there = f.repositories!.find((x) => x.URIs?.[0] === uri);
+      if (there) there.Enabled = true;
+      else f.repositories!.push({ Enabled: true, URIs: [uri], Components: [comp] });
+      std.status = 1;
+    },
+    off(path: string, index: number) {
+      const e = r.files!.find((x) => x.path === path)!.repositories![index]!;
+      e.Enabled = false;
+      const std = Object.entries(URIS).find(([, [, uri]]) => uri === e.URIs?.[0]);
+      if (std) r["standard-repos"]!.find((x) => x.handle === std[0])!.status = 0;
+    },
+    on: () => r.files!.flatMap((f) => (f.repositories ?? []).filter((x) => x.Enabled).map((x) => x.URIs![0]!)).filter((u) => u.includes("proxmox.com")).sort(),
+  };
+}
 
 const FP = (n: number) => Array(32).fill(n.toString(16).padStart(2, "0").toUpperCase()).join(":");
 const CODE = "ABCD-1234-EF56";
@@ -22,6 +58,9 @@ function lab(over: Partial<Outside> = {}) {
   const guests: Record<string, number> = { n2: 0, n3: 0 };
   const calls: string[] = [];
   const saved: Saved[] = [];
+  const apt: Record<string, ReturnType<typeof aptNode>> = { n1: aptNode(), n2: aptNode(), n3: aptNode() };
+  const subscriptions: Record<string, string> = {};
+  const offline = new Set<string>();
   const name = (to: Pinned) => ({ "10.0.0.1": "n1", "pve1.lan": "n1", "10.0.0.2": "n2", "10.0.0.3": "n3" })[to.host] ?? "?";
   const out: Outside = {
     probe: async (host) => ({ fingerprint: FP(Number(host.split(".").pop())), subject: "x" }),
@@ -35,13 +74,27 @@ function lab(over: Partial<Outside> = {}) {
       if (p === "/nodes") return reply([{ node: name(to) }]);
       if (p === "/cluster/status") {
         if (name(to) !== "n1") return reply([{ type: "node", name: name(to), ip: to.host, online: 1 }]);
-        return reply([...(clusterName ? [{ type: "cluster", name: clusterName }] : []), ...members.map((m) => ({ type: "node", name: m.name, ip: m.ip, online: 1 }))]);
+        return reply([...(clusterName ? [{ type: "cluster", name: clusterName }] : []), ...members.map((m) => ({ type: "node", name: m.name, ip: m.ip, online: offline.has(m.name) ? 0 : 1 }))]);
       }
       if (p === "/cluster/config" && method === "POST") {
         clusterName = opts.form?.clustername ?? "";
         return reply("UPID:1");
       }
       if (p.includes("/tasks/")) return reply({ status: "stopped", exitstatus: "OK" });
+      const nodeApt = /^\/nodes\/([^/]+)\/(apt\/repositories|apt\/update|subscription)$/.exec(p);
+      if (nodeApt) {
+        const node = nodeApt[1]!;
+        const what = nodeApt[2]!;
+        const a = apt[node]!;
+        if (what === "subscription") return reply({ status: subscriptions[node] ?? "notfound" });
+        if (what === "apt/update") return reply(`UPID:apt:${node}`);
+        if (method === "GET") return reply(a.get());
+        if (opts.form?.digest !== a.repos.digest) throw new PveReply(500, "detected modified configuration");
+        if (method === "PUT") a.add(opts.form!.handle!);
+        else a.off(opts.form!.path!, Number(opts.form!.index));
+        a.repos.digest = `${a.repos.digest}+`;
+        return reply(null);
+      }
       if (p.endsWith("/qemu")) return reply(Array(guests[name(to)] ?? 0).fill({}));
       if (p.endsWith("/lxc")) return reply([]);
       if (p === "/cluster/config/join") {
@@ -58,7 +111,7 @@ function lab(over: Partial<Outside> = {}) {
     now: () => clock,
     ...over,
   };
-  return { wizard: new Wizard(hash, out), calls, saved, guests, hash, tick: (ms: number) => { clock += ms; }, setCluster: (n: string) => { clusterName = n; }, setMembers: (m: typeof members) => { members.splice(0, members.length, ...m); } };
+  return { wizard: new Wizard(hash, out), apt, subscriptions, offline, calls, saved, guests, hash, tick: (ms: number) => { clock += ms; }, setCluster: (n: string) => { clusterName = n; }, setMembers: (m: typeof members) => { members.splice(0, members.length, ...m); } };
 }
 const signedIn = async (l: ReturnType<typeof lab>) => {
   l.wizard.enterCode(CODE);
@@ -261,4 +314,53 @@ test("saved settings fill gaps, the environment wins, and unknown keys are ignor
   const other: NodeJS.ProcessEnv = { BOSSMOX_SETTINGS: file };
   applySettings(other);
   assert.equal(other.NODE_OPTIONS, undefined);
+});
+
+const PAID_PVE = "https://enterprise.proxmox.com/debian/pve";
+const PAID_CEPH = "https://enterprise.proxmox.com/debian/ceph-squid";
+const FREE_PVE = "http://download.proxmox.com/debian/pve";
+const FREE_CEPH = "http://download.proxmox.com/debian/ceph-squid";
+
+test("the free channel goes on every node, Proxmox's and Ceph's, and the paid sources go off", async () => {
+  const l = lab();
+  await signedIn(l);
+  await l.wizard.createCluster("lab-1");
+  await l.wizard.addNode("10.0.0.2", FP(2), "right");
+  const out = await l.wizard.setChannel("free");
+  assert.deepEqual(out.channelProblems, []);
+  for (const n of ["n1", "n2"]) assert.deepEqual(l.apt[n]!.on(), [FREE_CEPH, FREE_PVE], n);
+  // Free went on before paid went off: the first change on each node is an add.
+  const n2 = l.calls.filter((c) => c.includes("/nodes/n2/apt/repositories") && !c.includes(" GET "));
+  assert.match(n2[0]!, / PUT /);
+  assert.deepEqual(l.apt.n3!.on(), [PAID_CEPH, PAID_PVE], "a node outside the cluster isn't touched");
+});
+
+test("enterprise without a subscription changes nothing and names the node", async () => {
+  const l = lab();
+  await signedIn(l);
+  await l.wizard.createCluster("lab-1");
+  await l.wizard.addNode("10.0.0.2", FP(2), "right");
+  l.subscriptions.n1 = "Active";
+  await assert.rejects(l.wizard.setChannel("enterprise"), /n2 doesn't have an active subscription/);
+  assert.equal(l.calls.filter((c) => / (PUT|POST) \/nodes\/n\d\/apt\/repositories/.test(c)).length, 0);
+  l.subscriptions.n2 = "Active";
+  assert.deepEqual((await l.wizard.setChannel("enterprise")).channelProblems, []);
+  assert.deepEqual(l.apt.n2!.on(), [PAID_CEPH, PAID_PVE]);
+});
+
+test("an offline node is reported and the rest still switch", async () => {
+  const l = lab();
+  await signedIn(l);
+  await l.wizard.createCluster("lab-1");
+  await l.wizard.addNode("10.0.0.2", FP(2), "right");
+  l.offline.add("n2");
+  const out = await l.wizard.setChannel("free");
+  assert.deepEqual(out.channelProblems, ["n2 is offline, so it wasn't changed."]);
+  assert.deepEqual(l.apt.n1!.on(), [FREE_CEPH, FREE_PVE]);
+});
+
+test("only the offered channels are accepted", async () => {
+  const l = lab();
+  await signedIn(l);
+  await assert.rejects(l.wizard.setChannel("test"), status(400));
 });

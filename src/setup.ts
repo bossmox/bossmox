@@ -121,6 +121,7 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
     log(`cluster now has ${out.nodes.length} nodes`);
     return json(res, 200, out);
   }
+  if (route === "/setup/channel") return json(res, 200, await wizard.setChannel(text(body.channel, 16)));
   if (route === "/setup/finish") {
     await wizard.finish((req.headers.host ?? "").replace(/:\d+$/, "").toLowerCase());
     log("finished, restarting as normal BossMox");

@@ -1,8 +1,44 @@
 /**
  * Switching a node between Proxmox's free and enterprise update channels (ADR 0013).
- * Pure functions: server.ts reads Proxmox's answer, asks these what to change, and makes the calls.
+ * The Nodes screen and the setup wizard both switch through applyChannel, so they do exactly the same thing.
  */
-import type { RawRepositories } from "./server-detail.js";
+import type { RawRepositories, RawSubscription } from "./server-detail.js";
+
+/** A refusal worded for the person, such as the enterprise channel without a subscription. */
+export class ChannelError extends Error {}
+
+/** How applyChannel reaches Proxmox: the signed-in session on the Nodes screen, the pinned connection in setup. */
+export interface ChannelIO {
+  get<T>(path: string): Promise<T>;
+  put(path: string, form: Record<string, string>): Promise<unknown>;
+  post<T>(path: string, form: Record<string, string>): Promise<T>;
+}
+
+/**
+ * Switches one node and returns the task of the check for updates that follows. The new channel goes on before
+ * the old one goes off, so a failure part way leaves both on, never neither. Each change carries Proxmox's
+ * digest, so a change made elsewhere at the same moment is refused instead of overwritten.
+ */
+export async function applyChannel(io: ChannelIO, node: string, target: Channel): Promise<string> {
+  const base = `/nodes/${encodeURIComponent(node)}`;
+  if (target === "enterprise") {
+    const sub = await io.get<RawSubscription>(`${base}/subscription`);
+    if (sub.status?.toLowerCase() !== "active") throw new ChannelError(`The enterprise channel needs an active Proxmox subscription on ${node}.`);
+  }
+  const read = () => io.get<RawRepositories>(`${base}/apt/repositories`);
+  const digest = (r: RawRepositories): Record<string, string> => (r.digest ? { digest: r.digest } : {});
+  let repos = await read();
+  for (const handle of channelAdds(repos, target)) {
+    await io.put(`${base}/apt/repositories`, { handle, ...digest(repos) });
+    repos = await read();
+  }
+  if (!channelOn(repos, target)) throw new ChannelError(`Proxmox didn't turn on the new channel on ${node}, so BossMox left the old one as it was.`);
+  for (const off of channelDisables(repos, target)) {
+    await io.post(`${base}/apt/repositories`, { path: off.path, index: String(off.index), enabled: "0", ...digest(repos) });
+    repos = await read();
+  }
+  return io.post<string>(`${base}/apt/update`, {});
+}
 
 export type Channel = "free" | "enterprise";
 

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { isIP } from "node:net";
 import type { Peer, Pinned } from "./pinned.js";
 import { parseAddress, PinError, PveReply } from "./pinned.js";
+import { applyChannel, ChannelError, type ChannelIO } from "./update-channel.js";
 import type { Saved } from "./settings.js";
 
 const MAX_CODE_TRIES = 10;
@@ -21,7 +22,7 @@ export class WizardError extends Error {
 /** Everything the wizard needs from the outside world, so its logic can be tested with no network. */
 export interface Outside {
   probe(host: string, port: number): Promise<Peer>;
-  call<T>(to: Pinned, method: "GET" | "POST", path: string, opts?: { ticket?: string; csrf?: string; form?: Record<string, string> }): Promise<T>;
+  call<T>(to: Pinned, method: "GET" | "POST" | "PUT", path: string, opts?: { ticket?: string; csrf?: string; form?: Record<string, string> }): Promise<T>;
   /** Whether a node's certificate verifies against the certificate authority, and matches `name` or else the address. */
   verifies(host: string, port: number, ca: string, name?: string): Promise<boolean>;
   saveCa(pem: string): string;
@@ -182,9 +183,9 @@ export class Wizard {
     return this.state();
   }
 
-  private async follow(to: Pinned, task: string) {
+  private async follow(to: Pinned, task: string, node = this.nodeName) {
     const until = this.out.now() + JOIN_WAIT_MS;
-    const path = `/nodes/${encodeURIComponent(this.nodeName)}/tasks/${encodeURIComponent(task)}/status`;
+    const path = `/nodes/${encodeURIComponent(node)}/tasks/${encodeURIComponent(task)}/status`;
     while (this.out.now() < until) {
       await this.out.wait(1500);
       // Proxmox restarts its services during this, so a failed check doesn't mean anything yet.
@@ -238,6 +239,43 @@ export class Wizard {
     }
     await this.settle((s) => s.nodes.some((n) => n.name === node && n.online));
     return this.state();
+  }
+
+  /**
+   * Puts every node on the chosen update channel (ADR 0013). The screen picks free unless the person says they
+   * have a subscription. Problems on one node don't stop the others; they come back as plain sentences.
+   */
+  async setChannel(target: string) {
+    if (target !== "free" && target !== "enterprise") throw new WizardError(400, "Pick one of the choices.");
+    await this.refresh();
+    const to = this.need();
+    const io: ChannelIO = {
+      get: (p) => this.out.call(to, "GET", p, this.auth()),
+      put: (p, form) => this.out.call(to, "PUT", p, { ...this.auth(), form }),
+      post: (p, form) => this.out.call(to, "POST", p, { ...this.auth(), form }),
+    };
+    const online = this.nodes.filter((n) => n.online);
+    if (target === "enterprise") {
+      // Check every node first, so a missing subscription doesn't leave the cluster half switched.
+      const without: string[] = [];
+      for (const n of online) {
+        const sub = await io.get<{ status?: string }>(`/nodes/${encodeURIComponent(n.name)}/subscription`);
+        if (sub.status?.toLowerCase() !== "active") without.push(n.name);
+      }
+      if (without.length) throw new WizardError(400, `${without.join(", ")} ${without.length === 1 ? "doesn't" : "don't"} have an active subscription. Add the key on the node's Subscription page in Proxmox, or use the free channel.`);
+    }
+    const problems = this.nodes.filter((n) => !n.online).map((n) => `${n.name} is offline, so it wasn't changed.`);
+    for (const n of online) {
+      try {
+        await this.follow(to, await applyChannel(io, n.name, target), n.name);
+      } catch (err) {
+        if (err instanceof ChannelError) problems.push(err.message);
+        else if (err instanceof PveReply) problems.push(`${n.name}: Proxmox refused: ${err.reason}`);
+        else if (err instanceof WizardError) problems.push(`${n.name} switched, but its check for updates didn't finish cleanly. Look at its Updates in BossMox after setup.`);
+        else throw err;
+      }
+    }
+    return { ...(await this.state()), channelProblems: problems };
   }
 
   /** Trust comes last: each standalone node has its own certificate authority until it joins. */

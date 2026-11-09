@@ -21,7 +21,7 @@ async function post(route, body) {
   return out;
 }
 function screen(step, title, lead, html) {
-  $("#step").textContent = step ? `Step ${step} of 5` : "";
+  $("#step").textContent = step ? `Step ${step} of 6` : "";
   $("#title").textContent = title;
   $("#lead").textContent = lead;
   $("#problem").hidden = true;
@@ -94,9 +94,21 @@ function joinScreen(joiner) {
     `${fingerprintBlock(joiner.fingerprint)}${field("Root password for that node", `<input id="password" type="password" autocomplete="off">`)}
      ${buttons(`<button class="btn" data-do="backcluster">Back</button>`, `<button class="btn primary" data-do="join">It matches, add it</button>`)}`);
 }
+const CHANNELS = [
+  ["free", "No, use the free channel", "The same software as the paid channel, sooner and with less testing. Proxmox suggests it for testing and non-production use."],
+  ["enterprise", "Yes, I have a subscription", "Uses Proxmox's tested enterprise channel. Each node's subscription key has to be added in Proxmox first."],
+  ["leave", "Leave it as it is", "For anyone who has already set up their own update sources."],
+];
+function channelScreen(problems = []) {
+  S.channel = S.channel ?? "free";
+  screen(5, "Proxmox updates", "Do you have a Proxmox subscription? A new install points at the paid update channel, which can't download anything without one.",
+    `<div class="choices" role="radiogroup" aria-label="Update channel" style="grid-template-columns:1fr">${CHANNELS.map(([k, t, d]) => `<button class="choice ${S.channel === k ? "on" : ""}" role="radio" aria-checked="${S.channel === k}" data-do="pickchannel" data-channel="${k}"><b>${esc(t)}</b><small>${esc(d)}</small></button>`).join("")}</div>
+     ${buttons(`<button class="btn" data-do="backcluster">Back</button>`, problems.length ? `<button class="btn" data-do="skipchannel">Finish anyway</button>` : "", `<button class="btn primary" data-do="channel">${problems.length ? "Try again" : "Continue"}</button>`)}`);
+  if (problems.length) problem(problems.join(" "));
+}
 function finishScreen() {
-  screen(5, "Ready to finish", `BossMox will manage ${S.cluster.clusterName || "this node"} and answer at ${location.host}. Setup then locks, and you sign in with your Proxmox account as normal.`,
-    `${nodeRows()}${buttons(`<button class="btn" data-do="backcluster">Back</button>`, `<button class="btn primary" data-do="finish">Finish setup</button>`)}`);
+  screen(6, "Ready to finish", `BossMox will manage ${S.cluster.clusterName || "this node"} and answer at ${location.host}. Setup then locks, and you sign in with your Proxmox account as normal.`,
+    `${nodeRows()}${buttons(`<button class="btn" data-do="backchannel">Back</button>`, `<button class="btn primary" data-do="finish">Finish setup</button>`)}`);
 }
 async function waitForBossMox() {
   screen(0, "Finishing", "BossMox is restarting with your settings. This page moves on by itself.", "");
@@ -137,7 +149,21 @@ const ACTIONS = {
     clusterScreen();
   }),
   backcluster: () => clusterScreen(),
-  done: () => finishScreen(),
+  backchannel: () => channelScreen(),
+  done: () => channelScreen(),
+  skipchannel: () => finishScreen(),
+  pickchannel: (b) => {
+    S.channel = b.dataset.channel;
+    channelScreen();
+  },
+  channel: (b) => {
+    if (S.channel === "leave") return finishScreen();
+    return run(b, "Switching, this takes a few seconds per node", async () => {
+      S.cluster = await post("channel", { channel: S.channel });
+      if (S.cluster.channelProblems.length) return channelScreen(S.cluster.channelProblems);
+      finishScreen();
+    });
+  },
   finish: (b) => run(b, "Finishing", async () => {
     await post("finish", {});
     await waitForBossMox();
