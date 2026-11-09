@@ -35,7 +35,9 @@ h1,h2,h3,p{margin:0}
 
 /* Top bar */
 #bar{position:fixed;top:0;left:0;right:0;height:46px;display:flex;align-items:center;gap:6px;padding:0 14px;background:var(--pane);backdrop-filter:blur(var(--blur));border-bottom:1px solid var(--line);z-index:9000}
-#brand{font-weight:800;font-size:17px;letter-spacing:-.01em;margin-right:12px}
+#brand{font-weight:800;font-size:17px;letter-spacing:-.01em;margin-right:12px;display:flex;align-items:center;gap:8px}
+.brandicon{border-radius:6px;flex:none}
+.boxlogo{display:block;margin:0 auto 14px;border-radius:24px}
 #tasks{display:flex;gap:4px;flex:1;min-width:0;overflow:hidden}
 .task{padding:5px 11px;border-radius:var(--r-s);font-size:14px;font-weight:500;white-space:nowrap}
 .task:hover{background:var(--surface2)}

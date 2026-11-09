@@ -66,6 +66,8 @@ const STATIC: Record<string, [string, string]> = {
   "/favicon.ico": ["icons/favicon.ico", "image/x-icon"],
   "/icons/icon-32.png": ["icons/icon-32.png", "image/png"],
   "/icons/icon-180.png": ["icons/icon-180.png", "image/png"],
+  "/icons/icon-64.png": ["icons/icon-64.png", "image/png"],
+  "/icons/logo-240.png": ["icons/logo-240.png", "image/png"],
 };
 const HEADERS = {
   "Content-Security-Policy":
