@@ -8,16 +8,18 @@ import path from "node:path";
 export interface Preferences {
   /** The guests are backed up by something Proxmox doesn't know about (Veeam, a script, another server). */
   backupsElsewhere: boolean;
+  /** Check GitHub for a newer BossMox every 6 hours (ADR 0019). On unless someone turns it off. */
+  updateCheck: boolean;
 }
-const DEFAULTS: Preferences = { backupsElsewhere: false };
+const DEFAULTS: Preferences = { backupsElsewhere: false, updateCheck: true };
 
 export const preferencesPath = (settingsFile: string) => path.join(path.dirname(settingsFile), "preferences.json");
 
-/** Anything missing, unreadable or of the wrong type falls back to the default, which is the safer one: warn. */
+/** Anything missing, unreadable or of the wrong type falls back to the default, which is the safer one: warn, and check for updates. */
 export function readPreferences(file: string): Preferences {
   try {
     const raw = JSON.parse(readFileSync(file, "utf8")) as Partial<Preferences>;
-    return { backupsElsewhere: raw.backupsElsewhere === true };
+    return { backupsElsewhere: raw.backupsElsewhere === true, updateCheck: raw.updateCheck !== false };
   } catch {
     return { ...DEFAULTS };
   }

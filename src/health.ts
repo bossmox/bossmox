@@ -9,7 +9,7 @@ import type { StorageMap } from "./storage-map.js";
 export type Status = "ok" | "warn" | "bad" | "off";
 export interface Fix {
   /** Which button the screen shows: each maps to something BossMox already does. */
-  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere";
+  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check";
   label: string;
   node?: string;
   channel?: string;
@@ -42,6 +42,8 @@ export interface HealthInput {
   maps: StorageMap[];
   /** True when BossMox's own address comes from DHCP, null when it can't tell (it isn't running in its VM). */
   ownDhcp: boolean | null;
+  /** The check for a newer BossMox (ADR 0019); absent on a copy with no version, run from the repo. */
+  update?: { on: boolean; checkedAt: number | null; available: { version: string } | null; failed: string | null; running: string };
 }
 
 const list = (names: string[], max = 4) => (names.length > max ? `${names.slice(0, max).join(", ")} and ${names.length - max} more` : names.join(", "));
@@ -120,5 +122,10 @@ export function buildHealth(h: HealthInput): Check[] {
   // BossMox itself
   if (h.ownDhcp === true) add({ id: "own-address", group: "BossMox", status: "warn", title: "BossMox's address could change", detail: "Its VM gets its address from your router, which can hand it a different one after a restart. Your bookmark would stop working until you found the new one on the VM's console. The simplest fix is to reserve its address in your router's DHCP settings. Keeping it fixed from here is coming in a later release." });
   else if (h.ownDhcp === false) add({ id: "own-address", group: "BossMox", status: "ok", title: "BossMox keeps the same address", detail: "" });
+  const u = h.update;
+  if (u && !u.on) add({ id: "bossmox-version", group: "BossMox", status: "off", title: "BossMox isn't checking for updates", detail: `You turned the check off, so BossMox won't tell you when a new version is out. This is ${u.running}. To have it check again, use Check for updates.`, fix: { kind: "update-check", label: "Check for updates" } });
+  else if (u?.available) add({ id: "bossmox-version", group: "BossMox", status: "warn", title: `BossMox ${u.available.version} is available`, detail: `This is ${u.running}. Updating takes one command on a Proxmox node, and your settings stay.`, fix: { kind: "bossmox-update", label: "How to update" } });
+  else if (u?.failed) add({ id: "bossmox-version", group: "BossMox", status: "warn", title: "BossMox couldn't check for updates", detail: `${u.failed}. It tries again every 6 hours. If this BossMox can't reach the internet on purpose, turn the check off.`, fix: { kind: "update-check", label: "Turn the check off" } });
+  else if (u?.checkedAt) add({ id: "bossmox-version", group: "BossMox", status: "ok", title: "BossMox is up to date", detail: `This is ${u.running}. It checks for a new version every 6 hours.` });
   return out;
 }

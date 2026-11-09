@@ -142,7 +142,8 @@ function renderHealth() {
     return;
   }
   const { nodes, vms, storage } = S.data;
-  const issues = [...S.data.issues, ...diskIssues()];
+  const avail = S.data.update?.available;
+  const issues = [...(avail ? [{ kind: "bossmox-update", title: `BossMox ${avail.version} is available`, detail: "" }] : []), ...S.data.issues, ...diskIssues()];
   const up = nodes.filter((n) => n.online).length;
   const guests = vms.filter((v) => !v.template);
   const run = guests.filter((v) => v.running).length;
@@ -170,7 +171,7 @@ function renderHealth() {
         <span class="leds">${on.map((v) => `<i class="${!v.running ? "off" : v.issues.length ? "w" : ""}"></i>`).join("")}</span>
         <small>${n.online ? `${n.cpuPct}% busy` : "Offline"}</small></button>`;
     }).join("")}</div>
-    ${shown.length && !notes.collapsed ? `<div class="look-items">${shown.map((i) => `<div class="look-row"><button class="look-item" ${i.vmId ? `data-vm="${i.vmId}"` : 'data-open="storage"'}><span class="dot warn"></span><span>${esc(i.title)}</span></button><button class="look-x" data-noticex="${esc(noticeKey(i))}" aria-label="Dismiss ${esc(i.title)}" title="Dismiss">&times;</button></div>`).join("")}</div>` : ""}
+    ${shown.length && !notes.collapsed ? `<div class="look-items">${shown.map((i) => `<div class="look-row"><button class="look-item" ${i.vmId ? `data-vm="${i.vmId}"` : i.kind === "bossmox-update" ? 'data-bmupdate="1"' : 'data-open="storage"'}><span class="dot warn"></span><span>${esc(i.title)}</span></button><button class="look-x" data-noticex="${esc(noticeKey(i))}" aria-label="Dismiss ${esc(i.title)}" title="Dismiss">&times;</button></div>`).join("")}</div>` : ""}
     ${controls ? `<div class="look-controls">${controls}</div>` : ""}`;
 }
 
@@ -190,6 +191,8 @@ function healthFix(f) {
     case "boot-on": return b(`data-hcboot="${esc(f.vmids.join(","))}"`);
     case "open-vm": return b(`data-vm="${f.vmids[0]}"`);
     case "backups-elsewhere": return b(`data-backupselsewhere="off"`);
+    case "bossmox-update": return b(`data-bmupdate="1"`);
+    case "update-check": return b(`data-updatecheck="${S.data?.update?.on === false ? "on" : "off"}"`);
     default: return "";
   }
 }
@@ -207,7 +210,7 @@ function drawHealthCheck() {
   const groups = ["Nodes", "Backups", "Storage", "Guests", "BossMox"].map((g) => [g, checks.filter((c) => c.group === g).sort((a, b) => HC_ORDER[a.status] - HC_ORDER[b.status])]).filter(([, l]) => l.length);
   box.innerHTML = `<div class="sttop"><div><h2 class="hchead">${esc(head)}</h2><p class="meta" style="margin:2px 0 0">${checks.length} checks, ${checks.filter((c) => c.status === "ok").length} passed${checks.some((c) => c.status === "off") ? `, ${checks.filter((c) => c.status === "off").length} turned off` : ""}.</p></div><div class="actions"><button class="btn" data-hcagain="1">Check again</button></div></div>
     ${groups.map(([g, list]) => `<h3 class="sthd">${esc(g)}</h3><div class="stgroup hcgroup">${list.map((c) => `<div class="hcrow ${c.status}"><span class="dot ${c.status === "ok" ? "running" : c.status === "off" ? "" : "warn"}" aria-hidden="true"></span>
-      <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" ? "" : healthFix(c.fix)}${c.id === "scheduled" && c.status === "warn" ? `<button class="btn" data-backupselsewhere="on">We back up another way</button>` : ""}</div></div>`).join("")}</div>`).join("")}`;
+      <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" ? "" : healthFix(c.fix)}${c.id === "scheduled" && c.status === "warn" ? `<button class="btn" data-backupselsewhere="on">We back up another way</button>` : ""}${c.id === "bossmox-version" && (c.status === "ok" || c.fix?.kind === "bossmox-update") ? `<button class="btn" data-updatecheck="off">Stop checking</button>` : ""}</div></div>`).join("")}</div>`).join("")}`;
 }
 async function loadHealthCheck() {
   const run = S.loadRun;
@@ -2725,6 +2728,50 @@ document.addEventListener("click", (e) => {
       await loadDisks(node);
       await afterStorage();
     });
+  }
+  if (d.bmupdate) {
+    const u = S.data?.update;
+    if (!u?.available) return;
+    // The update script looks for the BossMox VM on the node it runs on, so it has to run where that VM is.
+    const home = S.data.vms.filter((v) => v.name === "bossmox");
+    const first = home.length === 1 && onlineNodes().includes(home[0].node) ? home[0].node : null;
+    const where = first ? `on ${esc(first)}, the node that holds the BossMox VM` : "on the node that holds the BossMox VM";
+    return dialog(`<h3>Update to BossMox ${esc(u.available.version)}</h3>
+      <p>Run this as root ${where}, in its console or over SSH. It downloads the new version, checks it, and restarts BossMox. Your settings stay, your guests aren't touched, and if the new version doesn't start, the old one comes back. Anyone signed in is signed out once.</p>
+      <pre class="tasklog whole updcmd">${esc(u.command)}</pre>
+      <p class="meta"><a href="${esc(u.available.url)}" target="_blank" rel="noopener noreferrer">What's new in ${esc(u.available.version)}</a></p>
+      <div class="row-end"><button class="btn" data-dlg="cancel">Close</button>${first ? `<button class="btn" data-updconsole="${esc(first)}">Open ${esc(first)}'s console</button>` : ""}<button class="btn primary" data-copyupdate="1">Copy the command</button></div>`);
+  }
+  if (d.updconsole) {
+    closeDialog();
+    return openNodeConsole(d.updconsole);
+  }
+  if (d.copyupdate) {
+    const cmd = S.data?.update?.command ?? "";
+    // The clipboard needs a secure page and permission; when it says no, the command is selected for Ctrl+C.
+    const select = () => {
+      const r = document.createRange();
+      r.selectNodeContents($("#dialog .updcmd"));
+      getSelection().removeAllRanges();
+      getSelection().addRange(r);
+      t.textContent = "Selected: press Ctrl+C";
+    };
+    if (!navigator.clipboard) return select();
+    navigator.clipboard.writeText(cmd).then(() => (t.textContent = "Copied"), select);
+    return;
+  }
+  if (d.updatecheck) {
+    const on = d.updatecheck === "on";
+    const after = async () => {
+      await refresh();
+      if (wins.health) {
+        S.healthAgain = true;
+        await loadHealthCheck();
+      }
+    };
+    return on
+      ? confirmAction("Check for BossMox updates?", "Every 6 hours BossMox asks GitHub whether a newer version is out, and tells you if there is. It never installs anything by itself. GitHub sees this BossMox's internet address when it asks.", "Check for updates", () => runAction("preferences-set", onlineNodes()[0], "Saving", { updateCheck: true }, after))
+      : confirmAction("Stop checking for updates?", "BossMox will stop asking GitHub for new versions, for everyone who uses it, so it won't tell you when one is out. You can turn the check back on in the health check.", "Stop checking", () => runAction("preferences-set", onlineNodes()[0], "Saving", { updateCheck: false }, after));
   }
   if (d.backupselsewhere) {
     const on = d.backupselsewhere === "on";

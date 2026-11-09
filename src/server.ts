@@ -20,6 +20,7 @@ import { plainError } from "./plain-errors.js";
 import { buildHealth } from "./health.js";
 import { canChangeCluster, preferencesPath, readPreferences, scheduleWarnings, writePreferences, type Preferences } from "./preferences.js";
 import { settingsPath } from "./settings.js";
+import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
 import { buildStorageMap, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import {
   buildMovePlan,
@@ -106,6 +107,13 @@ const cache = new WeakMap<Session, { at: number; value: Promise<Loaded>; epoch: 
 const PREFERENCES_FILE = preferencesPath(settingsPath(process.env));
 let preferences: Preferences = readPreferences(PREFERENCES_FILE);
 let preferencesEpoch = 0;
+
+/** Checks GitHub for a newer BossMox every 6 hours while it's on (ADR 0019). A copy with no version never checks. */
+const updates = new UpdateChecker(VERSION, preferences.updateCheck);
+updates.start();
+const HAS_VERSION = versionNumbers(VERSION) !== null;
+const SHORT_VERSION = VERSION.replace(/^(\d+\.\d+\.\d+(?:-[a-z]+)?).*$/, "$1");
+const updateView = () => (HAS_VERSION ? { on: updates.state.on, available: updates.state.available, command: UPDATE_COMMAND } : null);
 
 async function fetchGuest(r: RawResource, ticket: string): Promise<[number, Guest]> {
   const base = `/nodes/${encodeURIComponent(r.node ?? "")}/${r.type}/${r.vmid}`;
@@ -401,6 +409,7 @@ async function loadHealth(session: Session) {
       .map((x) => ({ node: x.node ?? "", guest: names.get(x.id ?? "") ?? "", at: x.endtime ?? 0 })),
     maps: maps.filter((m): m is NonNullable<typeof m> => m !== null),
     ownDhcp: ownAddressFromDhcp(),
+    ...(HAS_VERSION ? { update: { ...updates.state, running: `version ${SHORT_VERSION}` } } : {}),
   });
 }
 
@@ -533,17 +542,21 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     return pve.post<string>(`${path}/status/${power}`, who, power === "stop" ? { "overrule-shutdown": "1" } : {});
   },
   "preferences-set": async (_name, who, body) => {
-    if (typeof body.backupsElsewhere !== "boolean") throw new AuthError(400, "That request isn't valid.");
+    const elsewhere = body.backupsElsewhere, check = body.updateCheck;
+    if ((elsewhere !== undefined && typeof elsewhere !== "boolean") || (check !== undefined && typeof check !== "boolean") || (elsewhere === undefined && check === undefined))
+      throw new AuthError(400, "That request isn't valid.");
     // A cluster-wide choice needs the right to change the cluster's own settings in Proxmox (ADR 0018).
     const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", who.ticket).catch((): Record<string, Record<string, number>> => ({}));
     if (!canChangeCluster(perms)) throw new AuthError(403, "Your Proxmox account can't change settings for the whole cluster. That needs the Sys.Modify permission on the whole cluster (/).");
-    const next = { ...preferences, backupsElsewhere: body.backupsElsewhere };
+    const next = { ...preferences, ...(typeof elsewhere === "boolean" ? { backupsElsewhere: elsewhere } : {}), ...(typeof check === "boolean" ? { updateCheck: check } : {}) };
     try {
       writePreferences(PREFERENCES_FILE, next);
     } catch {
       throw new AuthError(500, "BossMox couldn't save that setting. Nothing changed.");
     }
+    const turned = next.updateCheck !== preferences.updateCheck;
     preferences = next;
+    if (turned) await updates.setOn(next.updateCheck);
     preferencesEpoch += 1;
     return null;
   },
@@ -1320,7 +1333,7 @@ const handler: http.RequestListener = async (req, res) => {
           return known ? json(res, 200, detail) : json(res, 404, { error: "BossMox can't find that node, or your account can't see it." });
         }
         // Only after sign-in: the exact version tells an attacker what to try.
-        return json(res, 200, { ...(await overview(session)), username: session.username, version: VERSION });
+        return json(res, 200, { ...(await overview(session)), username: session.username, version: VERSION, update: updateView() });
       } catch (err) {
         if (err instanceof PveError && err.status === 401) {
           sessions.end(id);
