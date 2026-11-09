@@ -50,7 +50,7 @@ Running BossMox outside the cluster is the most robust choice, because it keeps 
 
 **Treat wherever BossMox runs like a node.** Every admin's password passes through it at sign-in, so anyone who controls that VM or container could capture them. If it runs on the cluster, give only full admins any rights on it, including console, power, backup and cloud-init rights. Running it off-cluster avoids this.
 
-The first time you visit a self-signed address, your browser warns you. Compare the fingerprint it shows with the one on the server: `openssl x509 -noout -fingerprint -sha256 -in /etc/bossmox/tls.crt`. Clicking through without checking could hand your password to someone in the middle.
+The first time you visit a self-signed address, your browser warns you. Before you enter the setup code, open the certificate's details in the browser and compare its SHA-256 fingerprint with the one the install command printed, which the VM's console also shows next to the setup code. Clicking through without checking could hand your password to someone in the middle.
 
 Give BossMox its own name or address. Browsers share cookies across every port on a host, so an untrusted site on another port of the same address could interfere with sign-in.
 

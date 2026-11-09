@@ -175,3 +175,10 @@ test("a drive given to a VM directly is never empty in the storage view", () => 
   assert.deepEqual(m.empty.map((d) => d.path), []);
   assert.equal(m.otherDisks.find((d) => d.path === "/dev/sdd")?.givenTo, "nas-vm");
 });
+
+test("an account that can't see every guest is never told a disk is left over (security review L4)", () => {
+  const list = poolItems(vols, guests, true, false);
+  assert.equal(list.find((i) => i.volid === "fast:vm-958-disk-0")!.canDelete, false);
+  assert.match(list.find((i) => i.volid === "fast:vm-958-disk-0")!.whyNot, /can't see every guest/);
+  assert.equal(list.find((i) => i.volid === "local:iso/old.iso")!.canDelete, true, "a spare disc is still fine");
+});

@@ -446,8 +446,15 @@ async function storageMapFor(name: string, t: string, data: Overview) {
     passedThrough: passedThrough(name, data),
     guests: guestRefs(data),
     allNodesOnline: data.nodes.every((n) => n.online),
+    seesAllGuests: await seesAllGuests(t),
   }, data.nodes.length > 1);
   return { map, diskList: readHardDisks(disks, passedThrough(name, data)), config, directory };
+}
+
+/** Whether this account can see every guest. Without it, a guest it can't see looks like a deleted one. */
+async function seesAllGuests(ticket: string): Promise<boolean> {
+  const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2Fvms", ticket).catch((): Record<string, Record<string, number>> => ({}));
+  return perms["/vms"]?.["VM.Audit"] === 1;
 }
 
 const guestRefs = (data: Overview): GuestRefs[] => data.vms.map((v) => ({ vmid: v.id, name: v.name, known: v.configLoaded, refs: v.refs }));
@@ -681,7 +688,7 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     const base = `/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}`;
     // Fresh, not the cached overview: a guest made a moment ago must count.
     const [volumes, data] = await Promise.all([pve.get<RawVolume[]>(`${base}/content`, who.ticket), loadOverview(who.ticket)]);
-    const item = poolItems(volumes, guestRefs(data), data.nodes.every((n) => n.online)).find((i) => i.volid === volid);
+    const item = poolItems(volumes, guestRefs(data), data.nodes.every((n) => n.online), await seesAllGuests(who.ticket)).find((i) => i.volid === volid);
     if (!item) throw new AuthError(400, `That isn't on ${storage} anymore.`);
     if (!item.canDelete) throw new AuthError(400, item.whyNot);
     return pve.delete<string>(`${base}/content/${encodeURIComponent(volid)}`, who);

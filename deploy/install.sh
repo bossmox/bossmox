@@ -181,8 +181,11 @@ for i in found:
     echo "BossMox is ready."
     if [ -n "$ADDR" ]; then echo "  Open         https://$ADDR"; else echo "  Open         the address on this VM's console"; fi
     echo "  Setup code   $(echo "$CODE" | sed 's/..../&-/g; s/-$//')"
+    FP=$(guest_file /etc/bossmox/tls.fingerprint | tr -cd '0-9A-F:')
+    [ -z "$FP" ] || echo "  Certificate  $FP"
     echo
     echo "Your browser will warn about the certificate the first time. That's expected."
+    [ -z "$FP" ] || echo "Before entering the code, open the certificate details in the browser and check its SHA-256 fingerprint matches the one above."
     exit 0
   fi
   LOG_TAIL=$(guest_file /var/log/bossmox-firstboot.log | tail -3)

@@ -102,6 +102,11 @@ start_pre() {
 EOF
 chmod 755 /etc/init.d/bossmox
 
+# The certificate's fingerprint, so the person can check in the browser that they've reached this VM before the
+# setup code and a root password go through it (security review 2026-11-09, L3). Shown on the console and by install.sh.
+openssl x509 -noout -fingerprint -sha256 -in /etc/bossmox/tls.crt | cut -d= -f2 > /etc/bossmox/tls.fingerprint
+chmod 644 /etc/bossmox/tls.fingerprint
+
 # The setup code proves control of this VM, so it's shown only on its console and BossMox keeps only a hash.
 mkdir -p /usr/local/sbin
 cat > /usr/local/sbin/bossmox-setup-code <<'EOF'
@@ -110,13 +115,18 @@ grep -q '^export PVE_URL=' /etc/bossmox/env && exit 0
 [ -f /var/lib/bossmox/settings.json ] && exit 0
 HASH=/var/lib/bossmox/setup.hash
 CODE_FILE=/var/lib/bossmox/setup.code
-if [ ! -f "$HASH" ] || [ ! -f "$CODE_FILE" ]; then
+if [ ! -f "$HASH" ] || [ ! -f "$CODE_FILE" ] || [ -L "$HASH" ] || [ -L "$CODE_FILE" ]; then
+  # /var/lib/bossmox belongs to the service account, so a name there could be a link to a system file. Each file
+  # is made in a root-owned folder with its owner and mode already set, then renamed into place, which replaces a
+  # link instead of following it. Nothing touches the name after the rename. (Security review 2026-11-09, L2.)
   RAW=$(openssl rand -hex 6 | tr 'a-f' 'A-F')
-  printf '%s' "$RAW" | sha256sum | cut -d' ' -f1 > "$HASH"
-  printf '%s' "$RAW" > "$CODE_FILE"
-  chown bossmox:bossmox "$HASH" "$CODE_FILE"
-  chmod 640 "$HASH"
-  chmod 600 "$CODE_FILE"
+  for f in hash code; do
+    T=$(mktemp /var/lib/.bossmox-setup.XXXXXX) || exit 1
+    if [ $f = hash ]; then printf '%s' "$RAW" | sha256sum | cut -d' ' -f1 > "$T"; chmod 640 "$T"; DEST=$HASH
+    else printf '%s' "$RAW" > "$T"; chmod 600 "$T"; DEST=$CODE_FILE; fi
+    chown bossmox:bossmox "$T"
+    mv -f "$T" "$DEST"
+  done
 fi
 EOF
 chmod 755 /usr/local/sbin/bossmox-setup-code
@@ -156,10 +166,18 @@ while :; do
   if [ -z "$ADDR" ]; then
     printf "  ${BRIGHT}Waiting for a network address.$PLAIN$EOL\n$EOL\n$EOL\n$EOL\n"
   elif [ -f /var/lib/bossmox/setup.hash ] && [ -f /var/lib/bossmox/setup.code ]; then
-    CODE_TEXT=$(sed 's/..../&-/g; s/-$//' /var/lib/bossmox/setup.code)
+    CODE_TEXT=$(tr -cd '0-9A-F' < /var/lib/bossmox/setup.code | head -c 12 | sed 's/..../&-/g; s/-$//')
     printf "  ${BRIGHT}Ready to set up$PLAIN$EOL\n$EOL\n"
     printf "  Open         ${BRIGHT}https://%s$PLAIN$EOL\n" "$ADDR"
-    printf "  Setup code   ${CODE}%s$PLAIN$EOL\n" "$CODE_TEXT"
+    printf "  Setup code   ${CODE}%s$PLAIN$EOL\n$EOL\n" "$CODE_TEXT"
+    # Four groups of eight, so it fits the big console font. The browser shows the same pairs in its certificate view.
+    FP=$(tr -cd '0-9A-F:' < /etc/bossmox/tls.fingerprint 2>/dev/null)
+    if [ -n "$FP" ]; then
+      printf "  Certificate  %s$EOL\n" "$(echo "$FP" | cut -d: -f1-8)"
+      printf "               %s$EOL\n" "$(echo "$FP" | cut -d: -f9-16)"
+      printf "               %s$EOL\n" "$(echo "$FP" | cut -d: -f17-24)"
+      printf "               %s$EOL\n" "$(echo "$FP" | cut -d: -f25-32)"
+    fi
   else
     if rc-service bossmox status >/dev/null 2>&1; then STATE="${GOOD}Running"; else STATE="${BAD}Not running"; fi
     printf "  ${BRIGHT}BossMox is set up$PLAIN$EOL\n$EOL\n"

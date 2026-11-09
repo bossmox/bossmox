@@ -52,7 +52,7 @@ const ITEM_KIND: Record<string, string> = { images: "disk", rootdir: "disk", iso
  * that a VM still uses without a word (measured in the lab), so this is the check, and the server runs it again
  * on every delete. A disk is only ever deletable when no guest in the cluster owns it or refers to it.
  */
-export function poolItems(volumes: RawVolume[], guests: GuestRefs[], allNodesOnline: boolean) {
+export function poolItems(volumes: RawVolume[], guests: GuestRefs[], allNodesOnline: boolean, seesAllGuests = true) {
   const byId = new Map(guests.map((g) => [g.vmid, g]));
   const allKnown = guests.every((g) => g.known);
   return volumes
@@ -73,6 +73,9 @@ export function poolItems(volumes: RawVolume[], guests: GuestRefs[], allNodesOnl
       else if (usedBy.length) whyNot = kind === "disc" ? `It's in ${usedBy.join(", ")}'s disc drive.` : `${usedBy.join(", ")} still uses it.`;
       else if (!allNodesOnline) whyNot = "A node is offline, so BossMox can't be sure nothing there uses it.";
       else if (!allKnown) whyNot = "BossMox couldn't read every guest's settings, so it can't be sure nothing uses it.";
+      // A guest this account can't see looks like no guest at all (security review L4), so a disk is only called
+      // left over for an account that can see every guest.
+      else if (kind === "disk" && !owner && !seesAllGuests) whyNot = "Your Proxmox account can't see every guest, so BossMox can't be sure nothing uses this disk.";
       return {
         volid,
         kind,
@@ -106,6 +109,7 @@ export interface NodeStorageInput {
   passedThrough?: { device: string; guest: string }[];
   guests?: GuestRefs[];
   allNodesOnline?: boolean;
+  seesAllGuests?: boolean;
 }
 
 const GB = 1024 ** 3;
@@ -364,7 +368,7 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
       snapshots: snapshots(type),
       otherNodes: otherNodes(type, shared, clustered),
       disks: [...new Set(disks)],
-      items: poolItems(volumes, input.guests ?? [], input.allNodesOnline ?? true),
+      items: poolItems(volumes, input.guests ?? [], input.allNodesOnline ?? true, input.seesAllGuests ?? true),
       contentKnown: s.active === 1 && !(input.contentUnknown ?? []).includes(c.storage),
     });
   }
