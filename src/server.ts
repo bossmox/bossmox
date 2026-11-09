@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { AuthError, Sessions, type LoginOutcome, type Session } from "./auth.js";
 import { clientAddress, loadConfig, sameOrigin } from "./config.js";
 import { Terminals, type TermProxy } from "./terminal.js";
-import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
+import { buildOverview, clonesOf, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
 import { containerForm, CreateError, discDownload, discForm, FILE_STORAGE, installerLabel, vmForm, type CreateInput } from "./create.js";
 import { changesForm, SettingsError, waitingChanges } from "./guest-settings.js";
@@ -16,6 +16,7 @@ import { assertCanWipe, buildStorageList, setupPlan, deviceIsValid, diskStorageF
 import { addDiskForm, addNicForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { applyChannel, ChannelError } from "./update-channel.js";
+import { plainError } from "./plain-errors.js";
 import { buildStorageMap, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import {
   buildMovePlan,
@@ -719,9 +720,11 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     if (!STORAGE.test(storage) || !/^[\w.+-]+$/.test(template)) throw new AuthError(400, "That request isn't valid.");
     return pve.post<string>(`/nodes/${encodeURIComponent(name)}/aplinfo`, who, { storage, template });
   },
-  "guest-delete": (name, who, body) => {
+  "guest-delete": async (name, who, body) => {
     const { id, path } = guestPath(name, body);
     if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
+    const clones = clonesOf(Number(id), (await loadOverview(who.ticket)).vms);
+    if (clones.length) throw new AuthError(400, `${clones.join(", ")} ${clones.length === 1 ? "was" : "were"} made from this template and still ${clones.length === 1 ? "needs" : "need"} it. Delete ${clones.length === 1 ? "that clone" : "those clones"} first.`);
     return pve.delete<string>(`${path}?purge=1`, who);
   },
   "backup-restore": async (name, who, body) => {
@@ -830,7 +833,10 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
       sessions.end(id);
       return json(res, 401, { error: "Sign in to continue." });
     }
-    if (err.reason) return json(res, 400, { error: `Proxmox refused: ${err.reason}` });
+    if (err.reason) {
+      const plain = plainError(err.reason);
+      return json(res, 400, { error: plain === err.reason.trim() ? `Proxmox refused: ${plain}` : plain });
+    }
     throw err;
   }
 }

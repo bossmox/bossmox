@@ -1731,10 +1731,26 @@ function createGuest() {
     } else if (wins.create) loadCreate(server, kind);
   });
 }
-function askGuestDelete(id) {
+async function askGuestDelete(id) {
   const v = S.data?.vms.find((g) => g.id === id);
   if (!v) return;
-  dialog(`<h3>Delete ${esc(v.name)}?</h3><p>${esc(v.name)} and its disks are erased for good, and its snapshots go too. Backups stay, so it can be restored from one.</p>
+  const clones = (S.data?.vms ?? []).filter((x) => x.id !== v.id && (x.refs ?? []).some((r) => r.includes(`base-${v.id}-disk-`))).map((x) => x.name);
+  if (clones.length) {
+    return dialog(`<h3>${esc(v.name)} can't be deleted yet</h3><p>${esc(clones.join(", "))} ${clones.length === 1 ? "was" : "were"} made from this template and still ${clones.length === 1 ? "needs" : "need"} it. Delete ${clones.length === 1 ? "that clone" : "those clones"} first.</p>${closeRow}`);
+  }
+  // Asked fresh: what this says decides whether someone deletes their only copy.
+  dialog(`<h3>Delete ${esc(v.name)}?</h3><p>Checking its backups.</p>`);
+  let backups = null;
+  try {
+    const list = await signal("api/backups");
+    backups = list.groups.find((g) => g.id === v.id)?.backups ?? [];
+  } catch { /* said below */ }
+  const kept = backups === null
+    ? "BossMox couldn't check its backups just now, so don't count on there being one."
+    : backups.length
+      ? `It has ${backups.length === 1 ? "1 backup" : `${backups.length} backups`}, the newest from ${when(backups[0].takenAt)}. ${backups.length === 1 ? "That stays" : "Those stay"}, so it can be restored.`
+      : "It has no backups, so once it's deleted there's no getting it back.";
+  dialog(`<h3>Delete ${esc(v.name)}?</h3><p>${esc(v.name)} and its disks are erased for good, and its snapshots go too. ${esc(kept)}</p>
     <label class="field restartname"><span>Type ${esc(v.name)} to confirm</span><input id="rname" data-word="${esc(v.name.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-guestdeletego="${v.id}" disabled>Delete ${esc(v.name)}</button></div>`);
   $("#rname").focus();

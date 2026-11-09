@@ -1,4 +1,5 @@
 /** Turns raw Proxmox node answers into the Servers app's plain-language view. */
+import { plainError } from "./plain-errors.js";
 
 export type Section<T> = { available: true; value: T } | { available: false };
 
@@ -210,7 +211,7 @@ export function taskView(status: RawTaskStatus, log: { n?: number; t?: string }[
   return {
     finished,
     result: !finished ? "running" : exit === "OK" ? "ok" : exit.startsWith("WARNINGS") ? "warning" : "failed",
-    message: finished && exit !== "OK" ? exit : "",
+    message: finished && exit !== "OK" ? plainError(exit) : "",
     lines: log.map((l) => l.t ?? "").filter((l) => l !== "no content").slice(-max),
   };
 }

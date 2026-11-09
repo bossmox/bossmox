@@ -4,6 +4,7 @@ import { isIP } from "node:net";
 import type { Peer, Pinned } from "./pinned.js";
 import { parseAddress, PinError, PveReply } from "./pinned.js";
 import { applyChannel, ChannelError, type ChannelIO } from "./update-channel.js";
+import { plainError } from "./plain-errors.js";
 import type { Saved } from "./settings.js";
 
 const MAX_CODE_TRIES = 10;
@@ -270,7 +271,7 @@ export class Wizard {
         await this.follow(to, await applyChannel(io, n.name, target), n.name);
       } catch (err) {
         if (err instanceof ChannelError) problems.push(err.message);
-        else if (err instanceof PveReply) problems.push(`${n.name}: Proxmox refused: ${err.reason}`);
+        else if (err instanceof PveReply) problems.push(`${n.name}: ${plainError(err.reason)}`);
         else if (err instanceof WizardError) problems.push(`${n.name} switched, but its check for updates didn't finish cleanly. Look at its Updates in BossMox after setup.`);
         else throw err;
       }

@@ -221,3 +221,7 @@ export function buildOverview(
   return { updatedAt: now.toISOString(), nodes, vms, storage, issues, cluster };
 }
 export type Overview = ReturnType<typeof buildOverview>;
+
+/** Linked clones of a template: their disks are built on its base disks, so it can't go while they exist. */
+export const clonesOf = (id: number, vms: { id: number; name: string; refs: string[] }[]) =>
+  vms.filter((v) => v.id !== id && v.refs.some((r) => r.includes(`base-${id}-disk-`))).map((v) => v.name);
