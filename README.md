@@ -36,25 +36,56 @@ Other options (`--storage`, `--bridge`, `--vlan`, `--vmid`) are listed at the to
 
 ## What it does
 
-**Guests.** Make VMs and containers from an installer disc or a template, start, stop, restart, open a console, change settings in plain words, add disks and network cards, take and roll back snapshots, clone, make templates, move to another node, and delete with an honest answer about whether a backup exists.
+### Guests
 
-**Storage as disks and pools.** Each drive with the pools on it, what's using the space by name, whether snapshots work there and whether other nodes can use it. Add storage asks where it is and what it's for, then picks the type for you. See what's on a pool and clean up leftovers BossMox can prove nothing uses.
+Make VMs and containers from an installer disc or a template, start, stop, restart, open a console, change settings in plain words, add disks and network cards, take and roll back snapshots, clone, make templates, move to another node, and delete with an honest answer about whether a backup exists.
+
+![The Create a VM form](docs/screenshots/create-vm.png)
+*Making a VM: every choice in plain words, down to which drive its disk goes on and which network it joins.*
+
+### Storage as disks and pools
+
+Each drive with the pools on it, what's using the space by name, whether snapshots work there and whether other nodes can use it. See what's on a pool and clean up leftovers BossMox can prove nothing uses.
 
 ![Storage shown as drives and the pools on them](docs/screenshots/storage.png)
+*Two drives working together as a mirror, what's on each pool, and what each one can do.*
 
-**Backups.** Protect everything in one step with a nightly schedule that covers new guests too, back up now, restore as a copy or in place, and warnings when backups would sit on the same computer as the guests.
+Add storage asks where it is and what it's for, then picks the type for you.
 
-**Nodes and updates.** Switch to the free update channel in one click, check for and install updates in a live terminal, and update a whole cluster one node at a time, moving guests out of the way and back.
+![Add storage asking where the storage is, then how a NAS shares it](docs/screenshots/add-storage.png)
+*Adding storage starts with a question anyone can answer. iSCSI is on its way.*
 
-**Health check.** Every check BossMox can make, the passes included, with the fix for each problem one click away.
+### Backups
+
+Protect everything in one step with a nightly schedule that covers new guests too, back up now, restore as a copy or in place, and warnings when backups would sit on the same computer as the guests.
+
+![The Protect everything dialog, warning that the chosen storage is the system disk](docs/screenshots/protect-everything.png)
+*One step to back up every guest each night, with a plain warning when the backups would sit on the system disk.*
+
+### Nodes and updates
+
+Switch to the free update channel in one click, check for and install updates in a live terminal, and update a whole cluster one node at a time, moving guests out of the way and back.
+
+![A node's overview, with its update channel](docs/screenshots/node.png)
+*A node at a glance: how busy it is, what version it runs, which update channel it's on, and what's running on it.*
+
+### Health check
+
+Every check BossMox can make, the passes included, with the fix for each problem one click away.
 
 ![The health check, with problems first and a fix beside each](docs/screenshots/health-check.png)
+*Problems first, each with its fix, and the checks that passed, so you can see what healthy looks like.*
 
-**Setup.** A one-command install, a wizard that can build a cluster, and a question about your Proxmox subscription that sets the update channel for you.
+### Setup
 
-![Add storage asks where the storage is, then how a NAS shares it](docs/screenshots/add-storage.png)
+A one-command install, a wizard that can build a cluster, and a question about your Proxmox subscription that sets the update channel for you.
 
-**Three looks.** Daylight, Dusk and Workbench, picked in the top bar.
+![The setup wizard asking whether you have a Proxmox subscription](docs/screenshots/setup-updates.png)
+*The setup wizard asks whether you have a subscription and sets Proxmox's updates to match. Free is the default.*
+
+### Three looks
+
+Daylight, Dusk and Workbench, picked in the top bar.
 
 ![The same desktop in Daylight, Dusk and Workbench](docs/screenshots/three-looks.png)
 
