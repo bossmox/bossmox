@@ -1497,7 +1497,7 @@ function poolWords(node, id) {
   if (!m) return "";
   for (const g of m.groups) {
     const p = g.pools.find((x) => x.id === id);
-    if (p) return `${g.disks.some((d) => d.system) ? "on the system disk" : `on ${g.disks.map((d) => d.model || d.path).join(" + ")}`}${p.snapshots.startsWith("Snapshots don't") ? ", no snapshots" : ""}`;
+    if (p) return `${g.disks.some((d) => d.system) ? "on the system disk" : `on ${g.disks.map((d) => (d.model ? `${d.model} (${d.path})` : d.path)).join(" + ")}`}${p.snapshots.startsWith("Snapshots don't") ? ", no snapshots" : ""}`;
   }
   const n = m.network.find((x) => x.id === id);
   return n ? `${n.title.toLowerCase()}${n.details ? ` at ${n.details}` : ""}` : "";
