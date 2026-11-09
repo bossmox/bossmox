@@ -1,0 +1,275 @@
+{
+ "node": "rockylab",
+ "disks": [
+  {
+   "by_id_link": "/dev/disk/by-id/nvme-Samsung_SSD_980_500GB_SERIAL0000NVME_1",
+   "devpath": "/dev/nvme0n1",
+   "gpt": 1,
+   "health": "PASSED",
+   "model": "Samsung SSD 980 500GB",
+   "osdid": -1,
+   "osdid-list": null,
+   "rpm": 0,
+   "serial": "SERIAL0000NVME",
+   "size": 500107862016,
+   "type": "nvme",
+   "used": "partitions",
+   "vendor": "unknown",
+   "wearout": 94,
+   "wwn": "eui.0000000000000001"
+  },
+  {
+   "devpath": "/dev/nvme0n1p1",
+   "gpt": 1,
+   "osdid": -1,
+   "osdid-list": null,
+   "parent": "/dev/nvme0n1",
+   "size": 1031168,
+   "type": "partition",
+   "used": "BIOS boot"
+  },
+  {
+   "devpath": "/dev/nvme0n1p2",
+   "gpt": 1,
+   "mounted": 1,
+   "osdid": -1,
+   "osdid-list": null,
+   "parent": "/dev/nvme0n1",
+   "size": 1073741824,
+   "type": "partition",
+   "used": "EFI"
+  },
+  {
+   "devpath": "/dev/nvme0n1p3",
+   "gpt": 1,
+   "osdid": -1,
+   "osdid-list": null,
+   "parent": "/dev/nvme0n1",
+   "size": 499033054720,
+   "type": "partition",
+   "used": "LVM"
+  },
+  {
+   "by_id_link": "/dev/disk/by-id/ata-ST1000LM014-1EJ164_SERIAL0000HDD",
+   "devpath": "/dev/sda",
+   "gpt": 1,
+   "health": "PASSED",
+   "model": "ST1000LM014-1EJ164",
+   "osdid": -1,
+   "osdid-list": null,
+   "rpm": "5400",
+   "serial": "SERIAL0000HDD",
+   "size": 1000204886016,
+   "type": "hdd",
+   "used": "partitions",
+   "vendor": "ATA",
+   "wearout": "N/A",
+   "wwn": "0x5000000000000002"
+  },
+  {
+   "devpath": "/dev/sda1",
+   "gpt": 1,
+   "mounted": 1,
+   "osdid": -1,
+   "osdid-list": null,
+   "parent": "/dev/sda",
+   "size": 1000203820544,
+   "type": "partition",
+   "used": "xfs"
+  }
+ ],
+ "lvm": {
+  "children": [
+   {
+    "children": [
+     {
+      "free": 17184063488,
+      "leaf": 1,
+      "name": "/dev/nvme0n1p3",
+      "size": 499029901312
+     }
+    ],
+    "free": 17184063488,
+    "leaf": 0,
+    "lvcount": 8,
+    "name": "pve",
+    "size": 499029901312
+   }
+  ],
+  "leaf": 0
+ },
+ "lvmthin": [
+  {
+   "ctime": "1779901753",
+   "lv": "data",
+   "lv_size": 362777935872,
+   "lv_state": "a",
+   "lv_type": "t",
+   "metadata_size": 3699376128,
+   "metadata_used": 23676007,
+   "used": 15889673591,
+   "vg": "pve"
+  }
+ ],
+ "zfs": [],
+ "zfsDetail": {},
+ "directory": [
+  {
+   "device": "/dev/disk/by-uuid/427332d9-ff6b-47ec-938c-02decba79be1",
+   "options": "defaults",
+   "path": "/mnt/pve/qcow",
+   "type": "xfs",
+   "unitfile": "/etc/systemd/system/mnt-pve-qcow.mount"
+  }
+ ],
+ "config": [
+  {
+   "content": "images,rootdir",
+   "digest": "49c4c3aa0d4263b3c29e18d1b79035f31584f058",
+   "storage": "local-lvm",
+   "thinpool": "data",
+   "type": "lvmthin",
+   "vgname": "pve"
+  },
+  {
+   "content": "iso,snippets,backup,rootdir,vztmpl,images",
+   "digest": "49c4c3aa0d4263b3c29e18d1b79035f31584f058",
+   "is_mountpoint": "1",
+   "nodes": "rockylab",
+   "path": "/mnt/pve/qcow",
+   "storage": "qcow",
+   "type": "dir"
+  },
+  {
+   "content": "backup,vztmpl,iso,import",
+   "digest": "49c4c3aa0d4263b3c29e18d1b79035f31584f058",
+   "path": "/var/lib/vz",
+   "storage": "local",
+   "type": "dir"
+  }
+ ],
+ "status": [
+  {
+   "active": 1,
+   "avail": 346888262281,
+   "content": "images,rootdir",
+   "enabled": 1,
+   "shared": 0,
+   "storage": "local-lvm",
+   "total": 362777935872,
+   "type": "lvmthin",
+   "used": 15889673591,
+   "used_fraction": 0.0437999999994663
+  },
+  {
+   "active": 1,
+   "avail": 82273079296,
+   "content": "vztmpl,backup,import,iso",
+   "enabled": 1,
+   "shared": 0,
+   "storage": "local",
+   "total": 100861726720,
+   "type": "dir",
+   "used": 13417910272,
+   "used_fraction": 0.133032724189317
+  },
+  {
+   "active": 1,
+   "avail": 968817238016,
+   "content": "snippets,iso,backup,vztmpl,rootdir,images",
+   "enabled": 1,
+   "shared": 0,
+   "storage": "qcow",
+   "total": 999715438592,
+   "type": "dir",
+   "used": 30898200576,
+   "used_fraction": 0.0309069955141606
+  }
+ ],
+ "rootfs": {
+  "avail": 82273079296,
+  "free": 87443816448,
+  "total": 100861726720,
+  "used": 13417910272
+ },
+ "content": {
+  "local": [
+   {
+    "content": "iso",
+    "ctime": 1779910280,
+    "format": "iso",
+    "size": 6442450944,
+    "volid": "local:iso/haos_generic-x86-64-17.3.img"
+   },
+   {
+    "content": "vztmpl",
+    "ctime": 1793920108,
+    "format": "tzst",
+    "size": 129954319,
+    "volid": "local:vztmpl/debian-13-standard_13.6-1_amd64.tar.zst"
+   }
+  ],
+  "qcow": [
+   {
+    "content": "backup",
+    "ctime": 1793917389,
+    "format": "vma.zst",
+    "size": 5858381052,
+    "subtype": "qemu",
+    "vmid": 100,
+    "volid": "qcow:backup/vzdump-qemu-100-2026_11_05-12_23_09.vma.zst"
+   },
+   {
+    "content": "backup",
+    "ctime": 1793925365,
+    "format": "vma.zst",
+    "size": 5863769478,
+    "subtype": "qemu",
+    "vmid": 100,
+    "volid": "qcow:backup/vzdump-qemu-100-2026_11_05-14_36_05.vma.zst"
+   }
+  ],
+  "local-lvm": [
+   {
+    "content": "images",
+    "ctime": "1779912424",
+    "format": "raw",
+    "size": 34359738368,
+    "vmid": 100,
+    "volid": "local-lvm:vm-100-disk-0"
+   },
+   {
+    "content": "images",
+    "ctime": "1779912591",
+    "format": "raw",
+    "size": 4194304,
+    "vmid": 100,
+    "volid": "local-lvm:vm-100-disk-1"
+   },
+   {
+    "content": "images",
+    "ctime": "1779912764",
+    "format": "raw",
+    "size": 4194304,
+    "vmid": 100,
+    "volid": "local-lvm:vm-100-disk-2"
+   },
+   {
+    "content": "images",
+    "ctime": "1794015350",
+    "format": "raw",
+    "size": 4194304,
+    "vmid": 101,
+    "volid": "local-lvm:vm-101-cloudinit"
+   },
+   {
+    "content": "images",
+    "ctime": "1794015348",
+    "format": "raw",
+    "size": 1073741824,
+    "vmid": 101,
+    "volid": "local-lvm:vm-101-disk-0"
+   }
+  ]
+ }
+}

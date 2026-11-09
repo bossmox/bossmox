@@ -1,0 +1,332 @@
+{
+ "node": "bmx-node1",
+ "disks": [
+  {
+   "by_id_link": "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0",
+   "devpath": "/dev/sda",
+   "gpt": 1,
+   "health": "OK",
+   "model": "QEMU_HARDDISK",
+   "osdid": -1,
+   "osdid-list": null,
+   "rpm": -1,
+   "serial": "drive-scsi0",
+   "size": 34359738368,
+   "type": "unknown",
+   "used": "partitions",
+   "vendor": "QEMU",
+   "wearout": "N/A",
+   "wwn": "unknown"
+  },
+  {
+   "devpath": "/dev/sda1",
+   "gpt": 1,
+   "mounted": 1,
+   "osdid": -1,
+   "osdid-list": null,
+   "parent": "/dev/sda",
+   "size": 34225503744,
+   "type": "partition",
+   "used": "ext4"
+  },
+  {
+   "devpath": "/dev/sda14",
+   "gpt": 1,
+   "osdid": -1,
+   "osdid-list": null,
+   "parent": "/dev/sda",
+   "size": 3145728,
+   "type": "partition",
+   "used": "BIOS boot"
+  },
+  {
+   "devpath": "/dev/sda15",
+   "gpt": 1,
+   "mounted": 1,
+   "osdid": -1,
+   "osdid-list": null,
+   "parent": "/dev/sda",
+   "size": 130023424,
+   "type": "partition",
+   "used": "EFI"
+  },
+  {
+   "by_id_link": "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_BMXSPARE900scsi1",
+   "devpath": "/dev/sdb",
+   "gpt": 1,
+   "health": "OK",
+   "model": "QEMU_HARDDISK",
+   "osdid": -1,
+   "osdid-list": null,
+   "rpm": -1,
+   "serial": "BMXSPARE900scsi1",
+   "size": 8589934592,
+   "type": "unknown",
+   "used": "partitions",
+   "vendor": "QEMU",
+   "wearout": "N/A",
+   "wwn": "unknown"
+  },
+  {
+   "devpath": "/dev/sdb1",
+   "gpt": 1,
+   "osdid": -1,
+   "osdid-list": null,
+   "parent": "/dev/sdb",
+   "size": 8579448832,
+   "type": "partition",
+   "used": "ZFS"
+  },
+  {
+   "devpath": "/dev/sdb9",
+   "gpt": 1,
+   "osdid": -1,
+   "osdid-list": null,
+   "parent": "/dev/sdb",
+   "size": 8388608,
+   "type": "partition",
+   "used": "ZFS reserved"
+  },
+  {
+   "by_id_link": "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_BMXSPARE900scsi2",
+   "devpath": "/dev/sdc",
+   "gpt": 1,
+   "health": "OK",
+   "model": "QEMU_HARDDISK",
+   "osdid": -1,
+   "osdid-list": null,
+   "rpm": -1,
+   "serial": "BMXSPARE900scsi2",
+   "size": 8589934592,
+   "type": "unknown",
+   "used": "partitions",
+   "vendor": "QEMU",
+   "wearout": "N/A",
+   "wwn": "unknown"
+  },
+  {
+   "devpath": "/dev/sdc1",
+   "gpt": 1,
+   "osdid": -1,
+   "osdid-list": null,
+   "parent": "/dev/sdc",
+   "size": 8579448832,
+   "type": "partition",
+   "used": "ZFS"
+  },
+  {
+   "devpath": "/dev/sdc9",
+   "gpt": 1,
+   "osdid": -1,
+   "osdid-list": null,
+   "parent": "/dev/sdc",
+   "size": 8388608,
+   "type": "partition",
+   "used": "ZFS reserved"
+  }
+ ],
+ "lvm": {
+  "children": [],
+  "leaf": 0
+ },
+ "lvmthin": [],
+ "zfs": [
+  {
+   "alloc": 450560,
+   "dedup": 1,
+   "frag": 0,
+   "free": 8052613120,
+   "health": "ONLINE",
+   "name": "tank",
+   "size": 8053063680
+  }
+ ],
+ "zfsDetail": {
+  "tank": {
+   "children": [
+    {
+     "children": [
+      {
+       "children": [
+        {
+         "cksum": 0,
+         "leaf": 1,
+         "msg": "",
+         "name": "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_BMXSPARE900scsi1-part1",
+         "read": 0,
+         "state": "ONLINE",
+         "write": 0
+        },
+        {
+         "cksum": 0,
+         "leaf": 1,
+         "msg": "",
+         "name": "/dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_BMXSPARE900scsi2-part1",
+         "read": 0,
+         "state": "ONLINE",
+         "write": 0
+        }
+       ],
+       "cksum": 0,
+       "leaf": 0,
+       "msg": "",
+       "name": "mirror-0",
+       "read": 0,
+       "state": "ONLINE",
+       "write": 0
+      }
+     ],
+     "cksum": 0,
+     "leaf": 0,
+     "msg": "",
+     "name": "tank",
+     "read": 0,
+     "state": "ONLINE",
+     "write": 0
+    }
+   ],
+   "errors": "No known data errors",
+   "leaf": 0,
+   "name": "tank",
+   "state": "ONLINE"
+  }
+ },
+ "directory": [],
+ "config": [
+  {
+   "content": "images,rootdir",
+   "digest": "09c933d1f2728307975c8e9c78cde0baf2e6e040",
+   "nodes": "bmx-node2",
+   "storage": "fast",
+   "thinpool": "fast",
+   "type": "lvmthin",
+   "vgname": "fast"
+  },
+  {
+   "content": "rootdir,images",
+   "digest": "09c933d1f2728307975c8e9c78cde0baf2e6e040",
+   "mountpoint": "/tank",
+   "nodes": "bmx-node1",
+   "pool": "tank",
+   "storage": "tank",
+   "type": "zfspool"
+  },
+  {
+   "content": "backup,iso,rootdir,vztmpl,snippets,images",
+   "digest": "09c933d1f2728307975c8e9c78cde0baf2e6e040",
+   "path": "/var/lib/vz",
+   "prune-backups": "keep-all=1",
+   "storage": "local",
+   "type": "dir"
+  },
+  {
+   "content": "snippets,images,vztmpl,rootdir,backup,iso",
+   "digest": "09c933d1f2728307975c8e9c78cde0baf2e6e040",
+   "is_mountpoint": "1",
+   "nodes": "bmx-node2",
+   "path": "/mnt/pve/files",
+   "storage": "files",
+   "type": "dir"
+  }
+ ],
+ "status": [
+  {
+   "active": 0,
+   "avail": 0,
+   "content": "images,vztmpl,iso,snippets,backup,rootdir",
+   "enabled": 0,
+   "shared": 0,
+   "storage": "files",
+   "total": 0,
+   "type": "dir",
+   "used": 0
+  },
+  {
+   "active": 1,
+   "avail": 24577036288,
+   "content": "images,iso,vztmpl,snippets,rootdir,backup",
+   "enabled": 1,
+   "shared": 0,
+   "storage": "local",
+   "total": 33603391488,
+   "type": "dir",
+   "used": 7609774080,
+   "used_fraction": 0.226458513353258
+  },
+  {
+   "active": 0,
+   "avail": 0,
+   "content": "images,rootdir",
+   "enabled": 0,
+   "shared": 0,
+   "storage": "fast",
+   "total": 0,
+   "type": "lvmthin",
+   "used": 0
+  },
+  {
+   "active": 1,
+   "avail": 6708396032,
+   "content": "images,rootdir",
+   "enabled": 1,
+   "shared": 0,
+   "storage": "tank",
+   "total": 7801405440,
+   "type": "zfspool",
+   "used": 1093009408,
+   "used_fraction": 0.140104166666667
+  }
+ ],
+ "rootfs": {
+  "avail": 24577036288,
+  "free": 25993617408,
+  "total": 33603391488,
+  "used": 7609774080
+ },
+ "content": {
+  "tank": [
+   {
+    "content": "images",
+    "format": "raw",
+    "name": "vm-950-disk-0",
+    "parent": null,
+    "size": 1073741824,
+    "vmid": 950,
+    "volid": "tank:vm-950-disk-0"
+   }
+  ],
+  "local": [
+   {
+    "content": "images",
+    "ctime": 1794000678,
+    "format": "raw",
+    "parent": null,
+    "size": 17179869184,
+    "used": 4096,
+    "vmid": 100,
+    "volid": "local:100/vm-100-disk-0.raw"
+   },
+   {
+    "content": "iso",
+    "ctime": 1794000586,
+    "format": "iso",
+    "size": 1458192384,
+    "volid": "local:iso/alpine-extended-3.24.4-x86_64.iso"
+   },
+   {
+    "content": "iso",
+    "ctime": 1794000718,
+    "format": "iso",
+    "size": 370147328,
+    "volid": "local:iso/alpine-standard-3.24.4-x86_64.iso"
+   },
+   {
+    "content": "vztmpl",
+    "ctime": 1793995328,
+    "format": "txz",
+    "size": 3460064,
+    "volid": "local:vztmpl/alpine-3.24-default_20261105_amd64.tar.xz"
+   }
+  ]
+ }
+}
