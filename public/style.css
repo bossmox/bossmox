@@ -49,6 +49,14 @@ h1,h2,h3,p{margin:0}
 #icons{display:grid;grid-template-columns:repeat(2,104px);gap:10px 6px}
 .icon{display:flex;flex-direction:column;align-items:center;gap:7px;padding:10px 4px;border-radius:var(--r);color:var(--desk-ink);font-weight:600;font-size:14px;line-height:1.2;text-align:center}
 .icon:hover{background:color-mix(in srgb,var(--pane) 55%,transparent)}
+#icons.free{position:absolute;inset:0;display:block;pointer-events:none}
+#icons.free ~ #side{margin-left:auto}
+#icons.free .icon{position:absolute;width:104px;pointer-events:auto;touch-action:none;transition:left .18s ease-out,top .18s ease-out}
+#icons.free .icon.dragging{transition:none;z-index:2;cursor:grabbing;background:color-mix(in srgb,var(--pane) 55%,transparent)}
+#deskmenu{position:fixed;z-index:9000;min-width:160px;padding:5px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-s);box-shadow:var(--shadow)}
+#deskmenu button{display:block;width:100%;text-align:left;padding:7px 10px;border-radius:var(--r-s);font:inherit;font-size:14px;color:var(--ink)}
+#deskmenu button:hover,#deskmenu button:focus-visible{background:var(--surface2)}
+@media (prefers-reduced-motion:reduce){#icons.free .icon{transition:none}}
 .tile{width:60px;height:60px;border-radius:calc(var(--r) + 2px);display:grid;place-items:center;color:#fff;box-shadow:0 5px 14px rgba(10,40,50,.25)}
 .tile svg{width:32px;height:32px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 [data-look="workbench"] .tile{box-shadow:0 2px 0 rgba(32,38,42,.4)}

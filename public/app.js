@@ -30,6 +30,175 @@ const wins = {};
 $("#icons").innerHTML = Object.entries(APPS).filter(([, a]) => !a.noIcon).map(([k, a]) => `
   <button class="icon" data-open="${k}"><span class="tile" style="background:${a.color}"><svg viewBox="0 0 32 32">${GLYPHS[k]}</svg></span>${a.title}</button>`).join("");
 
+/*
+ * Icons can be dragged to any spot on the desktop (ADR 0021). They snap to a grid, a drop on another icon swaps
+ * the two, and the layout is kept per browser. Keyboard order follows reading order. Phone width keeps the fixed grid. Alt and an arrow key move the
+ * focused icon; right-clicking the desktop offers Line up icons.
+ */
+const ICON_KEY = "bossmox.icons";
+const CELL_W = 110, CELL_H = 124, EDGE = 26;
+/** The fixed app order: the default layout, never the order the icons happen to sit in the page. */
+const iconApps = () => Object.keys(APPS).filter((k) => !APPS[k].noIcon);
+const freeIcons = () => !matchMedia("(max-width:760px)").matches;
+function readIconSpots() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ICON_KEY) ?? "{}");
+    return saved && typeof saved === "object" ? saved : {};
+  } catch {
+    return {};
+  }
+}
+function saveIconSpots(spots) {
+  try {
+    localStorage.setItem(ICON_KEY, JSON.stringify(spots));
+  } catch {
+    // Storage can be off (a private window); the layout then lasts until the page closes.
+  }
+}
+/** How many cells fit: across up to the health panel, down to the bottom of the desktop. */
+function iconRoom() {
+  const desk = $("#desk").getBoundingClientRect();
+  const side = $("#side").getBoundingClientRect();
+  const right = side.width ? side.left - desk.left - 12 : desk.width - EDGE;
+  return { cols: Math.max(1, Math.floor((right - EDGE + 6) / CELL_W)), rows: Math.max(1, Math.floor((desk.height - EDGE * 2 + 10) / CELL_H)) };
+}
+/** Every icon gets a cell inside the room: its saved one if free and still on screen, otherwise the first free one. */
+function iconPlan(spots) {
+  const { cols, rows } = iconRoom();
+  const taken = new Set();
+  const plan = {};
+  const apps = iconApps();
+  apps.forEach((app) => {
+    const s = spots[app];
+    if (!Array.isArray(s) || s.length !== 2) return;
+    const [c, r] = s.map(Number);
+    if (!Number.isInteger(c) || !Number.isInteger(r) || c < 0 || r < 0 || c >= cols || r >= rows || taken.has(`${c},${r}`)) return;
+    plan[app] = [c, r];
+    taken.add(`${c},${r}`);
+  });
+  // The default fills two columns, across then down, as the fixed grid always did.
+  const free = [];
+  for (let c = 0; c < Math.max(cols, 2); c++) for (let r = 0; r < rows; r++) free.push([c, r]);
+  const twoUp = (i) => [i % Math.min(cols, 2), Math.floor(i / Math.min(cols, 2))];
+  apps.forEach((app, i) => {
+    if (plan[app]) return;
+    let cell = twoUp(i);
+    if (taken.has(`${cell[0]},${cell[1]}`) || cell[1] >= rows) cell = free.find(([c, r]) => !taken.has(`${c},${r}`)) ?? cell;
+    plan[app] = cell;
+    taken.add(`${cell[0]},${cell[1]}`);
+  });
+  return plan;
+}
+function layoutIcons() {
+  const box = $("#icons");
+  if (!freeIcons() || $("#desk").hidden) {
+    box.classList.remove("free");
+    box.querySelectorAll(".icon").forEach((b) => {
+      b.style.removeProperty("left");
+      b.style.removeProperty("top");
+    });
+    return;
+  }
+  box.classList.add("free");
+  const plan = iconPlan(readIconSpots());
+  const buttons = [...box.querySelectorAll(".icon")];
+  for (const b of buttons) {
+    if (b.classList.contains("dragging")) continue;
+    const [c, r] = plan[b.dataset.open];
+    b.style.left = `${EDGE + c * CELL_W}px`;
+    b.style.top = `${EDGE + r * CELL_H}px`;
+  }
+  // Tab order follows reading order: across each row, then down.
+  buttons.sort((a, b) => plan[a.dataset.open][1] - plan[b.dataset.open][1] || plan[a.dataset.open][0] - plan[b.dataset.open][0]).forEach((b) => box.append(b));
+}
+/** Puts an app's icon in a cell. Another icon already there swaps into the cell this one left. */
+function moveIcon(app, cell) {
+  const plan = iconPlan(readIconSpots());
+  const from = plan[app];
+  const other = Object.keys(plan).find((k) => k !== app && plan[k][0] === cell[0] && plan[k][1] === cell[1]);
+  if (other) plan[other] = from;
+  plan[app] = cell;
+  saveIconSpots(plan);
+  layoutIcons();
+}
+let iconDrag = null;
+let swallowClick = false;
+$("#icons").addEventListener("pointerdown", (e) => {
+  const b = e.target.closest(".icon");
+  if (!b || e.button !== 0 || !$("#icons").classList.contains("free")) return;
+  iconDrag = { b, x: e.clientX, y: e.clientY, left: b.offsetLeft, top: b.offsetTop, moving: false };
+});
+document.addEventListener("pointermove", (e) => {
+  const d = iconDrag;
+  if (!d) return;
+  const dx = e.clientX - d.x, dy = e.clientY - d.y;
+  if (!d.moving) {
+    if (Math.hypot(dx, dy) < 6) return;
+    d.moving = true;
+    d.b.classList.add("dragging");
+    d.b.setPointerCapture?.(e.pointerId);
+  }
+  d.b.style.left = `${d.left + dx}px`;
+  d.b.style.top = `${d.top + dy}px`;
+});
+document.addEventListener("pointerup", () => {
+  const d = iconDrag;
+  iconDrag = null;
+  if (!d?.moving) return;
+  d.b.classList.remove("dragging");
+  swallowClick = true;
+  setTimeout(() => (swallowClick = false), 0);
+  const { cols, rows } = iconRoom();
+  const col = Math.min(cols - 1, Math.max(0, Math.round((d.b.offsetLeft - EDGE) / CELL_W)));
+  const row = Math.min(rows - 1, Math.max(0, Math.round((d.b.offsetTop - EDGE) / CELL_H)));
+  moveIcon(d.b.dataset.open, [col, row]);
+});
+document.addEventListener("pointercancel", () => {
+  if (!iconDrag) return;
+  iconDrag.b.classList.remove("dragging");
+  iconDrag = null;
+  layoutIcons();
+});
+// A drag ends with a click on the icon; that click mustn't open the app.
+$("#icons").addEventListener("click", (e) => {
+  if (!swallowClick) return;
+  e.stopPropagation();
+  e.preventDefault();
+}, true);
+$("#icons").addEventListener("keydown", (e) => {
+  const b = e.target.closest(".icon");
+  const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+  if (!b || !e.altKey || !step || !$("#icons").classList.contains("free")) return;
+  e.preventDefault();
+  const { cols, rows } = iconRoom();
+  const [c, r] = iconPlan(readIconSpots())[b.dataset.open];
+  moveIcon(b.dataset.open, [Math.min(cols - 1, Math.max(0, c + step[0])), Math.min(rows - 1, Math.max(0, r + step[1]))]);
+  b.focus();
+});
+function closeDeskMenu() {
+  $("#deskmenu")?.remove();
+}
+$("#desk").addEventListener("contextmenu", (e) => {
+  if (!$("#icons").classList.contains("free") || e.target.closest("#side")) return;
+  e.preventDefault();
+  closeDeskMenu();
+  const m = document.createElement("div");
+  m.id = "deskmenu";
+  m.setAttribute("role", "menu");
+  m.innerHTML = `<button role="menuitem" data-lineup="1">Line up icons</button>`;
+  m.style.left = `${Math.min(e.clientX, innerWidth - 180)}px`;
+  m.style.top = `${Math.min(e.clientY, innerHeight - 60)}px`;
+  document.body.append(m);
+  m.querySelector("button").focus();
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!e.target.closest("#deskmenu")) closeDeskMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeDeskMenu();
+});
+new ResizeObserver(() => layoutIcons()).observe($("#desk"));
+
 const count = (n) => ["No things", "One thing", "Two things", "Three things"][n] ?? `${n} things`;
 function overallBars(c, nodeCount) {
   const size = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} TB` : `${Math.round(n * 10) / 10} GB`);
@@ -2634,6 +2803,11 @@ document.addEventListener("click", (e) => {
     const n = readNotices();
     saveNotices({ ...n, collapsed: !n.collapsed });
     return renderHealth();
+  }
+  if (d.lineup) {
+    closeDeskMenu();
+    saveIconSpots({});
+    return layoutIcons();
   }
   if (d.noticerestore) {
     saveNotices({ ...readNotices(), dismissed: [], collapsed: false });
