@@ -23,3 +23,9 @@ A per-guest switch ("this one is backed up elsewhere"), for clusters where some 
 ## Tested
 
 - Unit tests, each proven able to fail: the file lives beside settings.json and survives a reread; a damaged or odd file falls back to warning; no guest is flagged with it on; only Sys.Modify on `/` can change it (a limited account, rights on `/vms` only, and no answer all refused); the health check shows it as turned off, not passed, with the way back, and still reports a failed backup.
+- Live on the test BossMox (three-node cluster), 2026-11-09:
+  - As root: the health check offered "We back up another way" beside the schedule warning; after confirming, the desktop went from 4 notices to "Everything looks good", the health check read "9 checks, 8 passed, 1 turned off" with the turned-off row, and the Backups app showed the quiet line.
+  - The file in the VM read `"backupsElsewhere": true`, and the VM's own login account couldn't read it.
+  - After restarting BossMox the setting was still on.
+  - A limited account (PVEVMUser on /vms only, made for the test and deleted after) saw the setting applied, and its attempt to change it was refused with 403 and the permission named; the setting stayed on.
+  - Root turned it back off with Check schedules again, and the 4 warnings came back.
