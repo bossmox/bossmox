@@ -164,6 +164,51 @@ export function assertCanWipe(disks: HardDisk[], path: string) {
   needs(d?.canWipe === true, `${path} is in use, so BossMox won't wipe it. Anything mounted, or holding LVM or ZFS, has to be cleared in Proxmox first.`);
 }
 
+export type Purpose = "vms" | "files" | "both";
+const PURPOSE_USES: Record<Purpose, string> = { vms: "images,rootdir", files: "iso,vztmpl,backup", both: "images,rootdir,iso,vztmpl,backup" };
+
+/**
+ * Guided Add storage (ADR 0015): the person says which drives and what for, and this picks the type and says in
+ * plain words what will happen. The same answer drives the summary and the doing, so they can't disagree.
+ */
+export function setupPlan(disks: HardDisk[], devices: string[], purpose: string, name: string) {
+  if (purpose !== "vms" && purpose !== "files" && purpose !== "both") throw new StorageError("Pick what it's for.");
+  needs(POOL.test(name), "A name starts with a letter and uses letters, numbers, dashes and underscores.");
+  needs(devices.length > 0, "Pick a drive.");
+  needs(new Set(devices).size === devices.length, "Pick each drive once.");
+  const picked = devices.map((d) => {
+    const found = disks.find((x) => x.path === d);
+    needs(found !== undefined, "One of those drives isn't on this node.");
+    needs(found!.free || found!.canWipe, `${d} is in use by something BossMox won't erase. Check it in Proxmox first.`);
+    return found!;
+  });
+  const n = picked.length;
+  if (purpose !== "vms") needs(n === 1, purpose === "files" ? "Pick one drive for backups and installer discs." : "To use several drives together, pick VMs and containers. Backups belong on a different drive from the guests anyway.");
+  const smallest = Math.min(...picked.map((d) => d.sizeGb));
+  const kind = purpose === "vms" ? (n === 1 ? "lvmthin" : "zfs") : "directory";
+  const raid = kind === "zfs" ? (n === 2 ? "mirror" : "raidz") : "";
+  const names = picked.map((d) => (d.model ? `${d.model} (${d.path})` : d.path)).join(" and ");
+  const what = { vms: "VM and container disks", files: "backups, installer discs and templates", both: "VM and container disks, backups, installer discs and templates" }[purpose];
+  const how = kind === "lvmthin"
+    ? "a pool where disks take space only as they fill, with snapshots"
+    : kind === "directory"
+      ? `a folder${purpose === "both" ? ", where VM disks are kept as files that can be snapshotted" : ""}`
+      : raid === "mirror"
+        ? "a mirror, where both drives hold the same data so one can fail without losing anything"
+        : `a RAID-Z pool across ${n} drives, where one can fail without losing anything`;
+  const usable = kind === "zfs" ? (raid === "mirror" ? smallest : smallest * (n - 1)) : smallest;
+  const uneven = n > 1 && picked.some((d) => d.sizeGb > smallest * 1.1) ? " The drives aren't the same size, so each only gives as much as the smallest." : "";
+  const erased = picked.filter((d) => !d.free);
+  return {
+    kind,
+    raid,
+    filesystem: kind === "directory" ? "ext4" : "",
+    uses: PURPOSE_USES[purpose],
+    wipe: erased.map((d) => d.path),
+    summary: `BossMox will make ${name} on ${names}. It will be ${how}, and hold ${what}, about ${Math.round(usable)} GB.${uneven} Everything on ${n === 1 ? "this drive" : "these drives"} is erased${erased.length ? `, including the old data on ${erased.map((d) => d.path).join(" and ")}` : ""}.`,
+  };
+}
+
 export interface RawStorageConfig {
   storage: string;
   type?: string;
@@ -177,6 +222,7 @@ export interface RawStorageConfig {
   path?: string;
   pool?: string;
   vgname?: string;
+  thinpool?: string;
 }
 interface Usage {
   name: string;

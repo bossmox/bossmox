@@ -16,6 +16,7 @@ export interface RawZfsDetail {
 export interface RawMount {
   path?: string;
   type?: string;
+  unitfile?: string;
 }
 export interface RawStorageStatus {
   storage: string;
@@ -210,6 +211,41 @@ export interface Disk {
   system: boolean;
   /** Partitions on it that no storage accounts for, in Proxmox's words (an unused ext4 partition, a Ceph OSD). */
   otherUses: string[];
+}
+
+/**
+ * Whether a pool on a local disk can be deleted, and the Proxmox call that does it (ADR 0015). Strict on purpose:
+ * never the system disk, never a pool with anything on it or anything using it, never one BossMox can't place.
+ */
+export function poolRemoval(map: StorageMap, id: string, config: RawStorageConfig | undefined, mounts: (RawMount & { unitfile?: string })[], usedBy: string[]) {
+  const pools = map.groups.flatMap((g) => g.pools.map((p) => ({ p, g })));
+  const found = pools.find((x) => x.p.id === id);
+  if (map.network.some((p) => p.id === id)) throw new Error("That's network storage. Remove unhooks it instead, and nothing on it is erased.");
+  if (!found || !config) throw new Error("BossMox can't tell which drive that's on, so it won't erase anything. Use Proxmox's own screen for this one.");
+  const { p, g } = found;
+  if (g.disks.some((d) => d.system)) throw new Error(`${id} is on the system disk, alongside Proxmox itself. Deleting it would mean changing the system disk, which BossMox doesn't do.`);
+  if (usedBy.length) throw new Error(`${usedBy.join(", ")} still ${usedBy.length === 1 ? "uses" : "use"} it. Move or remove ${usedBy.length === 1 ? "that" : "those"} first.`);
+  if (p.items.length) {
+    const counts = Object.entries(p.items.reduce<Record<string, number>>((a, i) => ({ ...a, [i.kind]: (a[i.kind] ?? 0) + 1 }), {})).map(([k, n]) => `${n} ${k}${n === 1 ? "" : "s"}`);
+    throw new Error(`There's still something on it: ${counts.join(", ")}. Delete or move ${p.items.length === 1 ? "it" : "them"} first.`);
+  }
+  const cleanup = "cleanup-config=1&cleanup-disks=1";
+  if (config.type === "zfspool") {
+    const pool = config.pool ?? "";
+    if (!pool || pool.includes("/") || pool === "rpool") throw new Error(`${id} is part of a bigger ZFS pool, so BossMox won't erase it. Use Proxmox's own screen for this one.`);
+    return { path: `disks/zfs/${encodeURIComponent(pool)}?${cleanup}`, disks: g.disks.map((d) => d.path) };
+  }
+  if (config.type === "lvmthin") {
+    if (!config.thinpool || !config.vgname || config.vgname === "pve") throw new Error(`BossMox won't erase ${id}. Use Proxmox's own screen for this one.`);
+    return { path: `disks/lvmthin/${encodeURIComponent(config.thinpool)}?volume-group=${encodeURIComponent(config.vgname)}&${cleanup}`, disks: g.disks.map((d) => d.path) };
+  }
+  if (config.type === "dir") {
+    const unit = mounts.find((m) => m.path === config.path)?.unitfile ?? "";
+    const name = /\/mnt-pve-([^/]+)\.mount$/.exec(unit)?.[1];
+    if (!name) throw new Error(`${id} wasn't made by Proxmox's disk tools, so BossMox won't erase it. Use Proxmox's own screen for this one.`);
+    return { path: `disks/directory/${encodeURIComponent(name)}?${cleanup}`, disks: g.disks.map((d) => d.path) };
+  }
+  throw new Error(`BossMox doesn't delete this kind of storage yet. Use Proxmox's own screen for ${id}.`);
 }
 
 export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {

@@ -12,11 +12,11 @@ import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob 
 import { containerForm, CreateError, discDownload, discForm, FILE_STORAGE, installerLabel, vmForm, type CreateInput } from "./create.js";
 import { changesForm, SettingsError, waitingChanges } from "./guest-settings.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
-import { assertCanWipe, buildStorageList, deviceIsValid, diskStorageForm, hostIsValid, networkForm, readHardDisks, StorageError, storageBlockers, usesForm, type RawDisk, type RawStorageConfig } from "./storage.js";
+import { assertCanWipe, buildStorageList, setupPlan, deviceIsValid, diskStorageForm, hostIsValid, networkForm, readHardDisks, StorageError, storageBlockers, usesForm, type RawDisk, type RawStorageConfig } from "./storage.js";
 import { addDiskForm, addNicForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { applyChannel, ChannelError } from "./update-channel.js";
-import { buildStorageMap, poolItems, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
+import { buildStorageMap, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import {
   buildMovePlan,
   buildRebootPlan,
@@ -334,18 +334,34 @@ function snapshotName(body: Record<string, unknown>): string {
   return snap;
 }
 
+/** Waits for a Proxmox task to finish, and fails with its own words if it didn't end OK. */
+async function finishTask(node: string, upid: string, who: Identity, seconds: number) {
+  const path = `/nodes/${encodeURIComponent(node)}/tasks/${encodeURIComponent(upid)}/status`;
+  for (let i = 0; i < seconds; i++) {
+    const status = await pve.get<RawTaskStatus>(path, who.ticket);
+    if (status.status === "stopped") {
+      if (status.exitstatus !== "OK") throw new AuthError(400, `Proxmox stopped: ${status.exitstatus ?? "it didn't finish"}`);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  throw new AuthError(504, "Proxmox is taking a long time. Check the node's activity, then look again.");
+}
+
 /**
  * Everything one node says about its disks and storage, asked in parallel (ADR 0014). A part the person's account
  * can't read comes back empty, so the map still shows what it can, with those pools under "disk not identified".
  */
 async function loadStorageMap(name: string, session: Session) {
+  return storageMapFor(name, session.ticket, await overview(session));
+}
+async function storageMapFor(name: string, t: string, data: Overview) {
   const base = `/nodes/${encodeURIComponent(name)}`;
-  const t = session.ticket;
   const quiet = <T>(p: Promise<T>, fallback: T) => p.catch((err) => {
     if (err instanceof PveError && err.status === 401) throw err;
     return fallback;
   });
-  const [disks, lvm, zfsList, directory, config, status, nodeStatus, data] = await Promise.all([
+  const [disks, lvm, zfsList, directory, config, status, nodeStatus] = await Promise.all([
     quiet(pve.get<RawDisk[]>(`${base}/disks/list?include-partitions=1`, t), []),
     quiet(pve.get<RawLvm>(`${base}/disks/lvm`, t), null),
     quiet(pve.get<{ name: string }[]>(`${base}/disks/zfs`, t), []),
@@ -353,7 +369,6 @@ async function loadStorageMap(name: string, session: Session) {
     pve.get<RawStorageConfig[]>("/storage", t),
     pve.get<RawStorageStatus[]>(`${base}/storage`, t),
     quiet(pve.get<{ rootfs?: { total?: number } }>(`${base}/status`, t), {}),
-    overview(session),
   ]);
   const zfsEntries = await Promise.all(zfsList.map(async (z) => [z.name, await quiet(pve.get<RawZfsDetail>(`${base}/disks/zfs/${encodeURIComponent(z.name)}`, t), {})] as const));
   const active = status.filter((s) => s.enabled !== 0 && s.active === 1);
@@ -371,7 +386,7 @@ async function loadStorageMap(name: string, session: Session) {
     guests: guestRefs(data),
     allNodesOnline: data.nodes.every((n) => n.online),
   }, data.nodes.length > 1);
-  return { map, diskList: readHardDisks(disks) };
+  return { map, diskList: readHardDisks(disks), config, directory };
 }
 
 const guestRefs = (data: Overview): GuestRefs[] => data.vms.map((v) => ({ vmid: v.id, name: v.name, known: v.configLoaded, refs: v.refs }));
@@ -577,6 +592,41 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
     if (!item) throw new AuthError(400, `That isn't on ${storage} anymore.`);
     if (!item.canDelete) throw new AuthError(400, item.whyNot);
     return pve.delete<string>(`${base}/content/${encodeURIComponent(volid)}`, who);
+  },
+  "storage-setup": async (name, who, body) => {
+    if (body.confirm !== "erase") throw new AuthError(400, "That wasn't confirmed.");
+    const devices = usesStorageNames(body.devices);
+    const poolName = text(body.name, 32);
+    const node = encodeURIComponent(name);
+    const disks = await nodeDisks(name, who.ticket);
+    const plan = rule(() => setupPlan(disks, devices, text(body.purpose, 8), poolName));
+    const configs = await pve.get<RawStorageConfig[]>("/storage", who.ticket);
+    if (configs.some((c) => c.storage === poolName)) throw new AuthError(400, `There's already storage called ${poolName}. Pick another name.`);
+    // A drive with old data is wiped first, the same strict check as Wipe, then the pool is made on the clean drives.
+    for (const disk of plan.wipe) {
+      rule(() => assertCanWipe(disks, disk));
+      await finishTask(name, await pve.put<string>(`/nodes/${node}/disks/wipedisk`, who, { disk }), who, 120);
+    }
+    const fresh = plan.wipe.length ? await nodeDisks(name, who.ticket) : disks;
+    const form = rule(() => diskStorageForm(plan.kind, fresh, { name: poolName, devices, raid: plan.raid, filesystem: plan.filesystem }));
+    await finishTask(name, await pve.post<string>(`/nodes/${node}/disks/${plan.kind}`, who, form), who, 300);
+    // What it's for. Proxmox gives a new folder every use, which isn't what the person picked.
+    await pve.put<null>(`/storage/${encodeURIComponent(poolName)}`, who, { content: plan.uses });
+    return null;
+  },
+  "pool-delete": async (name, who, body) => {
+    const id = text(body.storage, 64);
+    if (!STORAGE.test(id) || body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
+    const [data, jobs] = await Promise.all([loadOverview(who.ticket), pve.get<{ storage?: string }[]>("/cluster/backup", who.ticket)]);
+    const { map, config, directory } = await storageMapFor(name, who.ticket, data);
+    const usedBy = storageBlockers(id, data.vms, jobs);
+    let removal: { path: string; disks: string[] };
+    try {
+      removal = poolRemoval(map, id, config.find((c) => c.storage === id), directory, usedBy);
+    } catch (err) {
+      throw new AuthError(400, (err as Error).message);
+    }
+    return pve.delete<string>(`/nodes/${encodeURIComponent(name)}/${removal.path}`, who);
   },
   "storage-edit": async (_name, who, body) => {
     const id = text(body.id, 64);
@@ -960,7 +1010,7 @@ const handler: http.RequestListener = async (req, res) => {
       }
       return json(res, 200, { realms });
     }
-    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
+    if (route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/setup-plan" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -1020,6 +1070,18 @@ const handler: http.RequestListener = async (req, res) => {
             return r?.status === "fulfilled" ? r.value.filter((s) => s.enabled !== 0).map((s) => ({ name: s.storage, node, freeGb: (s.avail ?? 0) / 1024 ** 3, totalGb: (s.total ?? 0) / 1024 ** 3, online: s.active === 1 })) : [];
           });
           return json(res, 200, { list: buildStorageList(config, usage) });
+        }
+        if (route === "/api/setup-plan") {
+          const name = params.get("server") ?? "";
+          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+          const disks = await nodeDisks(name, session.ticket);
+          try {
+            const devices = (params.get("devices") ?? "").split(",").filter((d) => deviceIsValid(d));
+            return json(res, 200, setupPlan(disks, devices, params.get("purpose") ?? "", params.get("name") ?? ""));
+          } catch (err) {
+            if (err instanceof StorageError) return json(res, 400, { error: err.message });
+            throw err;
+          }
         }
         if (route === "/api/storage-map") {
           const name = params.get("server") ?? "";

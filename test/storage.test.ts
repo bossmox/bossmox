@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertCanWipe, buildStorageList, diskStorageForm, networkForm, readHardDisks, storageBlockers, usesForm } from "../src/storage.js";
+import { assertCanWipe, buildStorageList, diskStorageForm, networkForm, readHardDisks, setupPlan, storageBlockers, usesForm } from "../src/storage.js";
 
 const nfs = { kind: "nfs", id: "nas", host: "10.0.30.244", path: "/srv/nfs/backups", username: "", password: "", domain: "", uses: ["backup", "iso"] };
 const smb = { ...nfs, kind: "smb", path: "bmxsmb", username: "bmx", password: "secret" };
@@ -116,4 +116,34 @@ test("changing what a storage holds keeps the uses BossMox doesn't show", () => 
   // Found in the lab: saving local's uses dropped snippets, which BossMox doesn't list.
   assert.equal(usesForm("dir", ["iso", "backup"], "backup,images,snippets,rootdir,import"), "iso,backup,snippets,import");
   assert.equal(usesForm("dir", ["iso"]), "iso");
+});
+
+
+const hd = (path: string, sizeGb: number, free = true, canWipe = false) => ({ path, sizeGb, model: "", kind: "", used: free ? "" : "partitions", health: "OK", failing: false, wearLeft: null, free, canWipe });
+
+test("Add storage picks the type from what it's for and how many drives", () => {
+  const disks = [hd("/dev/sdb", 500), hd("/dev/sdc", 500), hd("/dev/sdd", 500)];
+  assert.equal(setupPlan(disks, ["/dev/sdb"], "vms", "fast").kind, "lvmthin");
+  const mirror = setupPlan(disks, ["/dev/sdb", "/dev/sdc"], "vms", "fast");
+  assert.deepEqual([mirror.kind, mirror.raid], ["zfs", "mirror"]);
+  assert.equal(mirror.summary, "BossMox will make fast on /dev/sdb and /dev/sdc. It will be a mirror, where both drives hold the same data so one can fail without losing anything, and hold VM and container disks, about 500 GB. Everything on these drives is erased.");
+  assert.equal(setupPlan(disks, ["/dev/sdb", "/dev/sdc", "/dev/sdd"], "vms", "fast").raid, "raidz");
+  const files = setupPlan(disks, ["/dev/sdb"], "files", "backups");
+  assert.deepEqual([files.kind, files.filesystem, files.uses], ["directory", "ext4", "iso,vztmpl,backup"]);
+  assert.throws(() => setupPlan(disks, ["/dev/sdb", "/dev/sdc"], "files", "backups"), /one drive for backups/);
+  assert.throws(() => setupPlan(disks, ["/dev/sdb", "/dev/sdc"], "both", "x"), /pick VMs and containers/);
+});
+
+test("a drive with old data is wiped first and named in the summary, a busy one is refused", () => {
+  const disks = [hd("/dev/sdb", 500, false, true), hd("/dev/sdc", 500, false, false)];
+  const plan = setupPlan(disks, ["/dev/sdb"], "both", "store");
+  assert.deepEqual(plan.wipe, ["/dev/sdb"]);
+  assert.match(plan.summary, /including the old data on \/dev\/sdb/);
+  assert.throws(() => setupPlan(disks, ["/dev/sdc"], "vms", "x"), /won't erase/);
+  assert.throws(() => setupPlan(disks, ["/dev/sdb"], "vms", "1bad"), /starts with a letter/);
+});
+
+test("drives of different sizes are only as big as the smallest, and the summary says so", () => {
+  const plan = setupPlan([hd("/dev/sdb", 500), hd("/dev/sdc", 1000)], ["/dev/sdb", "/dev/sdc"], "vms", "fast");
+  assert.match(plan.summary, /aren't the same size/);
 });

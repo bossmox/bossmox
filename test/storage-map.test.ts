@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildStorageMap, poolItems, type NodeStorageInput } from "../src/storage-map.js";
+import { buildStorageMap, poolItems, poolRemoval, type NodeStorageInput } from "../src/storage-map.js";
 
 /** Proxmox's real answers, captured from the Tiny (an ordinary LVM install plus a second drive) and two lab nodes. */
 function fixture(name: string): NodeStorageInput {
@@ -130,4 +130,26 @@ test("nothing is deletable while BossMox can't see everything", () => {
   assert.match(item(poolItems(vols, guests, false), "fast:vm-958-disk-0").whyNot, /node is offline/);
   const blind = [...guests, { vmid: 960, name: "unread", known: false, refs: [] }];
   assert.match(item(poolItems(vols, blind, true), "local:iso/old.iso").whyNot, /couldn't read every guest/);
+});
+
+test("deleting a pool: only an empty, unused pool on its own drives", () => {
+  const input = fixture("storage-thin-and-folder");
+  const mounts = [{ path: "/mnt/pve/files", type: "ext4", unitfile: "/etc/systemd/system/mnt-pve-files.mount" }];
+  const cfg = (id: string) => input.config.find((c) => c.storage === id);
+  const empty = buildStorageMap({ ...input, content: { ...input.content, fast: [] } }, true);
+  assert.deepEqual(poolRemoval(empty, "files", cfg("files"), mounts, []), { path: "disks/directory/files?cleanup-config=1&cleanup-disks=1", disks: ["/dev/sdc"] });
+  assert.equal(poolRemoval(empty, "fast", cfg("fast"), mounts, []).path, "disks/lvmthin/fast?volume-group=fast&cleanup-config=1&cleanup-disks=1");
+  const full = buildStorageMap(input, true);
+  assert.throws(() => poolRemoval(full, "fast", cfg("fast"), mounts, []), /still something on it: 1 disk/);
+  assert.throws(() => poolRemoval(empty, "fast", cfg("fast"), mounts, ["thin-guest"]), /thin-guest still uses it/);
+  assert.throws(() => poolRemoval(empty, "local", cfg("local"), mounts, []), /system disk/);
+  assert.throws(() => poolRemoval(empty, "files", cfg("files"), [], []), /wasn't made by Proxmox's disk tools/);
+});
+
+test("deleting a ZFS mirror erases the whole pool, never rpool or part of one", () => {
+  const input = fixture("storage-zfs-mirror");
+  const m = buildStorageMap({ ...input, content: { ...input.content, tank: [] } }, true);
+  const tank = input.config.find((c) => c.storage === "tank")!;
+  assert.deepEqual(poolRemoval(m, "tank", tank, [], []).disks, ["/dev/sdb", "/dev/sdc"]);
+  assert.throws(() => poolRemoval(m, "tank", { ...tank, pool: "tank/data" }, [], []), /part of a bigger ZFS pool/);
 });
