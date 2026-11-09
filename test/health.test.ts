@@ -87,3 +87,17 @@ test("with backups done another way, the schedule check is turned off, never pas
   assert.deepEqual(scheduled.fix, { kind: "backups-elsewhere", label: "Check schedules again" });
   assert.equal(by(checks, "backup-failed")!.status, "bad", "failed Proxmox backups are still reported");
 });
+
+test("the BossMox version check: newer available, up to date, couldn't check, and turned off", () => {
+  const u = { on: true, checkedAt: 1, available: null, failed: null, running: "version 0.1.0-preview" };
+  const v = (update: HealthInput["update"]) => by(buildHealth({ ...base(), update }), "bossmox-version");
+  assert.equal(v({ ...u, available: { version: "0.1.1-preview" } })!.status, "warn");
+  assert.equal(v({ ...u, available: { version: "0.1.1-preview" } })!.fix!.kind, "bossmox-update");
+  assert.equal(v(u)!.status, "ok");
+  assert.equal(v({ ...u, failed: "BossMox couldn't reach GitHub" })!.status, "warn");
+  const off = v({ ...u, on: false, checkedAt: null })!;
+  assert.equal(off.status, "off", "never counted as passed");
+  assert.equal(off.fix!.kind, "update-check");
+  assert.equal(v({ ...u, checkedAt: null }), undefined, "nothing to say before the first check");
+  assert.equal(v(undefined), undefined, "a copy with no version");
+});
