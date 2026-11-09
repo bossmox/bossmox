@@ -558,9 +558,10 @@ function diskLine(d) {
       ${d.otherUses.length ? `<small>Also has ${esc(d.otherUses.join(", "))}, which isn't Proxmox storage.</small>` : ""}</div>
     <div class="actions"><button class="linkbtn healthbtn ${d.failing ? "bad" : ""}" data-diskhealth="${esc(d.path)}"><span class="dot ${d.failing ? "warn" : d.health === "UNKNOWN" ? "" : "running"}"></span>${d.failing ? "Failing" : d.health === "UNKNOWN" ? "Health unknown" : "Healthy"}</button>${wipe ? `<button class="btn" data-diskwipe="${esc(d.path)}">Wipe</button>` : ""}</div></div>`;
 }
-function poolBlock(p) {
+function poolBlock(p, onSystem = false) {
   const pct = p.totalGb ? Math.min(100, Math.round((p.usedGb / p.totalGb) * 100)) : 0;
-  const guest = (g) => (g.usedGb !== null && g.usedGb < g.gb ? `${guestName(g.vmid)} ${sizeWords(g.usedGb)} of a ${sizeWords(g.gb)} disk` : p.thin ? `${guestName(g.vmid)} (${sizeWords(g.gb)} disk)` : `${guestName(g.vmid)} ${sizeWords(g.gb)}`);
+  const who = (g) => (S.data?.vms.some((v) => v.id === g.vmid) ? guestName(g.vmid) : `Left over from guest ${g.vmid}`);
+  const guest = (g) => (g.usedGb !== null && g.usedGb < g.gb ? (g.usedGb < 0.1 ? `${who(g)} (${sizeWords(g.gb)} disk, nearly empty)` : `${who(g)} ${sizeWords(g.usedGb)} of a ${sizeWords(g.gb)} disk`) : p.thin ? `${who(g)} (${sizeWords(g.gb)} disk)` : `${who(g)} ${sizeWords(g.gb)}`);
   const using = [...p.guests.map(guest), ...p.files.filter((f) => f.gb >= 0.1).map((f) => `${f.label} ${sizeWords(f.gb)}`), ...(p.otherGb ? [`${p.otherLabel} ${sizeWords(p.otherGb)}`] : [])];
   const facts = [
     p.layout,
@@ -574,7 +575,7 @@ function poolBlock(p) {
   const open = S.openPools?.has(`${S.storeNode}/${p.id}`);
   return `<div class="stpool ${p.overGivenGb ? "warnpool" : ""}">
     <div class="sthead"><div><b>${esc(p.id)}</b> <span class="inl">${esc(p.title)}</span></div>
-      ${listed ? `<div class="actions"><button class="btn" data-stedit="${esc(p.id)}">Change use</button>${p.shared || !p.disks.length ? `<button class="btn" data-stremove="${esc(p.id)}">Remove</button>` : `<button class="btn" data-pooldel="${esc(p.id)}">Delete</button>`}</div>` : ""}</div>
+      ${listed ? `<div class="actions"><button class="btn" data-stedit="${esc(p.id)}">Change use</button>${p.shared || !p.disks.length ? `<button class="btn" data-stremove="${esc(p.id)}">Remove</button>` : onSystem ? "" : `<button class="btn" data-pooldel="${esc(p.id)}">Delete</button>`}</div>` : ""}</div>
     ${p.active ? `<small>${sizeWords(p.usedGb)} used of ${sizeWords(p.totalGb)}, ${sizeWords(p.freeGb)} free</small><div class="meter"><i style="width:${pct}%"></i></div>` : `<p class="loginerr">This node can't reach it right now.</p>`}
     ${using.length ? `<small>Using it: ${esc(using.join(", "))}</small>` : ""}
     <small>Holds ${esc(holds.join(", ").toLowerCase().replace(/\bvm\b/g, "VM") || "nothing yet")}.</small>
@@ -657,8 +658,8 @@ function askPoolDelete(id) {
     ? `${id} is on the system disk, alongside Proxmox itself, so BossMox won't delete it. A fresh install splits the system disk into a folder (local) and a pool for guests (local-lvm). That's normal, and both are useful.`
     : users.length ? `${users.join(", ")} still ${users.length === 1 ? "uses" : "use"} it. Move or remove ${users.length === 1 ? "that" : "those"} first.`
       : p.items.length ? `There's still something on it. Open What's on it, and delete or move ${p.items.length === 1 ? "it" : "them"} first.` : "";
-  if (why) return dialog(`<h3>${esc(id)} can't be deleted yet</h3><p>${esc(why)}</p>${closeRow}`);
-  const drives = g.disks.map((d) => d.model || d.path).join(" and ");
+  if (why) return dialog(`<h3>${esc(id)} can't be deleted${g.disks.some((d) => d.system) ? "" : " yet"}</h3><p>${esc(why)}</p>${closeRow}`);
+  const drives = g.disks.map((d) => (d.model ? `${d.model} (${d.path})` : d.path)).join(" and ");
   S.poolDelete = id;
   dialog(`<h3>Delete ${esc(id)}?</h3><p>This erases ${esc(id)} from ${esc(drives)}. The ${g.disks.length === 1 ? "drive becomes" : "drives become"} empty, ready to use for something else. It can't be undone.</p>
     <label class="field restartname"><span>Type ${esc(id)} to go ahead</span><input id="pooldelconfirm" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
@@ -684,7 +685,7 @@ function mapPane() {
   if (!m) return `${top}<p class="empty">${esc(S.mapError || "Looking at this node's disks and storage.")}</p>`;
   const section = (heading, body) => `<h3 class="sthd">${heading}</h3>${body}`;
   return `${top}
-    ${m.groups.map((g) => `<section class="stgroup">${g.disks.length > 1 ? `<p class="stmany">${g.disks.length} disks working together</p>` : ""}${g.disks.map(diskLine).join("")}${g.pools.map(poolBlock).join("")}</section>`).join("")}
+    ${m.groups.map((g) => `<section class="stgroup">${g.disks.length > 1 ? `<p class="stmany">${g.disks.length} disks working together</p>` : ""}${g.disks.map(diskLine).join("")}${g.disks.some((d) => d.system) && g.pools.length > 1 ? `<small class="stnote">Proxmox itself lives here too. A fresh install splits this disk into a folder for files and a pool for guests' disks. That's normal, and both stay.</small>` : ""}${g.pools.map((p) => poolBlock(p, g.disks.some((d) => d.system))).join("")}</section>`).join("")}
     ${m.empty.length ? section("Empty disks", `<section class="stgroup">${m.empty.map(diskLine).join("")}<small class="stnote">Nothing is on these yet. Add storage turns them into a pool.</small></section>`) : ""}
     ${m.otherDisks.length ? section("Disks used by something else", `<section class="stgroup">${m.otherDisks.map(diskLine).join("")}</section>`) : ""}
     ${m.unplaced.length ? section("On this node, disk not identified", `<section class="stgroup">${m.unplaced.map(poolBlock).join("")}</section>`) : ""}
