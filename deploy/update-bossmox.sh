@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Updates the BossMox VM on this Proxmox node. Run as root on the node holding that VM, with bossmox.tgz next to it.
+# Updates the BossMox VM on this Proxmox node. Run as root on the node holding that VM. One line, which downloads
+# the latest release:  bash -c "$(curl -fsSL https://github.com/bossmox/bossmox/releases/latest/download/update-bossmox.sh)"
+# Or with bossmox.tgz copied next to this script, which is used instead.
 # Settings, the certificate and the setup all stay. If the new version doesn't start, the old one goes back.
 #
 # Usage: update-bossmox.sh [options]
@@ -27,10 +29,23 @@ done
 [ "$(id -u)" = 0 ] || die "run this as root on a Proxmox node."
 command -v qm >/dev/null || die "this isn't a Proxmox node."
 HERE=$(cd "$(dirname "$0")" && pwd)
-[ -f "$HERE/bossmox.tgz" ] || die "bossmox.tgz has to be next to this script."
+# The package: beside this script when copied by hand, otherwise the latest release from GitHub, so the whole
+# thing can run as one line. A download has to pass its checksum; one copied by hand is checked when it has one.
+RELEASE_URL=${BOSSMOX_RELEASE_URL:-https://github.com/bossmox/bossmox/releases/latest/download}
+PKG=""
+if [ ! -f "$HERE/bossmox.tgz" ]; then
+  echo "Downloading BossMox."
+  PKG=$(mktemp -d /var/tmp/bossmox-pkg.XXXXXX)
+  curl -fsSL -o "$PKG/bossmox.tgz" "$RELEASE_URL/bossmox.tgz" && curl -fsSL -o "$PKG/bossmox.tgz.sha256" "$RELEASE_URL/bossmox.tgz.sha256" \
+    || die "couldn't download BossMox. Check this node can reach github.com."
+  HERE=$PKG
+fi
 if [ -f "$HERE/bossmox.tgz.sha256" ]; then
   (cd "$HERE" && sha256sum --quiet -c bossmox.tgz.sha256) || die "bossmox.tgz failed its checksum."
+elif [ -n "$PKG" ]; then
+  die "the download came without its checksum, so it wasn't used."
 fi
+trap '[ -z "$PKG" ] || rm -rf "$PKG"' EXIT
 
 if [ -z "$VMID" ]; then
   FOUND=$(qm list | awk 'NR>1 && $2=="bossmox" {print $1}')
@@ -68,7 +83,7 @@ if [ -z "$YES" ]; then
 fi
 
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK"; [ -z "$PKG" ] || rm -rf "$PKG"' EXIT
 tar -xzf "$HERE/bossmox.tgz" -C "$WORK" deploy/install-in-alpine.sh deploy/update-in-alpine.sh
 
 echo "Copying it to the VM."

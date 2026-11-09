@@ -2,6 +2,9 @@
 # BossMox: management app for Proxmox Virtual Environment. Not affiliated with Proxmox.
 #
 # Run as root on a Proxmox node. Creates one small VM running BossMox and changes nothing else on the node.
+# One line, which downloads the latest release:
+#   bash -c "$(curl -fsSL https://github.com/bossmox/bossmox/releases/latest/download/install.sh)"
+# Options go after it as: bash -c "$(curl ...)" -- --ip 192.168.1.20/24 --gateway 192.168.1.1
 #
 # Usage: install.sh [options]
 #   --vmid N          VM ID. Default: the next free one.
@@ -13,7 +16,7 @@
 #   --yes             Don't ask before creating the VM.
 set -euo pipefail
 
-HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]:-.}")" && pwd)
 ALPINE=https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/cloud
 VMID=""
 STORAGE=""
@@ -46,10 +49,23 @@ done
 
 [ "$(id -u)" = 0 ] || die "run this as root."
 command -v qm >/dev/null && command -v pvesm >/dev/null || die "this isn't a Proxmox node."
-[ -f "$HERE/bossmox.tgz" ] || die "bossmox.tgz has to be next to this script."
-if [ -f "$HERE/bossmox.tgz.sha256" ]; then
-  (cd "$HERE" && sha256sum -c --status bossmox.tgz.sha256) || die "bossmox.tgz failed its checksum."
+# The package: beside this script when copied by hand, otherwise the latest release from GitHub, so the whole
+# thing can run as one line. A download has to pass its checksum; one copied by hand is checked when it has one.
+RELEASE_URL=${BOSSMOX_RELEASE_URL:-https://github.com/bossmox/bossmox/releases/latest/download}
+PKG=""
+if [ ! -f "$HERE/bossmox.tgz" ]; then
+  echo "Downloading BossMox."
+  PKG=$(mktemp -d /var/tmp/bossmox-pkg.XXXXXX)
+  curl -fsSL -o "$PKG/bossmox.tgz" "$RELEASE_URL/bossmox.tgz" && curl -fsSL -o "$PKG/bossmox.tgz.sha256" "$RELEASE_URL/bossmox.tgz.sha256" \
+    || die "couldn't download BossMox. Check this node can reach github.com."
+  HERE=$PKG
 fi
+if [ -f "$HERE/bossmox.tgz.sha256" ]; then
+  (cd "$HERE" && sha256sum --quiet -c bossmox.tgz.sha256) || die "bossmox.tgz failed its checksum."
+elif [ -n "$PKG" ]; then
+  die "the download came without its checksum, so it wasn't used."
+fi
+trap '[ -z "$PKG" ] || rm -rf "$PKG"' EXIT
 [ -z "$ADDRESS" ] || [ -n "$GATEWAY" ] || die "--ip needs --gateway too."
 [[ "$VLAN" =~ ^[0-9]*$ ]] || die "--vlan has to be a number."
 [[ "$ADDRESS" =~ ^[0-9./]*$ ]] && [[ "$GATEWAY" =~ ^[0-9.]*$ ]] || die "that address isn't valid."
@@ -85,6 +101,7 @@ cleanup() {
   [ -z "$MOUNT" ] || umount "$MOUNT" 2>/dev/null || true
   [ -z "$LOOP" ] || losetup -d "$LOOP" 2>/dev/null || true
   rm -rf "$WORK"
+  [ -z "$PKG" ] || rm -rf "$PKG"
 }
 trap cleanup EXIT
 

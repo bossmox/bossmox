@@ -1,30 +1,31 @@
 #!/usr/bin/env bash
-# Run from the repo on a development machine. Builds what a Proxmox node installs and pushes it to the
-# `release` branch, which holds only install.sh, update-bossmox.sh, bossmox.tgz and its checksum.
+# Run from the repo on a development machine. Builds the files a GitHub release carries, in out/<version>/:
+#   install.sh, update-bossmox.sh, bossmox.tgz and bossmox.tgz.sha256
+# The install and update one-liners download these from the latest release. It then prints the command that
+# makes the release as a draft, which the maintainer reads over and publishes.
+#
+# Usage: deploy/make-release.sh [label]     label defaults to "preview"; use "" for a full release.
 set -euo pipefail
 
+LABEL=${1-preview}
 npm test >/dev/null
-VERSION=$(git rev-parse --short HEAD)
 [ -z "$(git status --porcelain)" ] || { echo "Commit first, so the release matches a commit." >&2; exit 1; }
+BASE=$(node -p 'require("./package.json").version')
+COMMIT=$(git rev-parse --short HEAD)
+# Says what it is, when it was built and from which commit: 0.1.0-preview.20261109.abc1234
+VERSION="$BASE${LABEL:+-$LABEL}.$(date -u +%Y%m%d).$COMMIT"
+TAG="v$BASE${LABEL:+-$LABEL}"
 
+OUT="out/$VERSION"
+rm -rf "$OUT"
+mkdir -p "$OUT"
 WORK=$(mktemp -d)
-trap 'git worktree remove --force "$WORK/tree" 2>/dev/null || true; rm -rf "$WORK"' EXIT
-# Dated so people can tell which is newer. The commit says exactly what's in it.
-date -u +"%Y.%m.%d-%H%M-$VERSION" > "$WORK/VERSION"
-tar -czf "$WORK/bossmox.tgz" dist/src public deploy package.json node_modules/ws -C "$WORK" VERSION
+trap 'rm -rf "$WORK"' EXIT
+echo "$VERSION" > "$WORK/VERSION"
+tar -czf "$OUT/bossmox.tgz" dist/src public deploy package.json node_modules/ws LICENSE -C "$WORK" VERSION
+cp deploy/install.sh deploy/update-bossmox.sh "$OUT/"
+(cd "$OUT" && sha256sum bossmox.tgz > bossmox.tgz.sha256)
 
-git fetch -q origin release 2>/dev/null || true
-if git rev-parse -q --verify origin/release >/dev/null; then
-  git worktree add -q -B release "$WORK/tree" origin/release
-else
-  git worktree add -q --detach "$WORK/tree"
-  git -C "$WORK/tree" checkout -q --orphan release
-  git -C "$WORK/tree" rm -rfq .
-fi
-git -C "$WORK/tree" rm -rqf --ignore-unmatch .
-cp deploy/install.sh deploy/update-bossmox.sh "$WORK/bossmox.tgz" "$WORK/tree/"
-(cd "$WORK/tree" && sha256sum bossmox.tgz > bossmox.tgz.sha256)
-git -C "$WORK/tree" add install.sh update-bossmox.sh bossmox.tgz bossmox.tgz.sha256
-git -C "$WORK/tree" -c user.name="Rocky Lott" -c user.email="41306447+twogunrock@users.noreply.github.com" commit -q -m "Release $VERSION"
-git -C "$WORK/tree" push -q origin release
-echo "Released $VERSION"
+echo "Built $VERSION in $OUT"
+echo "To make the draft release (read it over on GitHub, then publish):"
+echo "  gh release create $TAG --repo bossmox/bossmox --draft ${LABEL:+--prerelease }--title \"BossMox $BASE${LABEL:+ $LABEL}\" --notes-file docs/release-notes/$TAG.md $OUT/install.sh $OUT/update-bossmox.sh $OUT/bossmox.tgz $OUT/bossmox.tgz.sha256"
