@@ -11,7 +11,7 @@
 #   --storage NAME    Where its disk goes. Default: the storage with the most free space that holds VM disks.
 #   --bridge NAME     Network bridge. Default: vmbr0.
 #   --vlan N          VLAN tag. Default: none.
-#   --ip A.B.C.D/NN   Fixed address. Needs --gateway. Default: DHCP.
+#   --ip A.B.C.D/NN   Fixed address. Needs --gateway. Default: asks when run by hand, DHCP when not.
 #   --gateway A.B.C.D Gateway for --ip.
 #   --yes             Don't ask before creating the VM.
 set -euo pipefail
@@ -76,6 +76,56 @@ fi
 [[ "$ADDRESS" =~ ^[0-9./]*$ ]] && [[ "$GATEWAY" =~ ^[0-9.]*$ ]] || die "that address isn't valid."
 [ -d "/sys/class/net/$BRIDGE" ] || die "there's no network bridge called $BRIDGE. Pick one with --bridge."
 
+# BossMox's own address (ADR 0023). Run by hand without --ip, it asks: an automatic address can change after a
+# restart, which breaks the bookmark and the certificate. Scripts, --yes and --ip behave as before.
+ip2int() { local IFS=.; set -- $1; echo $(( ($1 << 24) + ($2 << 16) + ($3 << 8) + $4 )); }
+valid_ip() {
+  [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  local n; for n in "${BASH_REMATCH[@]:1}"; do [ "$n" -le 255 ] || return 1; done
+}
+same_network() { # address prefix gateway
+  local mask=$(( (0xFFFFFFFF << (32 - $2)) & 0xFFFFFFFF ))
+  [ $(( $(ip2int "$1") & mask )) -eq $(( $(ip2int "$3") & mask )) ]
+}
+if [ -z "$ADDRESS" ] && [ "$ASSUME_YES" != 1 ] && [ -t 0 ]; then
+  HOST_NET=$(ip -4 -o addr show dev "$BRIDGE" 2>/dev/null | awk '{print $4; exit}')
+  NODE_IP=${HOST_NET%/*}
+  # Without a VLAN, BossMox sits on the node's own network, so its size and gateway are the sensible defaults.
+  PREFIX_GUESS=""
+  GW_GUESS=""
+  if [ -z "$VLAN" ] && [ -n "$HOST_NET" ]; then
+    PREFIX_GUESS=${HOST_NET#*/}
+    GW_GUESS=$(ip -4 route show default dev "$BRIDGE" 2>/dev/null | awk '{print $3; exit}')
+  fi
+  echo
+  echo "BossMox needs its own address on your network."
+  echo "  A fixed address stays the same, so your bookmark keeps working. Recommended."
+  echo "  An automatic one comes from your router and can change after a restart."
+  [ -z "$NODE_IP" ] || echo "  This node is $NODE_IP. Pick an address on the same network that nothing else uses."
+  for TRY in 1 2 3 4 5; do
+    read -r -p "Fixed address for BossMox (like 192.168.1.20), or press Enter for automatic: " IN || IN=""
+    [ -n "$IN" ] || break
+    A=${IN%/*}
+    P=${PREFIX_GUESS:-24}
+    [ "$A" = "$IN" ] || P=${IN#*/}
+    if ! valid_ip "$A" || ! [[ "$P" =~ ^[0-9]+$ ]] || [ "$P" -lt 8 ] || [ "$P" -gt 30 ]; then echo "  That isn't an address. Type four numbers like 192.168.1.20."; continue; fi
+    if [ "$A" = "$NODE_IP" ]; then echo "  That's this node's own address. Pick a different one."; continue; fi
+    if ping -c 1 -W 1 "$A" >/dev/null 2>&1; then echo "  Something on your network already answers at $A. Pick a different one."; continue; fi
+    while :; do
+      read -r -p "Gateway (your router)${GW_GUESS:+ [$GW_GUESS]}: " G || G=""
+      G=${G:-$GW_GUESS}
+      if ! valid_ip "$G"; then echo "  That isn't an address. Type four numbers like 192.168.1.1."; continue; fi
+      if ! same_network "$A" "$P" "$G"; then echo "  $G isn't on the same network as $A/$P. Check both."; G=""; fi
+      break
+    done
+    [ -n "$G" ] || continue
+    ADDRESS="$A/$P"
+    GATEWAY="$G"
+    break
+  done
+  [ -n "$ADDRESS" ] || [ -z "$IN" ] || die "no usable address after five tries. Run it again, or use --ip and --gateway."
+fi
+
 [ -n "$VMID" ] || VMID=$(pvesh get /cluster/nextid)
 [[ "$VMID" =~ ^[0-9]+$ ]] || die "--vmid has to be a number."
 if qm status "$VMID" >/dev/null 2>&1 || pct status "$VMID" >/dev/null 2>&1; then die "ID $VMID is already in use."; fi
@@ -91,7 +141,7 @@ echo "BossMox will create one VM on $(hostname):"
 echo "  VM ID      $VMID, named bossmox"
 echo "  Size       1 core, 256 MB memory, 1 GB disk"
 echo "  Storage    $STORAGE"
-echo "  Network    $BRIDGE${VLAN:+, VLAN $VLAN}, ${ADDRESS:-address from DHCP}"
+echo "  Network    $BRIDGE${VLAN:+, VLAN $VLAN}, ${ADDRESS:-address from DHCP}${GATEWAY:+, gateway $GATEWAY}"
 echo "Nothing else on this node changes. To remove it later: qm destroy $VMID --purge 1"
 echo
 if [ "$ASSUME_YES" != 1 ]; then
