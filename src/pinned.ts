@@ -41,7 +41,9 @@ export async function probe(host: string, port: number): Promise<Peer> {
   const cert = socket.getPeerCertificate();
   socket.destroy();
   if (!cert?.fingerprint256) throw new Error("That address didn't show a certificate.");
-  return { fingerprint: cert.fingerprint256, subject: cert.subject?.CN ?? "" };
+  // A certificate can carry more than one common name, which newer Node type definitions spell out.
+  const cn: string | string[] | undefined = cert.subject?.CN;
+  return { fingerprint: cert.fingerprint256, subject: Array.isArray(cn) ? cn.join(", ") : cn ?? "" };
 }
 
 export interface Pinned {
