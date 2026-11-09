@@ -16,7 +16,7 @@
   },
   "devDependencies": {
     "@types/node": "22.19.1",
-    "@types/ws": "8.18.1",
+    "@types/ws": "8.18.2",
     "@xterm/addon-fit": "0.10.0",
     "@xterm/xterm": "5.5.0",
     "typescript": "5.9.3"
