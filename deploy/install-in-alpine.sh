@@ -185,7 +185,8 @@ while :; do
     printf "  Status       $STATE$PLAIN$EOL\n"
     [ ! -f /opt/bossmox/VERSION ] || printf "  Version      %s$EOL\n" "$(cat /opt/bossmox/VERSION)"
   fi
-  printf "$EOL\n$EOL\n$EOL\n  ${DIM}Press L to log in to this machine$PLAIN$EOL\n\033[J"
+  # Nobody can log in here (root and the cloud user are locked), so the screen says how to start setup over instead.
+  printf "$EOL\n$EOL\n$EOL\n  ${DIM}To start setup over, on the Proxmox node run$PLAIN$EOL\n  ${DIM}qm guest exec <this VM's ID> -- bossmox-reset$PLAIN$EOL\n\033[J"
   KEY=""
   read -r -s -n 1 -t 5 KEY 2>/dev/null || true
   case "$KEY" in
@@ -203,7 +204,8 @@ pkill -f getty 2>/dev/null || true
 pkill -f /usr/local/sbin/bossmox-console 2>/dev/null || true
 cat > /usr/local/sbin/bossmox-reset <<'EOF'
 #!/bin/sh
-# Starts setup again with a new code. Only someone with console access to this VM can run this.
+# Starts setup again with a new code. Nobody can log in to this VM, so it's run from the Proxmox node through the
+# guest agent, which needs root on the node: qm guest exec <VM ID> -- bossmox-reset
 rm -f /var/lib/bossmox/settings.json /var/lib/bossmox/setup.hash /var/lib/bossmox/setup.code /var/lib/bossmox/pve-root-ca.pem
 rc-service bossmox restart
 EOF

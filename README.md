@@ -72,6 +72,16 @@ npm test
 npm run build && npm start
 ```
 
+## Starting setup over
+
+Nobody can log in to the BossMox VM itself: its accounts are locked. To start setup again with a new code, for example after losing it, run this as root on the Proxmox node that holds the VM, with the VM's ID:
+
+```
+qm guest exec <VM ID> -- bossmox-reset
+```
+
+That clears BossMox's settings, and the VM's console shows a new setup code. Your Proxmox nodes and guests aren't touched.
+
 ## License
 
 BossMox is free and open source under the [GNU Affero General Public License, version 3](LICENSE). You can use it, change it and share it. If you share a changed version, or run one for other people to use, you have to publish your changes under the same license. Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) for how, and for the terms they come under.

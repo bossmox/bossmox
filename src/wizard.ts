@@ -91,7 +91,7 @@ export class Wizard {
     if (mine >= MAX_CODE_TRIES || this.tries >= MAX_CODE_TRIES_ALL) throw new WizardError(429, "Too many wrong codes. Wait 5 minutes and try again.");
     this.tries += 1;
     this.triesBy.set(from, mine + 1);
-    if (!existsSync(this.hashFile)) throw new WizardError(400, "No setup code exists on this machine. Run bossmox-reset on its console to make one.");
+    if (!existsSync(this.hashFile)) throw new WizardError(400, "No setup code exists on this machine. On the Proxmox node, run qm guest exec followed by this VM's ID and -- bossmox-reset to make one.");
     const want = Buffer.from(readFileSync(this.hashFile, "utf8").trim(), "hex");
     const got = hashCode(code);
     if (want.length !== got.length || !timingSafeEqual(want, got)) throw new WizardError(401, "That code didn't match. Check the VM's console and try again.");
