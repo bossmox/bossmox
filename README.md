@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/brand/logo.png" alt="The BossMox logo: a friendly computer wearing a crown, waving, holding a plus sign" width="200"></p>
+
 # BossMox
 
 **BossMox: management app for Proxmox Virtual Environment.**
