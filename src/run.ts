@@ -1,0 +1,221 @@
+/**
+ * An update or restart run, driven by the BossMox server (ADR 0027). Kept in runs.json beside the settings, so any
+ * browser can follow it and closing the page changes nothing. One node at a time; every step is saved as it ends.
+ */
+import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import path from "node:path";
+
+export type Choice = "move" | "shutdown";
+export type VmState = "waiting" | "moving" | "moved" | "stopping" | "off" | "starting" | "started" | "home" | "stayed" | "failed";
+export type Phase = "waiting" | "checking" | "emptying" | "installing" | "restarting" | "starting" | "returning" | "done" | "failed";
+
+export interface RunVm {
+  id: number;
+  name: string;
+  type: "qemu" | "lxc";
+  choice: Choice;
+  state: VmState;
+  /** Where it is now, once it has moved. */
+  on?: string;
+  note?: string;
+}
+export interface RunNode {
+  name: string;
+  install: boolean;
+  restart: boolean;
+  updates: number;
+  phase: Phase;
+  vms: RunVm[];
+  note: string | null;
+  /** Config files apt kept the old version of; the new one is beside each. */
+  keptConfig: string[];
+}
+export interface Run {
+  id: string;
+  kind: "update" | "restart";
+  by: string;
+  startedAt: number;
+  finishedAt: number | null;
+  running: boolean;
+  /** Set by Stop or sign-out: the step under way finishes and nothing new starts. */
+  stop: string | null;
+  error: string | null;
+  current: number;
+  nodes: RunNode[];
+}
+
+export const runsPath = (settingsFile: string) => path.join(path.dirname(settingsFile), "runs.json");
+
+/** A run that was going when BossMox stopped isn't going any more, and doesn't pick itself back up. */
+export function readRun(file: string): Run | null {
+  try {
+    const run = JSON.parse(readFileSync(file, "utf8")) as Run;
+    if (!run || !Array.isArray(run.nodes)) return null;
+    if (run.running) {
+      const at = run.nodes[run.current];
+      run.running = false;
+      run.finishedAt = Date.now();
+      run.error = `BossMox restarted during the run${at ? `, while ${at.name} was ${at.phase}` : ""}. Nothing more was done. Check that node, then start again if needed.`;
+      if (at && at.phase !== "done") at.phase = "failed";
+    }
+    return run;
+  } catch {
+    return null;
+  }
+}
+
+export function writeRun(file: string, run: Run) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  const temp = `${file}.new`;
+  writeFileSync(temp, `${JSON.stringify(run, null, 2)}\n`, { mode: 0o640 });
+  chmodSync(temp, 0o640);
+  renameSync(temp, file);
+}
+
+export interface InstallResult {
+  exitCode: number;
+  keptConfig: string[];
+  /** Updates still waiting after the install, or null if BossMox couldn't read them. */
+  left: number | null;
+}
+/** What a run needs from Proxmox and the move job, passed in so the run is tested without either. */
+export interface RunDeps {
+  stopped(): string | null;
+  save(run: Run): void;
+  wait(ms: number): Promise<void>;
+  /** Why the cluster or this node isn't ready right now, or null. */
+  notReady(node: string): Promise<string | null>;
+  shutdown(node: string, vm: RunVm): Promise<void>;
+  /** Moves these VMs off the node, in batches. Resolves with where each went, or rejects with the reason. */
+  moveOff(node: string, ids: number[]): Promise<Record<number, string>>;
+  install(node: string): Promise<InstallResult>;
+  restart(node: string): Promise<void>;
+  start(node: string, vm: RunVm): Promise<void>;
+  /** Brings this node's moved VMs home. Resolves with the ones that stayed away, and why. */
+  moveHome(node: string): Promise<Record<number, string>>;
+}
+
+const READY_WAIT_MS = 3 * 60 * 1000;
+const plain = (err: unknown) => (err instanceof Error && err.message ? err.message : "BossMox lost contact with Proxmox.");
+
+async function step(run: Run, deps: RunDeps, node: RunNode, phase: Phase, work: () => Promise<void>) {
+  const stop = deps.stopped();
+  if (stop) throw new StopError(stop);
+  node.phase = phase;
+  deps.save(run);
+  await work();
+  deps.save(run);
+}
+class StopError extends Error {}
+
+/** Drives the run to its end. Never throws: how it ended is written on the run. */
+export async function drive(run: Run, deps: RunDeps): Promise<void> {
+  run.running = true;
+  deps.save(run);
+  try {
+    for (; run.current < run.nodes.length; run.current++) {
+      const node = run.nodes[run.current] as RunNode;
+      try {
+        await step(run, deps, node, "checking", async () => {
+          // A node that just came back can look busy or absent for a moment.
+          for (const until = Date.now() + READY_WAIT_MS; ; await deps.wait(5000)) {
+            const why = await deps.notReady(node.name);
+            if (!why) return;
+            if (Date.now() > until) throw new Error(why);
+          }
+        });
+        if (node.restart && node.vms.length) {
+          await step(run, deps, node, "emptying", async () => {
+            for (const vm of node.vms.filter((v) => v.choice === "shutdown")) {
+              vm.state = "stopping";
+              deps.save(run);
+              try {
+                await deps.shutdown(node.name, vm);
+              } catch (err) {
+                vm.state = "failed";
+                vm.note = plain(err);
+                throw new Error(`${vm.name} didn't shut down: ${plain(err)}`);
+              }
+              vm.state = "off";
+              deps.save(run);
+            }
+            const moving = node.vms.filter((v) => v.choice === "move");
+            if (!moving.length) return;
+            for (const vm of moving) vm.state = "moving";
+            deps.save(run);
+            try {
+              const went = await deps.moveOff(node.name, moving.map((v) => v.id));
+              for (const vm of moving) {
+                if (went[vm.id]) {
+                  vm.state = "moved";
+                  vm.on = went[vm.id];
+                } else vm.state = "failed";
+              }
+            } catch (err) {
+              for (const vm of moving) if (vm.state === "moving") vm.state = "failed";
+              throw err;
+            }
+          });
+        }
+        if (node.install) {
+          await step(run, deps, node, "installing", async () => {
+            const r = await deps.install(node.name);
+            node.keptConfig = r.keptConfig;
+            if (r.exitCode !== 0) throw new Error(`The install on ${node.name} ended with an error (apt exit code ${r.exitCode}), so it wasn't restarted.`);
+            if (r.left === null) throw new Error(`BossMox couldn't confirm the updates installed on ${node.name}, so it wasn't restarted.`);
+            if (r.left > 0) throw new Error(`${r.left} ${r.left === 1 ? "update is" : "updates are"} still waiting on ${node.name} after the install, so it wasn't restarted.`);
+          });
+        }
+        if (node.restart) {
+          await step(run, deps, node, "restarting", () => deps.restart(node.name));
+          await step(run, deps, node, "starting", async () => {
+            for (const vm of node.vms.filter((v) => v.state === "off")) {
+              vm.state = "starting";
+              deps.save(run);
+              try {
+                await deps.start(node.name, vm);
+                vm.state = "started";
+              } catch (err) {
+                vm.state = "failed";
+                vm.note = `didn't start: ${plain(err)}`;
+              }
+              deps.save(run);
+            }
+          });
+          if (node.vms.some((v) => v.state === "moved")) {
+            await step(run, deps, node, "returning", async () => {
+              const stayed = await deps.moveHome(node.name);
+              for (const vm of node.vms.filter((v) => v.state === "moved")) {
+                if (stayed[vm.id] !== undefined) {
+                  vm.state = "stayed";
+                  vm.note = stayed[vm.id];
+                } else {
+                  vm.state = "home";
+                  delete vm.on;
+                }
+              }
+            });
+          }
+        }
+        node.phase = "done";
+        node.note = node.vms.some((v) => v.state === "failed") ? `Done, but not everything started: ${node.vms.filter((v) => v.state === "failed").map((v) => v.name).join(", ")}.` : null;
+        deps.save(run);
+      } catch (err) {
+        if (err instanceof StopError) {
+          run.error = `Stopped: ${err.message} ${node.phase === "checking" ? `${node.name} wasn't touched.` : `${node.name} stopped after ${node.phase}.`}`;
+          if (node.phase === "checking") node.phase = "waiting";
+        } else {
+          node.phase = "failed";
+          node.note = plain(err);
+          run.error = `${node.name}: ${plain(err)}`;
+        }
+        deps.save(run);
+        break;
+      }
+    }
+  } finally {
+    run.running = false;
+    run.finishedAt = Date.now();
+    deps.save(run);
+  }
+}
