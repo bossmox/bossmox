@@ -3386,11 +3386,15 @@ document.addEventListener("change", (e) => {
   if (e.target.dataset?.keepagain) {
     const again = e.target.dataset.keepagain;
     const keepFreePct = Number(e.target.value);
-    return runAction("preferences-set", onlineNodes()[0], "Saving", { keepFreePct }, async () => {
+    e.target.disabled = true;
+    // Saved for the whole cluster, then the plan is drawn again with it, in place.
+    return (async () => {
+      const res = await post("api/action/preferences-set", { server: onlineNodes()[0], keepFreePct });
+      if (!res.ok) return dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc((await res.json()).error)}</p>${closeRow}`);
       await refresh();
       if (again === "rolling") startRolling();
       else startRestart(again.replace(/^restart:/, ""));
-    });
+    })().catch((err) => dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`));
   }
   if (e.target.dataset?.bkwarn) {
     const line = e.target.closest("#dialog")?.querySelector(".warnline");
