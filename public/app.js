@@ -1365,7 +1365,51 @@ async function startMoves(action, server) {
   return body.task;
 }
 /** An Eject button for each VM that only a disc keeps from moving, or "". `again` redraws the window after. */
-const ejectButtons = (list, node, again) => (list ?? []).map((g) => `<p class="meta"><button class="btn" data-eject="${g.id}" data-ejectname="${esc(g.name)}" data-ejectnode="${esc(g.node ?? node)}" data-ejectslots="${esc(g.slots.join(","))}" data-ejectagain="${esc(again)}">Eject the disc from ${esc(g.name)}</button></p>`).join("");
+/**
+ * Eject buttons for the VMs that only a disc keeps from moving, plus Eject all when there's more than one.
+ * The list is kept, so the buttons work on what was planned without asking Proxmox for anything first (ADR 0026).
+ */
+function ejectButtons(list, node, again) {
+  const items = (list ?? []).map((g) => ({ ...g, node: g.node ?? node }));
+  S.ejectList = { ...(S.ejectList ?? {}), [again]: items };
+  if (!items.length) return "";
+  const one = (g) => `<p class="meta"><button class="btn" data-eject="${g.id}" data-ejectagain="${esc(again)}">Eject the disc from ${esc(g.name)}</button></p>`;
+  return `${items.map(one).join("")}${items.length > 1 ? `<p class="meta"><button class="btn primary" data-ejectall="${esc(again)}">Eject all ${items.length}</button></p>` : ""}`;
+}
+/** Takes the discs out. Returns the ones that came out, and the first error, if any. */
+async function ejectDiscs(items) {
+  const done = [];
+  for (const g of items) {
+    try {
+      for (const slot of g.slots) {
+        const res = await post("api/action/guest-disc", { server: g.node, guest: String(g.id), type: "qemu", slot, disc: "" });
+        if (!res.ok) throw new Error((await res.json()).error);
+      }
+      done.push(g);
+    } catch (err) {
+      return { done, error: `${g.name}: ${err.message || "BossMox lost contact with Proxmox."}` };
+    }
+  }
+  return { done, error: "" };
+}
+/**
+ * Update all nodes found VMs held back by a disc. Ejecting marks them here and doesn't check every node again;
+ * Check again does that once, when the person is ready (Rocky, 2026-11-10).
+ */
+function drawNotReady(problem = "") {
+  const { plan, done } = S.notReady;
+  const out = (plan.ejectable ?? []).filter((g) => done.has(g.id));
+  const left = (plan.ejectable ?? []).filter((g) => !done.has(g.id));
+  const fixed = (line) => out.some((g) => line.includes(`: ${g.name} has a disc image`) || line.includes(`: ${g.name} uses its node's own disc drive`));
+  const lines = plan.blocked.filter((b) => !fixed(b));
+  dialog(`<h3>Not ready to update</h3>
+    ${problem ? `<p class="loginerr">${esc(problem)}</p>` : ""}
+    ${lines.map((b) => `<p class="loginerr">${esc(b)}</p>`).join("")}
+    ${out.length ? `<p class="meta">Disc ejected from ${esc(out.map((g) => g.name).join(", "))}.</p>` : ""}
+    ${ejectButtons(left, "", "rolling")}
+    ${out.length && !lines.length ? `<p>That was everything on the list. Check again to start.</p>` : ""}
+    <div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn ${out.length && !lines.length ? "primary" : ""}" data-rollingagain="1">Check again</button></div>`);
+}
 /** One line on guests that stayed away because their home had no room, or "". */
 function stayedWords(job) {
   const stayed = job.guests.filter((g) => g.state === "stayed");
@@ -1653,7 +1697,10 @@ async function startRolling() {
     return dialog(`<h3>Couldn't prepare the update</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
   }
   S.taskRunning = false;
-  if (plan.blocked.length) return dialog(`<h3>Not ready to update</h3>${plan.blocked.map((b) => `<p class="loginerr">${esc(b)}</p>`).join("")}${ejectButtons(plan.ejectable, "", "rolling")}${closeRow}`);
+  if (plan.blocked.length) {
+    S.notReady = { plan, done: new Set() };
+    return drawNotReady();
+  }
   if (!plan.servers.length) return dialog(`<h3>Every node is up to date</h3><p>Nothing is waiting to install.</p>${closeRow}`);
   S.rollingPlan = plan;
   const restarts = plan.servers.filter((v) => v.rebootNeeded).length;
@@ -3052,25 +3099,26 @@ document.addEventListener("click", (e) => {
     const v = selected();
     return runAction("guest-disc", v.node, `Changing the disc in ${v.name}`, { ...guestBody(v), slot: S.discSlot ?? "ide2", disc: $("#gdisc").value }, after);
   }
-  if (d.eject) {
-    // A VM held back from moving by a disc from its node's own storage (ADR 0026).
-    const name = d.ejectname;
-    const slots = d.ejectslots.split(",");
-    const again = d.ejectagain;
-    return confirmAction(`Eject the disc from ${name}?`, `The disc comes out of ${name}'s ${slots.length > 1 ? `drives ${slots.join(" and ")}` : `drive ${slots[0]}`}. ${name} keeps running, and the disc stays on the node, so it can go back in later. Then BossMox plans the moves again.`, `Eject from ${name}`, async () => {
-      try {
-        for (const slot of slots) {
-          const res = await post("api/action/guest-disc", { server: d.ejectnode, guest: d.eject, type: "qemu", slot, disc: "" });
-          if (!res.ok) throw new Error((await res.json()).error);
-        }
-        await refresh();
-        if (again === "rolling") startRolling();
-        else startRestart(again.replace(/^restart:/, ""));
-      } catch (err) {
-        dialog(`<h3>The disc didn't come out</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  if (d.eject || d.ejectall) {
+    // VMs held back from moving by a disc from their node's own storage (ADR 0026).
+    const again = d.ejectagain ?? d.ejectall;
+    const all = S.ejectList?.[again] ?? [];
+    const items = d.ejectall ? all : all.filter((g) => String(g.id) === d.eject);
+    if (!items.length) return;
+    const names = items.map((g) => g.name).join(", ");
+    const where = items.length === 1 ? `${items[0].name}'s ${items[0].slots.length > 1 ? `drives ${items[0].slots.join(" and ")}` : `drive ${items[0].slots[0]}`}` : names;
+    return confirmAction(items.length === 1 ? `Eject the disc from ${names}?` : `Eject the discs from ${items.length} VMs?`, `The disc comes out of ${where}. They keep running, and the discs stay on their nodes, so they can go back in later.`, items.length === 1 ? `Eject from ${names}` : `Eject all ${items.length}`, async () => {
+      const { done, error } = await ejectDiscs(items);
+      if (again === "rolling") {
+        for (const g of done) S.notReady?.done.add(g.id);
+        return S.notReady ? drawNotReady(error ? `The disc didn't come out of ${error}` : "") : null;
       }
+      if (error) return dialog(`<h3>The disc didn't come out</h3><p class="loginerr">${esc(error)}</p>${closeRow}`);
+      await refresh();
+      startRestart(again.replace(/^restart:/, ""));
     });
   }
+  if (d.rollingagain) return startRolling();
   if (d.discadd) return askDisc();
   if (d.discgo) return downloadDisc();
   if (d.taskview) return viewTask(d.tasknode, d.taskview);

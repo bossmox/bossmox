@@ -12,6 +12,8 @@ A read-only look at a production cluster (Maverick, Proxmox 8.4) found four VMs 
 - Changing a disc names its slot. The server refuses a slot that isn't a disc drive already (a data disk, cloud-init, or nothing there), and adds the slot to the boot order only when it isn't in it.
 - The move plan says which VMs are held back only by a disc from a node's own storage, or by the node's own disc drive, and from which drives. The Restart and Update all nodes windows give each an Eject button. Eject confirms with the VM and drives named, empties those drives (the VM keeps running, the disc stays on the node), and the plan is drawn again. A VM also held back by passed-through hardware or a snapshot gets no Eject, since ejecting wouldn't free it.
 
+**Changed the same day (Rocky, on Maverick):** in Update all nodes, each Eject used to re-run the whole check, asking every node for updates again, so four discs meant four checks. Now the Not ready window stays put: Eject marks the VM "Disc ejected" in place, Eject all takes every listed disc out with one confirmation, and Check again runs the full check once when the person is ready. In the Restart window, which re-plans one node quickly, ejecting still redraws the plan.
+
 ## Not done
 
 Putting the disc back after the update, and offering to move a shared ISO into place instead.
