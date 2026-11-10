@@ -10,8 +10,12 @@ export interface Preferences {
   backupsElsewhere: boolean;
   /** Check GitHub for a newer BossMox every 6 hours (ADR 0019). On unless someone turns it off. */
   updateCheck: boolean;
+  /** How much of each node to keep free when BossMox moves guests: memory, storage and processor (ADR 0025). */
+  keepFreePct: number;
 }
-const DEFAULTS: Preferences = { backupsElsewhere: false, updateCheck: true };
+/** The choices offered. Anything else read from the file falls back to the default. */
+export const KEEP_FREE_CHOICES = [5, 10, 15, 20, 25, 30];
+const DEFAULTS: Preferences = { backupsElsewhere: false, updateCheck: true, keepFreePct: 10 };
 
 export const preferencesPath = (settingsFile: string) => path.join(path.dirname(settingsFile), "preferences.json");
 
@@ -19,7 +23,8 @@ export const preferencesPath = (settingsFile: string) => path.join(path.dirname(
 export function readPreferences(file: string): Preferences {
   try {
     const raw = JSON.parse(readFileSync(file, "utf8")) as Partial<Preferences>;
-    return { backupsElsewhere: raw.backupsElsewhere === true, updateCheck: raw.updateCheck !== false };
+    const keep = typeof raw.keepFreePct === "number" && KEEP_FREE_CHOICES.includes(raw.keepFreePct) ? raw.keepFreePct : DEFAULTS.keepFreePct;
+    return { backupsElsewhere: raw.backupsElsewhere === true, updateCheck: raw.updateCheck !== false, keepFreePct: keep };
   } catch {
     return { ...DEFAULTS };
   }

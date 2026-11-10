@@ -9,9 +9,9 @@ test("the setting is kept on the server, beside the settings file, and survives 
   const dir = mkdtempSync(path.join(tmpdir(), "bmx-prefs-"));
   const file = preferencesPath(path.join(dir, "settings.json"));
   assert.equal(path.basename(file), "preferences.json");
-  assert.deepEqual(readPreferences(file), { backupsElsewhere: false, updateCheck: true }, "no file means warn, the safe default");
-  writePreferences(file, { backupsElsewhere: true, updateCheck: false });
-  assert.deepEqual(readPreferences(file), { backupsElsewhere: true, updateCheck: false });
+  assert.deepEqual(readPreferences(file), { backupsElsewhere: false, updateCheck: true, keepFreePct: 10 }, "no file means warn, the safe default");
+  writePreferences(file, { backupsElsewhere: true, updateCheck: false, keepFreePct: 20 });
+  assert.deepEqual(readPreferences(file), { backupsElsewhere: true, updateCheck: false, keepFreePct: 20 });
 });
 
 test("a damaged or odd file falls back to warning", () => {
@@ -22,12 +22,16 @@ test("a damaged or odd file falls back to warning", () => {
   writeFileSync(file, JSON.stringify({ backupsElsewhere: "yes" }));
   assert.equal(readPreferences(file).backupsElsewhere, false);
   assert.equal(readPreferences(file).updateCheck, true, "an odd file still checks for updates");
+  writeFileSync(file, JSON.stringify({ keepFreePct: 0 }));
+  assert.equal(readPreferences(file).keepFreePct, 10, "a buffer that isn't one of the choices falls back to 10%");
+  writeFileSync(file, JSON.stringify({ keepFreePct: "25" }));
+  assert.equal(readPreferences(file).keepFreePct, 10);
 });
 
 test("with backups done another way, no guest is flagged for a missing schedule", () => {
   const notBackedUp = [{ vmid: 100 }, { vmid: 101 }];
-  assert.deepEqual(scheduleWarnings({ backupsElsewhere: true, updateCheck: true }, notBackedUp), []);
-  assert.deepEqual(scheduleWarnings({ backupsElsewhere: false, updateCheck: true }, notBackedUp), notBackedUp);
+  assert.deepEqual(scheduleWarnings({ backupsElsewhere: true, updateCheck: true, keepFreePct: 10 }, notBackedUp), []);
+  assert.deepEqual(scheduleWarnings({ backupsElsewhere: false, updateCheck: true, keepFreePct: 10 }, notBackedUp), notBackedUp);
 });
 
 test("only an account that can change the cluster's settings can change it", () => {
