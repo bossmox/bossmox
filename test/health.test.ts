@@ -98,6 +98,9 @@ test("the BossMox version check: newer available, up to date, couldn't check, an
   const off = v({ ...u, on: false, checkedAt: null })!;
   assert.equal(off.status, "off", "never counted as passed");
   assert.equal(off.fix!.kind, "update-check");
-  assert.equal(v({ ...u, checkedAt: null }), undefined, "nothing to say before the first check");
+  assert.equal(v(u)!.fix!.kind, "check-now", "up to date offers Check now");
+  const before = v({ ...u, checkedAt: null })!;
+  assert.equal(before.status, "ok", "not checked yet isn't a problem");
+  assert.equal(before.fix!.kind, "check-now", "but it can be asked to check now");
   assert.equal(v(undefined), undefined, "a copy with no version");
 });

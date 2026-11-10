@@ -19,6 +19,10 @@ BossMox updates with one command on a Proxmox node, but nothing told anyone a ne
 - An automatic install, for the reason above. If wanted later, the console button could open the node's console with the command typed in, waiting for Enter, the way node updates already wait for a person.
 - People on 0.1.0 have no check, so they need the update command once; from 0.1.1 on, BossMox tells them.
 
+## Check now (2026-11-10)
+
+Rocky asked for a way to force a check. The health check's BossMox line has a Check now button, also before the first check has run. It asks GitHub at once, then says what it found; a newer version opens How to update. Anyone signed in can press it, since it changes nothing. Within a minute of the last check it answers from what it already has, so repeated clicks can't use up GitHub's 60 requests an hour.
+
 ## Tested
 
 - Unit tests, each proven able to fail by breaking its rule: version numbers from tags and builds; only a higher number counts (equal, lower and 0.1.10 against 0.1.9); drafts, pre-releases and foreign links ignored; the request goes to the latest-release address and names BossMox; a refused or unreachable GitHub gives a plain reason and never throws; turned off or with no version it never contacts GitHub; turning off forgets and turning on checks at once; the four health states; a damaged preferences file still checks.
