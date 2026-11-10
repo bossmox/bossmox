@@ -1325,7 +1325,7 @@ function saveReboot(value) {
     else localStorage.removeItem(REBOOT_KEY);
   } catch { /* memory copy still works */ }
 }
-const MOVE_WORDS = "Everything below moves to the node you pick. If anything can't move, the restart is cancelled. If BossMox is one of them, it reconnects after the move and you'll sign in again.";
+const MOVE_WORDS = "BossMox moves everything below to the node shown beside it, one at a time, picked for room. If anything can't move, the restart is cancelled. If BossMox is one of them, it reconnects after the move and you'll sign in again.";
 const STOP_WORDS = "Proxmox shuts down everything below first, waits for it all to stop, then restarts the node. This usually takes a few minutes. If BossMox runs on this node, it goes down too and this page will wait for it.";
 /**
  * A saved plan can restart a node with no further prompt, so it only ever resumes for the person who started it,
@@ -1430,7 +1430,7 @@ async function startRestart(server) {
     ${plan.busyKnown ? "" : `<p class="loginerr" style="margin-top:12px">BossMox can't tell whether jobs are running on this node.</p>`}
     ${canMove && !fits ? `<p class="loginerr" style="margin-top:12px">They can't all be moved, so they'd be shut down instead:</p>${plan.cantMove.map((m) => `<p class="loginerr">${esc(m)}</p>`).join("")}` : ""}
     ${guests.length ? `<div class="restartlist">${guests.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state">${esc(restartFate(v, plan.evacuate, fits))}</span></div>`).join("")}</div>` : ""}
-    ${fits ? `<p class="meta">${plan.evacuate.room.filter((r) => r.guests).map((r) => `${esc(r.name)}: ${esc(r.freeNow)} memory free now, ${esc(r.freeAfter)} after, keeps ${esc(r.keeps)} free.`).join(" ")}</p>` : ""}
+    ${fits ? plan.evacuate.room.filter((r) => r.guests).map((r) => `<p class="meta">${esc(r.name)}: ${esc(r.freeNow)} memory free now, ${esc(r.freeAfter)} after, keeps ${esc(r.keeps)} free.</p>`).join("") : ""}
     ${fits ? `<label class="field restartname"><span>Before restarting</span><select id="rmove"><option value="spread" selected>Move them to the nodes that have room</option><option value="">Shut them down, don't move them</option></select></label>` : ""}
     ${guests.length && plan.backupStorages.length ? `<div class="restartbackup"><select id="rstore" aria-label="Backup storage" data-bkwarn="${esc(server)}">${plan.backupStorages.map((s) => poolOption(server, s)).join("")}</select><button class="btn" data-backup="${esc(server)}">Back up first</button></div>${backupWarnLine(server, plan.backupStorages[0].name)}` : ""}
     <label class="field restartname"><span>Type reboot to confirm</span><input id="rname" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
