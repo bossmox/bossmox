@@ -692,6 +692,11 @@ const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, 
     // Force off has to win over a shutdown that's stuck waiting for the guest.
     return pve.post<string>(`${path}/status/${power}`, who, power === "stop" ? { "overrule-shutdown": "1" } : {});
   },
+  "update-check-now": async () => {
+    // Anyone signed in may ask; the checker answers from its last look if that was under a minute ago.
+    await updates.checkNow();
+    return null;
+  },
   "preferences-set": async (_name, who, body) => {
     const elsewhere = body.backupsElsewhere, check = body.updateCheck, keep = body.keepFreePct;
     if ((elsewhere !== undefined && typeof elsewhere !== "boolean") || (check !== undefined && typeof check !== "boolean") || (keep !== undefined && !(typeof keep === "number" && KEEP_FREE_CHOICES.includes(keep))) || (elsewhere === undefined && check === undefined && keep === undefined))

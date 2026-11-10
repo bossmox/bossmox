@@ -362,6 +362,7 @@ function healthFix(f) {
     case "backups-elsewhere": return b(`data-backupselsewhere="off"`);
     case "bossmox-update": return b(`data-bmupdate="1"`);
     case "update-check": return b(`data-updatecheck="${S.data?.update?.on === false ? "on" : "off"}"`);
+    case "check-now": return b(`data-checknow="1"`);
     default: return "";
   }
 }
@@ -379,7 +380,7 @@ function drawHealthCheck() {
   const groups = ["Nodes", "Backups", "Storage", "Guests", "BossMox"].map((g) => [g, checks.filter((c) => c.group === g).sort((a, b) => HC_ORDER[a.status] - HC_ORDER[b.status])]).filter(([, l]) => l.length);
   box.innerHTML = `<div class="sttop"><div><h2 class="hchead">${esc(head)}</h2><p class="meta" style="margin:2px 0 0">${checks.length} checks, ${checks.filter((c) => c.status === "ok").length} passed${checks.some((c) => c.status === "off") ? `, ${checks.filter((c) => c.status === "off").length} turned off` : ""}.</p></div><div class="actions"><button class="btn" data-hcagain="1">Check again</button></div></div>
     ${groups.map(([g, list]) => `<h3 class="sthd">${esc(g)}</h3><div class="stgroup hcgroup">${list.map((c) => `<div class="hcrow ${c.status}"><span class="dot ${c.status === "ok" ? "running" : c.status === "off" ? "" : "warn"}" aria-hidden="true"></span>
-      <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" ? "" : healthFix(c.fix)}${c.id === "scheduled" && c.status === "warn" ? `<button class="btn" data-backupselsewhere="on">We back up another way</button>` : ""}${c.id === "bossmox-version" && (c.status === "ok" || c.fix?.kind === "bossmox-update") ? `<button class="btn" data-updatecheck="off">Stop checking</button>` : ""}</div></div>`).join("")}</div>`).join("")}`;
+      <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" && c.fix?.kind !== "check-now" ? "" : healthFix(c.fix)}${c.id === "scheduled" && c.status === "warn" ? `<button class="btn" data-backupselsewhere="on">We back up another way</button>` : ""}${c.id === "bossmox-version" && (c.status === "ok" || c.fix?.kind === "bossmox-update") ? `<button class="btn" data-updatecheck="off">Stop checking</button>` : ""}</div></div>`).join("")}</div>`).join("")}`;
 }
 async function loadHealthCheck() {
   const run = S.loadRun;
@@ -3105,6 +3106,20 @@ document.addEventListener("click", (e) => {
       await loadDisks(node);
       await afterStorage();
     });
+  }
+  if (d.checknow) {
+    t.disabled = true;
+    return (async () => {
+      const res = await post("api/action/update-check-now", { server: onlineNodes()[0] });
+      if (!res.ok) throw new Error((await res.json()).error);
+      await refresh();
+      S.healthAgain = true;
+      if (wins.health) await loadHealthCheck();
+      const avail = S.data?.update?.available;
+      if (avail) return dialog(`<h3>BossMox ${esc(avail.version)} is available</h3><p>Updating keeps your settings and doesn't touch your guests.</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn primary" data-bmupdate="1">How to update</button></div>`);
+      if (wins.health) return;
+      dialog(`<h3>BossMox is up to date</h3>${closeRow}`);
+    })().catch((err) => dialog(`<h3>BossMox couldn't check</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`));
   }
   if (d.bmupdate) {
     const u = S.data?.update;

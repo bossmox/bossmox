@@ -64,3 +64,17 @@ test("turned off, or with no version, it never contacts GitHub; turning it off f
   checker.stop();
   assert.equal(back.available?.version, "0.1.1-preview", "turning it back on checks straight away");
 });
+
+test("Check now asks GitHub at once, but not twice inside a minute", async () => {
+  let calls = 0;
+  const checker = new UpdateChecker(running, true, async () => { calls++; return answer(200, rel("v0.1.1-preview"))(); });
+  await checker.checkNow();
+  assert.equal(calls, 1, "the first ask goes to GitHub");
+  const at = checker.state.checkedAt as number;
+  await checker.checkNow(60_000, at + 30_000);
+  assert.equal(calls, 1, "30 seconds later it answers from what it has");
+  await checker.checkNow(60_000, at + 61_000);
+  assert.equal(calls, 2, "after a minute it asks again");
+  await new UpdateChecker(running, false, async () => { calls++; return answer(200, {})(); }).checkNow();
+  assert.equal(calls, 2, "turned off, it never asks");
+});

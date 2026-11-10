@@ -9,7 +9,7 @@ import type { StorageMap } from "./storage-map.js";
 export type Status = "ok" | "warn" | "bad" | "off";
 export interface Fix {
   /** Which button the screen shows: each maps to something BossMox already does. */
-  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check";
+  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check" | "check-now";
   label: string;
   node?: string;
   channel?: string;
@@ -125,7 +125,8 @@ export function buildHealth(h: HealthInput): Check[] {
   const u = h.update;
   if (u && !u.on) add({ id: "bossmox-version", group: "BossMox", status: "off", title: "BossMox isn't checking for updates", detail: `You turned the check off, so BossMox won't tell you when a new version is out. This is ${u.running}. To have it check again, use Check for updates.`, fix: { kind: "update-check", label: "Check for updates" } });
   else if (u?.available) add({ id: "bossmox-version", group: "BossMox", status: "warn", title: `BossMox ${u.available.version} is available`, detail: `This is ${u.running}. Updating takes one command on a Proxmox node, and your settings stay.`, fix: { kind: "bossmox-update", label: "How to update" } });
-  else if (u?.failed) add({ id: "bossmox-version", group: "BossMox", status: "warn", title: "BossMox couldn't check for updates", detail: `${u.failed}. It tries again every 6 hours. If this BossMox can't reach the internet on purpose, turn the check off.`, fix: { kind: "update-check", label: "Turn the check off" } });
-  else if (u?.checkedAt) add({ id: "bossmox-version", group: "BossMox", status: "ok", title: "BossMox is up to date", detail: `This is ${u.running}. It checks for a new version every 6 hours.` });
+  else if (u?.failed) add({ id: "bossmox-version", group: "BossMox", status: "warn", title: "BossMox couldn't check for updates", detail: `${u.failed}. It tries again every 6 hours, or use Check now. If this BossMox can't reach the internet on purpose, turn the check off.`, fix: { kind: "update-check", label: "Turn the check off" } });
+  else if (u?.checkedAt) add({ id: "bossmox-version", group: "BossMox", status: "ok", title: "BossMox is up to date", detail: `This is ${u.running}. It checks for a new version every 6 hours, or now with Check now.`, fix: { kind: "check-now", label: "Check now" } });
+  else if (u) add({ id: "bossmox-version", group: "BossMox", status: "ok", title: "BossMox hasn't checked for updates yet", detail: `This is ${u.running}. It checks a minute after it starts, then every 6 hours.`, fix: { kind: "check-now", label: "Check now" } });
   return out;
 }

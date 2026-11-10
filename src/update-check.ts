@@ -7,6 +7,8 @@ export const UPDATE_COMMAND = 'bash -c "$(curl -fsSL https://github.com/bossmox/
 export const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
 /** The first check waits a minute after start, so a restart loop can't hammer GitHub. */
 export const FIRST_CHECK_MS = 60 * 1000;
+/** Check now, when a person asks: at most once a minute, so repeated clicks can't use up GitHub's allowance. */
+export const CHECK_NOW_GAP_MS = 60 * 1000;
 
 export interface Available {
   version: string;
@@ -79,6 +81,12 @@ export class UpdateChecker {
       if (this.state.on) this.state = { ...this.state, checkedAt: Date.now(), failed: why };
     }
     return this.state;
+  }
+
+  /** A check a person asked for. Within a minute of the last one, the answer it already has is the answer. */
+  async checkNow(gapMs = CHECK_NOW_GAP_MS, now = Date.now()): Promise<UpdateState> {
+    if (this.state.checkedAt && now - this.state.checkedAt < gapMs) return this.state;
+    return this.check();
   }
 
   /** Checks a minute after start, then every 6 hours, while it's on. */
