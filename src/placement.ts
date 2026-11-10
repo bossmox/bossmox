@@ -38,6 +38,8 @@ export interface GuestNeed {
   hostCpu: boolean;
   /** Why it can't move to any node, or null. */
   stuck: string | null;
+  /** Drives holding a disc from its node's own storage. When that's the only reason it's stuck, ejecting frees it. */
+  discSlots: string[];
   /** Nodes Proxmox itself refuses for this guest, with the reason. */
   refused: Record<string, string>;
 }
@@ -47,8 +49,15 @@ export interface Move {
   type: "qemu" | "lxc";
   target: string;
 }
+export interface Ejectable {
+  id: number;
+  name: string;
+  slots: string[];
+}
 export interface MovePlan {
   moves: Move[];
+  /** Guests stuck only because of a disc from the node's own storage: ejecting it lets them move. */
+  ejectable?: Ejectable[];
   /** One plain sentence per guest that can't be placed. Any at all means nothing moves. */
   problems: string[];
 }
@@ -106,9 +115,11 @@ export function guestNeed(f: GuestFacts): GuestNeed {
   const storages = [...new Set(volumes.map((v) => v.storage).filter(Boolean))];
   const isLocal = (storage: string) => f.sourceStorages[storage]?.shared !== true;
   const discs = volumes.filter((v) => v.value.includes("media=cdrom") && !v.value.includes("cloudinit"));
+  const physical = Object.entries(f.config).filter(([k, v]) => /^(ide|sata|scsi)\d+$/.test(k) && String(v).startsWith("cdrom")).map(([k]) => k);
+  const discSlots = [...physical, ...discs.filter((d) => isLocal(d.storage)).map((d) => d.slot)];
   let stuck: string | null = null;
   if ((f.precondition.local_resources ?? []).length > 0) stuck = `${f.name} uses hardware attached to its node, so it can't move.`;
-  else if (Object.entries(f.config).some(([k, v]) => /^(ide|sata|scsi)\d+$/.test(k) && String(v).startsWith("cdrom"))) stuck = `${f.name} uses its node's own disc drive, so it can't move. Eject it first.`;
+  else if (physical.length) stuck = `${f.name} uses its node's own disc drive, so it can't move. Eject it first.`;
   else if (discs.some((d) => isLocal(d.storage))) stuck = `${f.name} has a disc image from its node's own storage in its drive, so it can't move. Eject the disc first.`;
   const copied = volumes.filter((v) => !v.value.includes("media=cdrom") && isLocal(v.storage));
   if (!stuck && f.hasSnapshots && copied.length > 0 && f.type === "qemu") stuck = `${f.name} has a snapshot on its node's own storage, so it can't move while running. Delete the snapshot or shut it down first.`;
@@ -124,7 +135,9 @@ export function guestNeed(f: GuestFacts): GuestNeed {
   }
   const cpu = String(f.config.cpu ?? "");
   const hostCpu = /^(cputype=)?host(,|$)/.test(cpu);
-  return { id: f.id, name: f.name, type: f.type, mem: f.mem, cores: f.cores, cpuLoad: f.cpuLoad, storages, localDisks, hostCpu, stuck, refused };
+  // Ejecting only helps when the disc is the whole story: not with passed-through hardware or a snapshot too.
+  const discOnly = discSlots.length > 0 && stuck !== null && /disc image|own disc drive/.test(stuck);
+  return { id: f.id, name: f.name, type: f.type, mem: f.mem, cores: f.cores, cpuLoad: f.cpuLoad, storages, localDisks, hostCpu, stuck, refused, discSlots: discOnly ? discSlots : [] };
 }
 
 interface Projected extends NodeRoom {
@@ -168,6 +181,7 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
   if (!others.length && guests.length) return { moves: [], problems: ["There's no other online node to move anything to."] };
   const moves: Move[] = [];
   const problems: string[] = [];
+  const ejectable = guests.filter((g) => g.stuck && g.discSlots.length).map((g) => ({ id: g.id, name: g.name, slots: g.discSlots }));
   const order = [...guests].sort((a, b) => b.mem - a.mem || a.name.localeCompare(b.name));
   for (const g of order) {
     if (g.stuck) {
@@ -201,5 +215,5 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
     }
     moves.push({ id: g.id, name: g.name, type: g.type, target: best.name });
   }
-  return problems.length ? { moves: [], problems } : { moves, problems };
+  return problems.length ? { moves: [], problems, ejectable } : { moves, problems, ejectable };
 }

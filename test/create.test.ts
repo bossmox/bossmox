@@ -96,3 +96,14 @@ test("on a folder or share, every VM disk asks for qcow2 so snapshots work", () 
   const pool = vmForm(input({ os: "windows" }));
   for (const k of ["sata0", "efidisk0", "tpmstate0"]) assert.doesNotMatch(pool[k] ?? "", /format=/, k);
 });
+
+test("a disc can be changed on any disc drive, but only ide2 can be added where there's none", () => {
+  assert.deepEqual(discForm("", { ide0: "local:iso/virtio.iso,media=cdrom" }, "ide0"), { ide0: "none,media=cdrom" });
+  assert.equal(discForm("local:iso/a.iso", { sata1: "none,media=cdrom", boot: "order=scsi0" }, "sata1").boot, "order=scsi0;sata1");
+  assert.equal(discForm("local:iso/a.iso", { ide0: "none,media=cdrom", boot: "order=scsi0;ide0" }, "ide0").boot, undefined, "already in the boot order");
+  assert.throws(() => discForm("", {}, "ide0"), /no disc drive there/);
+  assert.throws(() => discForm("", { scsi0: "ISCSI:vm-1-disk-0,size=32G" }, "scsi0"), /has a disk on that drive/);
+  assert.throws(() => discForm("", { ide1: "local:1/vm-1-cloudinit.qcow2,media=cdrom" }, "ide1"), /setup disk/);
+  assert.throws(() => discForm("", {}, "net0"), /isn't a disc drive/);
+  assert.deepEqual(discForm("", {}), { ide2: "none,media=cdrom" }, "ide2 still works with no drive, as before");
+});

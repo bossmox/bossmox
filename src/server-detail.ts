@@ -269,6 +269,8 @@ export interface RollingInput {
   rebootNeeded: boolean;
   busy: string[];
   cantMove: string[];
+  /** Guests that only need a disc ejected to move (ADR 0026). */
+  ejectable?: { id: number; name: string; slots: string[]; node: string }[];
 }
 const versionParts = (v: string | null) => (v ?? "").split(/[.-]/).map((p) => Number(p) || 0);
 function olderFirst(a: RollingInput, b: RollingInput): number {
@@ -299,6 +301,8 @@ export function buildRollingPlan(servers: RollingInput[], quorate: Section<boole
   const votes = servers.length + tieVote;
   return {
     blocked,
+    // Offered beside the reasons, so a disc can be ejected from the same window.
+    ejectable: servers.filter((s) => s.rebootNeeded && (s.updates ?? 0) > 0).flatMap((s) => s.ejectable ?? []),
     votes,
     keepsMajority: votes >= 3,
     servers: [...servers].sort(olderFirst).filter((s) => (s.updates ?? 0) > 0).map(({ name, version, updates, rebootNeeded }) => ({ name, version, updates, rebootNeeded })),

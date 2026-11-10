@@ -85,6 +85,15 @@ export function vmIssues(id: number, name: string, config: RawConfig = {}): Issu
   return out;
 }
 
+export const DISC_SLOT = /^(ide|sata|scsi)\d+$/;
+/** A VM's disc drives, in slot order, with what's in each: "" for empty, "cdrom" for the node's own drive. */
+export function discDrives(config: RawConfig): { slot: string; disc: string }[] {
+  return Object.entries(config)
+    .filter(([k, v]) => DISC_SLOT.test(k) && String(v).includes("media=cdrom") && !String(v).includes("cloudinit"))
+    .map(([slot, v]) => ({ slot, disc: String(v).startsWith("none") ? "" : (String(v).split(",")[0] ?? "") }))
+    .sort((a, b) => a.slot.localeCompare(b.slot, undefined, { numeric: true }));
+}
+
 export function buildOverview(
   resources: RawResource[],
   guests: Map<number, Guest>,
@@ -151,6 +160,8 @@ export function buildOverview(
         disc: String(config?.ide2 ?? "").startsWith("none") ? "" : String(config?.ide2 ?? "").split(",")[0],
         // Anything on that slot that isn't a disc drive, such as a data disk, must never be rewritten as one.
         discLocked: config?.ide2 !== undefined && (String(config.ide2).includes("cloudinit") || !String(config.ide2).includes("media=cdrom")),
+        // Every disc drive it has, on any slot. The cloud-init drive isn't one a person changes.
+        discDrives: discDrives(config ?? {}),
         bridges: [...new Set(Object.entries(config ?? {}).filter(([k]) => /^net\d+$/.test(k)).map(([, v]) => String(v).match(/bridge=([^,]+)/)?.[1]).filter((b): b is string => Boolean(b)))],
         configLoaded: config !== undefined,
         // Every volume its settings name (disks, disc drives, a linked clone's base), so nothing in use gets deleted.

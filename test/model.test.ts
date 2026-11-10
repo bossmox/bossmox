@@ -93,3 +93,12 @@ test("only a real disc drive can have its disc changed", () => {
   assert.equal(vm("local:100/vm-100-disk-1.raw,size=32G")?.discLocked, true, "a data disk");
   assert.equal(vm("local:410/vm-410-cloudinit.qcow2,media=cdrom")?.discLocked, true, "cloud-init");
 });
+
+test("every disc drive is listed, on any slot, with what's in it", async () => {
+  const { discDrives } = await import("../src/model.js");
+  assert.deepEqual(discDrives({ ide0: "local:iso/virtio.iso,media=cdrom,size=771138K", ide2: "none,media=cdrom", scsi0: "ISCSI:vm-1-disk-0,size=32G", sata3: "cdrom,media=cdrom", ide1: "local:1/vm-1-cloudinit.qcow2,media=cdrom" }), [
+    { slot: "ide0", disc: "local:iso/virtio.iso" },
+    { slot: "ide2", disc: "" },
+    { slot: "sata3", disc: "cdrom" },
+  ]);
+});

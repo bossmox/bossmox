@@ -573,7 +573,7 @@ const TAB = {
     const nic = (n) => `<div class="snap"><div>${esc(n.bridge || "Not connected")}${n.vlan ? `, VLAN ${esc(n.vlan)}` : ""}<small>${v.type === "lxc" ? `${esc(addrWords(n))}, ` : ""}${esc(n.model)}, ${esc(n.mac)}</small></div><div class="actions">${lock && v.type === "lxc" ? `<button class="btn" data-addrchange="${esc(n.slot)}">Change address</button>` : ""}${lock && v.nics.length > 1 ? `<button class="btn" data-nicremove="${esc(n.slot)}">Remove</button>` : ""}</div></div>`;
     return `${v.configLoaded ? "" : `<p class="meta">Proxmox didn't return this guest's settings.</p>`}
       <div class="hwhead"><h3>Disks</h3>${lock ? `<button class="btn" data-diskadd="1">Add a disk</button>` : ""}</div>${v.disks.map(disk).join("") || `<p class="empty">No disks.</p>`}
-      ${v.type === "qemu" && !v.discLocked ? `<div class="hwhead"><h3>Disc drive</h3><button class="btn" data-gdisc="1">Change disc</button></div><div class="snap"><div>${v.disc ? esc(v.disc.split("/").pop()) : "Empty"}</div></div>` : ""}
+      ${v.type === "qemu" ? discSection(v) : ""}
       <div class="hwhead"><h3>Network</h3>${lock ? `<button class="btn" data-nicadd="1">Add a network card</button>` : ""}</div>${v.nics.map(nic).join("") || `<p class="empty">Not connected to a network.</p>`}
       ${v.running && lock ? `<p class="meta">It's running. Added disks usually appear right away, but some changes wait until it's shut down and started.</p>` : ""}`;
   },
@@ -1364,6 +1364,8 @@ async function startMoves(action, server) {
   if (!res.ok) throw new Error(body.error);
   return body.task;
 }
+/** An Eject button for each VM that only a disc keeps from moving, or "". `again` redraws the window after. */
+const ejectButtons = (list, node, again) => (list ?? []).map((g) => `<p class="meta"><button class="btn" data-eject="${g.id}" data-ejectname="${esc(g.name)}" data-ejectnode="${esc(g.node ?? node)}" data-ejectslots="${esc(g.slots.join(","))}" data-ejectagain="${esc(again)}">Eject the disc from ${esc(g.name)}</button></p>`).join("");
 /** One line on guests that stayed away because their home had no room, or "". */
 function stayedWords(job) {
   const stayed = job.guests.filter((g) => g.state === "stayed");
@@ -1440,7 +1442,7 @@ async function startRestart(server) {
     <p id="rwords">${guests.length ? (fits ? MOVE_WORDS : STOP_WORDS) : "Nothing is running on this node."}</p>
     ${blocked ? `<p class="loginerr" style="margin-top:12px">Wait for this to finish first: ${esc(plan.busy.join(", "))}.</p>` : ""}
     ${plan.busyKnown ? "" : `<p class="loginerr" style="margin-top:12px">BossMox can't tell whether jobs are running on this node.</p>`}
-    ${canMove && !fits ? `<p class="loginerr" style="margin-top:12px">They can't all be moved, so they'd be shut down instead:</p>${plan.cantMove.map((m) => `<p class="loginerr">${esc(m)}</p>`).join("")}` : ""}
+    ${canMove && !fits ? `<p class="loginerr" style="margin-top:12px">They can't all be moved, so they'd be shut down instead:</p>${plan.cantMove.map((m) => `<p class="loginerr">${esc(m)}</p>`).join("")}${ejectButtons(plan.evacuate.ejectable, server, `restart:${server}`)}` : ""}
     ${guests.length ? `<div class="restartlist">${guests.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state">${esc(restartFate(v, plan.evacuate, fits))}</span></div>`).join("")}</div>` : ""}
     ${fits ? plan.evacuate.room.filter((r) => r.guests).map((r) => `<p class="meta">${esc(r.name)}: ${esc(r.freeNow)} memory free now, ${esc(r.freeAfter)} after, keeps ${esc(r.keeps)} free.</p>`).join("") : ""}
     ${canMove ? keepFreeField(`restart:${server}`) : ""}
@@ -1651,7 +1653,7 @@ async function startRolling() {
     return dialog(`<h3>Couldn't prepare the update</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
   }
   S.taskRunning = false;
-  if (plan.blocked.length) return dialog(`<h3>Not ready to update</h3>${plan.blocked.map((b) => `<p class="loginerr">${esc(b)}</p>`).join("")}${closeRow}`);
+  if (plan.blocked.length) return dialog(`<h3>Not ready to update</h3>${plan.blocked.map((b) => `<p class="loginerr">${esc(b)}</p>`).join("")}${ejectButtons(plan.ejectable, "", "rolling")}${closeRow}`);
   if (!plan.servers.length) return dialog(`<h3>Every node is up to date</h3><p>Nothing is waiting to install.</p>${closeRow}`);
   S.rollingPlan = plan;
   const restarts = plan.servers.filter((v) => v.rebootNeeded).length;
@@ -2899,17 +2901,26 @@ async function startToBootMenu(id) {
     failDialog(`${v.name} didn't start`, err);
   }
 }
-async function askGuestDisc() {
+const discName = (disc) => (disc === "" ? "Empty" : disc === "cdrom" ? "The node's own disc drive" : disc.split("/").pop());
+/** Every disc drive a VM has (ADR 0026). With none, the usual ide2 drive can still be given a disc. */
+function discSection(v) {
+  const drives = v.discDrives ?? [];
+  if (!drives.length) return v.discLocked ? "" : `<div class="hwhead"><h3>Disc drive</h3><button class="btn" data-gdisc="ide2">Change disc</button></div><div class="snap"><div>Empty</div></div>`;
+  return `<div class="hwhead"><h3>${drives.length > 1 ? "Disc drives" : "Disc drive"}</h3></div>${drives.map((d) => `<div class="snap"><div>${esc(discName(d.disc))}<small>${esc(d.slot)}</small></div><div class="actions"><button class="btn" data-gdisc="${esc(d.slot)}">Change disc</button></div></div>`).join("")}`;
+}
+async function askGuestDisc(slot = "ide2") {
   const v = selected();
+  S.discSlot = slot;
+  const now = (v.discDrives ?? []).find((d) => d.slot === slot)?.disc ?? v.disc;
   let discs;
   try {
     discs = (await planFor(v)).installers;
   } catch (err) {
     return failDialog("Couldn't list the discs", err);
   }
-  const known = discs.some((d) => d.volid === v.disc);
-  dialog(`<h3>Change the disc in ${esc(v.name)}</h3>
-    <label class="field restartname"><span>Installer disc</span><select id="gdisc"><option value="">No disc</option>${v.disc && !known ? `<option value="${esc(v.disc)}" selected>${esc(v.disc)}</option>` : ""}${discs.map((d) => `<option value="${esc(d.volid)}" ${d.volid === v.disc ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select></label>
+  const known = discs.some((d) => d.volid === now);
+  dialog(`<h3>Change the disc in ${esc(v.name)}${(v.discDrives ?? []).length > 1 ? `, ${esc(slot)}` : ""}</h3>
+    <label class="field restartname"><span>Installer disc</span><select id="gdisc"><option value="">No disc</option>${now && !known ? `<option value="${esc(now)}" selected>${esc(discName(now))}</option>` : ""}${discs.map((d) => `<option value="${esc(d.volid)}" ${d.volid === now ? "selected" : ""}>${esc(d.label)}</option>`).join("")}</select></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-gdiscgo="1">Save</button></div>`);
 }
 
@@ -3036,10 +3047,29 @@ document.addEventListener("click", (e) => {
   if (d.bootmenu) return forceBios(+d.bootmenu);
   if (d.setsave) return saveSettings();
   if (d.setundo) return renderDetail();
-  if (d.gdisc) return askGuestDisc();
+  if (d.gdisc) return askGuestDisc(d.gdisc === "1" ? "ide2" : d.gdisc);
   if (d.gdiscgo) {
     const v = selected();
-    return runAction("guest-disc", v.node, `Changing the disc in ${v.name}`, { ...guestBody(v), disc: $("#gdisc").value }, after);
+    return runAction("guest-disc", v.node, `Changing the disc in ${v.name}`, { ...guestBody(v), slot: S.discSlot ?? "ide2", disc: $("#gdisc").value }, after);
+  }
+  if (d.eject) {
+    // A VM held back from moving by a disc from its node's own storage (ADR 0026).
+    const name = d.ejectname;
+    const slots = d.ejectslots.split(",");
+    const again = d.ejectagain;
+    return confirmAction(`Eject the disc from ${name}?`, `The disc comes out of ${name}'s ${slots.length > 1 ? `drives ${slots.join(" and ")}` : `drive ${slots[0]}`}. ${name} keeps running, and the disc stays on the node, so it can go back in later. Then BossMox plans the moves again.`, `Eject from ${name}`, async () => {
+      try {
+        for (const slot of slots) {
+          const res = await post("api/action/guest-disc", { server: d.ejectnode, guest: d.eject, type: "qemu", slot, disc: "" });
+          if (!res.ok) throw new Error((await res.json()).error);
+        }
+        await refresh();
+        if (again === "rolling") startRolling();
+        else startRestart(again.replace(/^restart:/, ""));
+      } catch (err) {
+        dialog(`<h3>The disc didn't come out</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+      }
+    });
   }
   if (d.discadd) return askDisc();
   if (d.discgo) return downloadDisc();
