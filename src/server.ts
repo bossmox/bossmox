@@ -267,7 +267,7 @@ const enc = encodeURIComponent;
  * Fresh numbers from Proxmox, and where each guest of `from` would go (ADR 0025). Without `ids` it plans every
  * running guest. With `only`, that node is the one target allowed (sending guests home).
  */
-async function planEvacuation(ticket: string, from: string, ids?: number[], only?: string) {
+async function planEvacuation(ticket: string, from: string, ids?: number[], only?: string, pending: Record<string, number> = {}) {
   const resources = await pve.get<RawResource[]>("/cluster/resources", ticket);
   const online = resources.filter((r) => r.type === "node" && r.status === "online" && (!only || r.node === from || r.node === only));
   const statuses = await Promise.all(online.map((n) => pve.get<RawStatus>(`/nodes/${enc(n.node ?? "")}/status`, ticket).catch(() => null)));
@@ -291,6 +291,7 @@ async function planEvacuation(ticket: string, from: string, ids?: number[], only
     const n = nodes.find((x) => x.name === r.node);
     if (n && (r.type === "qemu" || r.type === "lxc") && r.status === "running" && arrived.has(Number(r.vmid))) n.memUsed += Math.max(0, (r.maxmem ?? 0) - (r.mem ?? 0));
   }
+  for (const n of nodes) n.memUsed += pending[n.name] ?? 0;
   const guests = resources.filter((r) => (r.type === "qemu" || r.type === "lxc") && r.node === from && r.template !== 1 && (ids ? ids.includes(Number(r.vmid)) : r.status === "running" || r.status === "paused"));
   const needs = await Promise.all(guests.map(async (g) => {
     const type = g.type === "lxc" ? "lxc" : "qemu";
@@ -328,7 +329,7 @@ async function planEvacuation(ticket: string, from: string, ids?: number[], only
 /** How a move job reaches Proxmox: always with the person's current login, which renewals replace. */
 function moveDeps(session: Session): MoveDeps {
   return {
-    plan: (from, ids, only) => planEvacuation(session.ticket, from, ids, only),
+    plan: (from, ids, only, pending) => planEvacuation(session.ticket, from, ids, only, pending),
     migrate: async (move, from) => {
       const base = `/nodes/${enc(from)}/${move.type}/${move.id}`;
       const now = await pve.get<{ status?: string }>(`${base}/status/current`, session.ticket);

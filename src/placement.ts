@@ -48,6 +48,8 @@ export interface Move {
   name: string;
   type: "qemu" | "lxc";
   target: string;
+  /** Its set memory, so a batch can count what it promises a node. */
+  mem?: number;
 }
 export interface Ejectable {
   id: number;
@@ -213,7 +215,7 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
       const s = best.storages[d.storage];
       if (s && !s.shared) s.free -= d.bytes;
     }
-    moves.push({ id: g.id, name: g.name, type: g.type, target: best.name });
+    moves.push({ id: g.id, name: g.name, type: g.type, target: best.name, mem: g.mem });
   }
   return problems.length ? { moves: [], problems, ejectable } : { moves, problems, ejectable };
 }
