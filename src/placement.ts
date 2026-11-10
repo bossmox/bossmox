@@ -3,8 +3,8 @@
  * so every rule is unit tested. A guest only goes somewhere it fits, and if anything can't be placed nothing moves.
  */
 
-/** How much room a node keeps after taking guests. Fixed for now; ADR 0025 says why. */
-export const ROOM = { memFreePct: 15, cpuMaxPct: 80, storageFreePct: 10 } as const;
+/** How much of a node stays free after taking guests: the one "keep free" setting, default 10% (ADR 0025). */
+export const room = (keepPct: number) => ({ memFreePct: keepPct, cpuMaxPct: 100 - keepPct, storageFreePct: keepPct });
 
 export interface StorageRoom {
   free: number;
@@ -132,7 +132,8 @@ interface Projected extends NodeRoom {
 }
 
 /** Why this node can't take this guest, or null if it can. */
-function whyNot(g: GuestNeed, n: Projected, from: NodeRoom): string | null {
+function whyNot(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number): string | null {
+  const ROOM = room(keepPct);
   if (g.refused[n.name]) return g.refused[n.name] as string;
   const missing = g.storages.filter((s) => !n.storages[s]);
   if (missing.length) return `doesn't have the storage ${missing.join(", ")}`;
@@ -158,7 +159,7 @@ function whyNot(g: GuestNeed, n: Projected, from: NodeRoom): string | null {
  * Places the running guests of `from` on the other nodes. Biggest first, each onto the node with the most memory
  * left after it, so the load spreads. `nodes` are the online nodes, `from` included.
  */
-export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[]): MovePlan {
+export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], keepPct = 10): MovePlan {
   const source = nodes.find((n) => n.name === from);
   const others: Projected[] = nodes
     .filter((n) => n.name !== from)
@@ -177,7 +178,7 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[]):
     let best: Projected | null = null;
     let bestLeft = -Infinity;
     for (const n of others) {
-      const why = whyNot(g, n, source);
+      const why = whyNot(g, n, source, keepPct);
       if (why) {
         reasons.push(`${n.name} ${why}`);
         continue;

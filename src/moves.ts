@@ -22,7 +22,9 @@ export interface JobGuest {
   id: number;
   name: string;
   target: string;
-  state: "waiting" | "moving" | "done" | "failed";
+  state: "waiting" | "moving" | "done" | "failed" | "stayed";
+  /** Why it stayed where it is, when it did. */
+  note?: string;
 }
 export interface JobView {
   kind: "off" | "home";
@@ -152,8 +154,13 @@ export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: strin
         throw err;
       }
       g.state = "done";
-      const away = (record.away[node] ??= { by, at: Date.now(), guests: [] });
-      away.guests = [...away.guests.filter((a) => a.id !== g.id), { id: g.id, name: g.name, type: move.type, to: move.target }];
+      // A guest already away from another node keeps that node as its home; only where it is now changes.
+      const elsewhere = Object.values(record.away).flatMap((a) => a.guests).find((a) => a.id === g.id);
+      if (elsewhere) elsewhere.to = move.target;
+      else {
+        const away = (record.away[node] ??= { by, at: Date.now(), guests: [] });
+        away.guests.push({ id: g.id, name: g.name, type: move.type, to: move.target });
+      }
       deps.save(record);
     }
   } catch (err) {
@@ -188,9 +195,14 @@ export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: stri
       if (stop) throw new Error(`BossMox stopped before the next move: ${stop}`);
       const jg = job.guests.find((x) => x.id === g.id) as JobGuest;
       const fresh = await deps.plan(g.to, [g.id], node);
-      if (fresh.problems.length) throw new Error(fresh.problems.join(" "));
       const move = fresh.moves[0];
-      if (!move) throw new Error(`${g.name} is no longer on ${g.to}, so BossMox left it there.`);
+      // No room at home isn't a failure: it stays where it is, still recorded as away, and the rest carry on.
+      if (fresh.problems.length || !move) {
+        jg.state = "stayed";
+        jg.note = fresh.problems[0] ?? `${g.name} is no longer on ${g.to}.`;
+        deps.save(record);
+        continue;
+      }
       jg.state = "moving";
       deps.save(record);
       try {

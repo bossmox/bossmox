@@ -19,9 +19,9 @@ import { PveClient, PveError, type Identity } from "./pve.js";
 import { applyChannel, ChannelError } from "./update-channel.js";
 import { plainError } from "./plain-errors.js";
 import { buildHealth } from "./health.js";
-import { canChangeCluster, preferencesPath, readPreferences, scheduleWarnings, writePreferences, type Preferences } from "./preferences.js";
+import { canChangeCluster, KEEP_FREE_CHOICES, preferencesPath, readPreferences, scheduleWarnings, writePreferences, type Preferences } from "./preferences.js";
 import { settingsPath } from "./settings.js";
-import { gbText, guestNeed, planMoves, ROOM, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
+import { gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
 import { movesPath, readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps } from "./moves.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
 import { buildUsage, RANGES, type Range, type RawPoint } from "./usage.js";
@@ -315,13 +315,14 @@ async function planEvacuation(ticket: string, from: string, ids?: number[], only
       sourceStorages: storagesOf(from),
     });
   }));
-  const plan: MovePlan = planMoves(from, needs, nodes);
+  const keep = preferences.keepFreePct;
+  const plan: MovePlan = planMoves(from, needs, nodes, keep);
   // What each other node has now and would have after, so the person sees why it was picked.
   const room = nodes.filter((n) => n.name !== from).map((n) => {
     const adds = plan.moves.filter((m) => m.target === n.name).reduce((sum, m) => sum + (needs.find((g) => g.id === m.id)?.mem ?? 0), 0);
-    return { name: n.name, guests: plan.moves.filter((m) => m.target === n.name).length, freeNow: gbText(n.memTotal - n.memUsed), freeAfter: gbText(n.memTotal - n.memUsed - adds), keeps: gbText((n.memTotal * ROOM.memFreePct) / 100) };
+    return { name: n.name, guests: plan.moves.filter((m) => m.target === n.name).length, freeNow: gbText(n.memTotal - n.memUsed), freeAfter: gbText(n.memTotal - n.memUsed - adds), keeps: gbText((n.memTotal * roomFor(keep).memFreePct) / 100) };
   });
-  return { ...plan, room };
+  return { ...plan, room, keepFreePct: keep };
 }
 
 /** How a move job reaches Proxmox: always with the person's current login, which renewals replace. */
@@ -692,13 +693,13 @@ const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, 
     return pve.post<string>(`${path}/status/${power}`, who, power === "stop" ? { "overrule-shutdown": "1" } : {});
   },
   "preferences-set": async (_name, who, body) => {
-    const elsewhere = body.backupsElsewhere, check = body.updateCheck;
-    if ((elsewhere !== undefined && typeof elsewhere !== "boolean") || (check !== undefined && typeof check !== "boolean") || (elsewhere === undefined && check === undefined))
+    const elsewhere = body.backupsElsewhere, check = body.updateCheck, keep = body.keepFreePct;
+    if ((elsewhere !== undefined && typeof elsewhere !== "boolean") || (check !== undefined && typeof check !== "boolean") || (keep !== undefined && !(typeof keep === "number" && KEEP_FREE_CHOICES.includes(keep))) || (elsewhere === undefined && check === undefined && keep === undefined))
       throw new AuthError(400, "That request isn't valid.");
     // A cluster-wide choice needs the right to change the cluster's own settings in Proxmox (ADR 0018).
     const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", who.ticket).catch((): Record<string, Record<string, number>> => ({}));
     if (!canChangeCluster(perms)) throw new AuthError(403, "Your Proxmox account can't change settings for the whole cluster. That needs the Sys.Modify permission on the whole cluster (/).");
-    const next = { ...preferences, ...(typeof elsewhere === "boolean" ? { backupsElsewhere: elsewhere } : {}), ...(typeof check === "boolean" ? { updateCheck: check } : {}) };
+    const next = { ...preferences, ...(typeof elsewhere === "boolean" ? { backupsElsewhere: elsewhere } : {}), ...(typeof check === "boolean" ? { updateCheck: check } : {}), ...(typeof keep === "number" ? { keepFreePct: keep } : {}) };
     try {
       writePreferences(PREFERENCES_FILE, next);
     } catch {

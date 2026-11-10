@@ -1363,15 +1363,26 @@ async function startMoves(action, server) {
   if (!res.ok) throw new Error(body.error);
   return body.task;
 }
+/** One line on guests that stayed away because their home had no room, or "". */
+function stayedWords(job) {
+  const stayed = job.guests.filter((g) => g.state === "stayed");
+  if (!stayed.length) return "";
+  return `${stayed.map((g) => g.name).join(", ")} stayed where ${stayed.length === 1 ? "it is" : "they are"}: ${job.node} doesn't have room while keeping ${keepFree()}% free. They're running, and Move everything back on ${job.node}'s Overview tries again later.`;
+}
+const keepFree = () => S.data?.preferences?.keepFreePct ?? 10;
+const KEEP_CHOICES = [5, 10, 15, 20, 25, 30];
+/** The cluster-wide room to keep on each node when BossMox moves guests. `again` redraws the dialog it's in. */
+const keepFreeField = (again) => `<label class="field restartname"><span>Keep free on each node</span><select id="keepfree" data-keepagain="${esc(again)}">${KEEP_CHOICES.map((n) => `<option value="${n}" ${n === keepFree() ? "selected" : ""}>${n}% of memory, storage and processor</option>`).join("")}</select></label>`;
 const jobOf = (m, id) => (m?.job && id && `job:${m.job.startedAt}` === id ? m.job : null);
 function jobRows(job, home) {
   const word = (g) => ({
     done: home ? `Back on ${g.target}` : `Moved to ${g.target}`,
     failed: home ? "Didn't get home" : "Didn't move",
+    stayed: "Stayed where it is: no room at home",
     moving: home ? "Moving back" : `Moving to ${g.target}`,
     waiting: job.running ? "Waiting its turn" : "Not moved",
   })[g.state];
-  const dot = (g) => (g.state === "done" ? "running" : g.state === "failed" || (!job.running && g.state === "waiting") ? "warn" : "busy");
+  const dot = (g) => (g.state === "done" ? "running" : g.state === "failed" || g.state === "stayed" || (!job.running && g.state === "waiting") ? "warn" : "busy");
   return job.guests.map((g) => `<div class="snap"><div>${esc(g.name)}</div><span class="state"><span class="dot ${dot(g)}"></span>${esc(word(g))}</span></div>`).join("");
 }
 /** Follows a move job started from a node's Overview until it ends. */
@@ -1384,7 +1395,7 @@ async function followMoves(id, title) {
       return;
     }
     if (job) {
-      const words = job.error ? `<p class="loginerr">${esc(job.error)}</p>` : `<p>${job.running ? "One at a time, each checked for room first. You can close this: the moves carry on." : "All of them are home."}</p>`;
+      const words = job.error ? `<p class="loginerr">${esc(job.error)}</p>` : `<p>${job.running ? "One at a time, each checked for room first. You can close this: the moves carry on." : stayedWords(job) ? esc(stayedWords(job)) : "All of them are home."}</p>`;
       dialog(`<h3>${esc(title)}</h3>${words}<div class="restartlist">${jobRows(job, job.kind === "home")}</div><div class="row-end">${job.running ? `<button class="btn" data-movestop="${esc(job.node)}">Stop after this one</button>` : ""}<button class="btn" data-dlg="cancel">Close</button></div>`);
       if (!job.running) {
         await refresh();
@@ -1431,6 +1442,7 @@ async function startRestart(server) {
     ${canMove && !fits ? `<p class="loginerr" style="margin-top:12px">They can't all be moved, so they'd be shut down instead:</p>${plan.cantMove.map((m) => `<p class="loginerr">${esc(m)}</p>`).join("")}` : ""}
     ${guests.length ? `<div class="restartlist">${guests.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state">${esc(restartFate(v, plan.evacuate, fits))}</span></div>`).join("")}</div>` : ""}
     ${fits ? plan.evacuate.room.filter((r) => r.guests).map((r) => `<p class="meta">${esc(r.name)}: ${esc(r.freeNow)} memory free now, ${esc(r.freeAfter)} after, keeps ${esc(r.keeps)} free.</p>`).join("") : ""}
+    ${canMove ? keepFreeField(`restart:${server}`) : ""}
     ${fits ? `<label class="field restartname"><span>Before restarting</span><select id="rmove"><option value="spread" selected>Move them to the nodes that have room</option><option value="">Shut them down, don't move them</option></select></label>` : ""}
     ${guests.length && plan.backupStorages.length ? `<div class="restartbackup"><select id="rstore" aria-label="Backup storage" data-bkwarn="${esc(server)}">${plan.backupStorages.map((s) => poolOption(server, s)).join("")}</select><button class="btn" data-backup="${esc(server)}">Back up first</button></div>${backupWarnLine(server, plan.backupStorages[0].name)}` : ""}
     <label class="field restartname"><span>Type reboot to confirm</span><input id="rname" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
@@ -1650,6 +1662,7 @@ async function startRolling() {
   dialog(`<h3>Update ${plan.servers.length === 1 ? esc(plan.servers[0].name) : `all ${plan.servers.length} nodes`}?</h3>
     <p>${how} If any step fails, it stops there.</p>
     <div class="restartlist">${plan.servers.map((v) => `<div class="snap"><div>${esc(v.name)}<small>Version ${esc(v.version ?? "unknown")}</small></div><span class="state">${v.updates} ${v.updates === 1 ? "update" : "updates"}, ${v.rebootNeeded ? "restarts" : "no restart"}</span></div>`).join("")}</div>
+    ${restarts ? keepFreeField("rolling") : ""}
     ${plan.keepsMajority || !restarts ? "" : `<div class="advice" style="margin-top:12px"><div><b>This cluster has only ${plan.votes} votes</b>Everything keeps running, but nothing can be started, stopped or changed while a node restarts.</div></div>`}
     <label class="field restartname"><span>Type confirm to start</span><input id="rname" data-word="confirm" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-rollinggo="1" disabled>Start updating</button></div>`);
@@ -1756,7 +1769,10 @@ async function rollingReturn(plan) {
       if (job) {
         dialog(`<h3>${esc(rollingTitle(plan))}</h3><p>${esc(plan.server)} is back. Moving everything home, one at a time, before the next step.</p><div class="restartlist">${jobRows(job, true)}</div>`);
         if (!job.running) {
-          if (job.error || job.guests.some((g) => g.state !== "done")) return rollingStop(plan, `${plan.server} is updated, but guests didn't get home`, job.error ?? "Not everything got home.");
+          if (job.error || job.guests.some((g) => g.state === "failed" || g.state === "waiting")) return rollingStop(plan, `${plan.server} is updated, but guests didn't get home`, job.error ?? "Not everything got home.");
+          // No room at home isn't a reason to stop: they're running where they are, and the next plan counts them there.
+          const stayed = stayedWords(job);
+          if (stayed) plan.rolling.stayed = [...(plan.rolling.stayed ?? []), stayed];
           return rollingNext(plan);
         }
       }
@@ -1776,8 +1792,10 @@ function rollingNext(plan) {
   if (rolling.index < rolling.servers.length) return rollingStep(rolling);
   saveReboot(null);
   S.watching = false;
-  const done = !rolling.restarted ? "Nothing needed a restart, so everything kept running." : rolling.restarted === rolling.servers.length ? "Each one restarted, and everything that moved is back where it started." : "The ones that needed it restarted, and everything that moved is back where it started.";
-  dialog(`<h3>${rolling.servers.length === 1 ? `${esc(plan.server)} is updated` : `All ${rolling.servers.length} nodes are updated`}</h3><p>${done}</p>${closeRow}`);
+  const stayed = rolling.stayed ?? [];
+  const back = stayed.length ? "everything that fit is back where it started" : "everything that moved is back where it started";
+  const done = !rolling.restarted ? "Nothing needed a restart, so everything kept running." : rolling.restarted === rolling.servers.length ? `Each one restarted, and ${back}.` : `The ones that needed it restarted, and ${back}.`;
+  dialog(`<h3>${rolling.servers.length === 1 ? `${esc(plan.server)} is updated` : `All ${rolling.servers.length} nodes are updated`}</h3><p>${done}</p>${stayed.map((line) => `<p class="meta">${esc(line)}</p>`).join("")}${closeRow}`);
   renderHealth();
   loadServer();
 }
@@ -3365,6 +3383,15 @@ document.addEventListener("input", (e) => {
   }
 });
 document.addEventListener("change", (e) => {
+  if (e.target.dataset?.keepagain) {
+    const again = e.target.dataset.keepagain;
+    const keepFreePct = Number(e.target.value);
+    return runAction("preferences-set", onlineNodes()[0], "Saving", { keepFreePct }, async () => {
+      await refresh();
+      if (again === "rolling") startRolling();
+      else startRestart(again.replace(/^restart:/, ""));
+    });
+  }
   if (e.target.dataset?.bkwarn) {
     const line = e.target.closest("#dialog")?.querySelector(".warnline");
     if (line) line.textContent = backupWarning(e.target.dataset.bkwarn, e.target.value);

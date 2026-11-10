@@ -44,7 +44,7 @@ test("the emptiest node is picked first", () => {
 });
 
 test("nothing moves when one guest can't be placed, and the reason names the node and the number", () => {
-  const plan = planMoves("n1", [guest(1, "small", 2), guest(2, "huge", 50)], [node("n1", 64, 60), node("n2", 64, 30)]);
+  const plan = planMoves("n1", [guest(1, "small", 2), guest(2, "huge", 50)], [node("n1", 64, 60), node("n2", 64, 30)], 15);
   assert.deepEqual(plan.moves, []);
   assert.equal(plan.problems.length, 1);
   assert.match(plan.problems[0] as string, /huge \(50 GB memory\) has nowhere to go: n2 would have 0 GB of memory left, under the 15% it keeps free \(9\.6 GB\)/);
@@ -52,8 +52,17 @@ test("nothing moves when one guest can't be placed, and the reason names the nod
 
 test("the memory buffer holds: a guest that fits only by eating the buffer is refused", () => {
   // 64 GB node, 50 GB used: 14 GB free, keeps 9.6, so 4.4 GB of room.
-  assert.equal(planMoves("n1", [guest(1, "a", 4)], [node("n1", 64, 1), node("n2", 64, 50)]).problems.length, 0);
-  assert.equal(planMoves("n1", [guest(1, "a", 5)], [node("n1", 64, 1), node("n2", 64, 50)]).problems.length, 1);
+  assert.equal(planMoves("n1", [guest(1, "a", 4)], [node("n1", 64, 1), node("n2", 64, 50)], 15).problems.length, 0);
+  assert.equal(planMoves("n1", [guest(1, "a", 5)], [node("n1", 64, 1), node("n2", 64, 50)], 15).problems.length, 1);
+});
+
+test("the keep-free setting moves every buffer: 10% by default, adjustable", () => {
+  // 64 GB node with 50 used: 14 free. At 10% it keeps 6.4, so 7.6 GB of room; at 20% it keeps 12.8, so 1.2.
+  assert.equal(planMoves("n1", [guest(1, "a", 7)], [node("n1", 64, 1), node("n2", 64, 50)]).problems.length, 0, "10% by default");
+  assert.match(planMoves("n1", [guest(1, "a", 7)], [node("n1", 64, 1), node("n2", 64, 50)], 20).problems[0] as string, /under the 20% it keeps free \(12\.8 GB\)/);
+  // Processor: 16 cores, busy 13 + 1 = 14 = 87.5%. Fine at 10% (90% cap), refused at 15% (85% cap).
+  assert.equal(planMoves("n1", [guest(1, "a", 1, { cpuLoad: 1 })], [node("n1", 64, 1), node("n2", 64, 1, { cpuLoad: 13 })]).problems.length, 0);
+  assert.match(planMoves("n1", [guest(1, "a", 1, { cpuLoad: 1 })], [node("n1", 64, 1), node("n2", 64, 1, { cpuLoad: 13 })], 15).problems[0] as string, /over 85%/);
 });
 
 test("guests placed earlier count against the node", () => {
@@ -66,7 +75,7 @@ test("processor room: a busy node is passed over", () => {
   const plan = planMoves("n1", [guest(1, "a", 2, { cpuLoad: 4 })], [node("n1", 64, 1), node("n2", 64, 1, { cpuLoad: 11 }), node("n3", 64, 30)]);
   assert.equal(plan.moves[0]?.target, "n3");
   const none = planMoves("n1", [guest(1, "a", 2, { cpuLoad: 4 })], [node("n1", 64, 1), node("n2", 64, 1, { cpuLoad: 11 })]);
-  assert.match(none.problems[0] as string, /n2 would be 94% busy, over 80%/);
+  assert.match(none.problems[0] as string, /n2 would be 94% busy, over 90%/);
 });
 
 test("a guest with more cores than the node has is refused", () => {

@@ -103,13 +103,25 @@ test("moving home sends back only what's still where BossMox left it, then clear
   assert.equal(record.job?.error, null);
 });
 
-test("moving home stops when home has no room, and keeps the record", async () => {
-  const c = cluster({ 1: "n2" }, { plan: () => ({ moves: [], problems: ["a (8 GB memory) has nowhere to go: n1 would have 2 GB of memory left."] }) });
-  const record: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests: [{ id: 1, name: "a", type: "qemu", to: "n2" }] } }, job: null };
+test("moving home brings back what fits and leaves the rest where it is, still recorded", async () => {
+  // a doesn't fit at home; b does. b still goes home, and the job isn't a failure.
+  const c = cluster({ 1: "n2", 2: "n3" }, { plan: (_from, ids, only) => (ids[0] === 1 ? { moves: [], problems: ["a (8 GB memory) has nowhere to go: n1 would have 2 GB of memory left."] } : { moves: [{ id: 2, name: "b", type: "qemu", target: only ?? "n1" }], problems: [] }) });
+  const record: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests: [{ id: 1, name: "a", type: "qemu", to: "n2" }, { id: 2, name: "b", type: "qemu", to: "n3" }] } }, job: null };
   await runMoveHome(record, c.deps, "n1", "root@pam");
-  assert.deepEqual(c.started, []);
-  assert.equal(record.away.n1?.guests.length, 1);
-  assert.match(record.job?.error ?? "", /nowhere to go/);
+  assert.deepEqual(c.started, ["b->n1"]);
+  assert.deepEqual(record.away.n1?.guests.map((g) => g.name), ["a"]);
+  assert.equal(record.job?.error, null);
+  assert.deepEqual(record.job?.guests.map((g) => `${g.name}:${g.state}`), ["a:stayed", "b:done"]);
+  assert.match(record.job?.guests[0]?.note ?? "", /nowhere to go/);
+});
+
+test("a guest moved again while away keeps its real home", async () => {
+  // a lives on n1, stayed on n2 after n1's update; now n2 is emptied and a goes to n3. Its home is still n1.
+  const c = cluster({ 1: "n2", 2: "n2" }, { plan: (_from, ids) => ({ moves: ids.map((id) => ({ id, name: id === 1 ? "a" : "b", type: "qemu", target: "n3" })), problems: [] }) });
+  const record: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests: [{ id: 1, name: "a", type: "qemu", to: "n2" }] } }, job: null };
+  await runMoveOff(record, c.deps, "n2", "root@pam", moves([1, "a", "n3"], [2, "b", "n3"]));
+  assert.deepEqual(record.away.n1?.guests, [{ id: 1, name: "a", type: "qemu", to: "n3" }]);
+  assert.deepEqual(record.away.n2?.guests.map((g) => g.name), ["b"]);
 });
 
 test("the record survives on disk, and a job cut off by a BossMox restart reads as stopped", () => {
