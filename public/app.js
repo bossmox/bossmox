@@ -1367,7 +1367,7 @@ async function startMoves(action, server) {
 function stayedWords(job) {
   const stayed = job.guests.filter((g) => g.state === "stayed");
   if (!stayed.length) return "";
-  return `${stayed.map((g) => g.name).join(", ")} stayed where ${stayed.length === 1 ? "it is" : "they are"}: ${job.node} doesn't have room while keeping ${keepFree()}% free. They're running, and Move everything back on ${job.node}'s Overview tries again later.`;
+  return `${stayed.map((g) => g.name).join(", ")} stayed where ${stayed.length === 1 ? "it is" : "they are"}: ${job.node} doesn't have room while keeping ${keepFree()}% free. ${stayed.length === 1 ? "It's" : "They're"} running, and Move everything back on ${job.node}'s Overview tries again later.`;
 }
 const keepFree = () => S.data?.preferences?.keepFreePct ?? 10;
 const KEEP_CHOICES = [5, 10, 15, 20, 25, 30];
