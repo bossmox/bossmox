@@ -97,7 +97,7 @@ const terminals = new Terminals({
 } as ConstructorParameters<typeof Terminals>[0]);
 sessions.onEnd = (session) => {
   terminals.closeSession(session);
-  if (session === moveJob.session) moveJob.ended = true;
+  if (session === moveJob.session) moveJob.stop = `${session.username} signed out.`;
 };
 // A move job keeps its person's Proxmox login renewed, like an open console does.
 sessions.isBusy = (session) => terminals.hasOpen(session) || session === moveJob.session;
@@ -109,7 +109,7 @@ const COOKIE = secureCookie ? "__Host-bossmox_session" : "bossmox_session";
 /** Guests moved off a node and the job moving them (ADR 0025). One job at a time across the cluster. */
 const MOVES_FILE = movesPath(settingsPath(process.env));
 const moveRecord = readMoves(MOVES_FILE);
-const moveJob: { session: Session | null; ended: boolean; starting: boolean } = { session: null, ended: false, starting: false };
+const moveJob: { session: Session | null; stop: string | null; starting: boolean } = { session: null, stop: null, starting: false };
 const proxiedNames = config.behindProxy || config.trustedProxies.size > 0 ? config.publicNames : new Set<string>();
 type Loaded = Overview & { tasks: TaskFeed; preferences: Preferences };
 const cache = new WeakMap<Session, { at: number; value: Promise<Loaded>; epoch: number }>();
@@ -343,7 +343,7 @@ function moveDeps(session: Session): MoveDeps {
       return { finished: s.status === "stopped", ok: exit === "OK" || exit.startsWith("WARNINGS"), error: exit || "unknown error" };
     },
     where: async () => new Map((await pve.get<RawResource[]>("/cluster/resources?type=vm", session.ticket)).map((r) => [Number(r.vmid), r.node ?? ""])),
-    alive: () => !moveJob.ended,
+    stopped: () => moveJob.stop,
     wait: (ms) => new Promise((r) => setTimeout(r, ms)),
     save: (record) => {
       try {
@@ -356,20 +356,22 @@ function moveDeps(session: Session): MoveDeps {
 }
 
 /** Starts a move job in the background. The check and the claim happen before any wait, so two can't start. */
-async function startMoveJob(session: Session, prepare: () => Promise<((deps: MoveDeps) => Promise<void>) | null>) {
+async function startMoveJob(session: Session, prepare: () => Promise<((deps: MoveDeps) => Promise<void>) | null>): Promise<string | null> {
   if (moveJob.starting || moveRecord.job?.running) throw new AuthError(409, `BossMox is already moving guests${moveRecord.job?.running ? ` (${moveRecord.job.kind === "off" ? "off" : "home to"} ${moveRecord.job.node})` : ""}. Wait for that to finish.`);
   moveJob.starting = true;
   try {
     const run = await prepare();
-    if (!run) return;
+    if (!run) return null;
     moveJob.session = session;
-    moveJob.ended = false;
+    moveJob.stop = null;
     void run(moveDeps(session))
       .catch((err: Error) => console.error("Move job failed:", err.message))
       .finally(() => {
         moveJob.session = null;
         cache.delete(session);
       });
+    // The job is on the record by now; its start time is how the page knows it's following this one.
+    return moveRecord.job ? `job:${moveRecord.job.startedAt}` : null;
   } finally {
     moveJob.starting = false;
   }
@@ -652,20 +654,26 @@ const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, 
   "move-off": async (name, who, body) => {
     // The browser sends this after the person has seen the plan and confirmed it for this node.
     if (body.confirm !== name) throw new AuthError(400, "The move wasn't confirmed.");
-    await startMoveJob(who, async () => {
+    return startMoveJob(who, async () => {
       const plan = await planEvacuation(who.ticket, name);
       if (plan.problems.length) throw new AuthError(400, plan.problems.join(" "));
       if (!plan.moves.length) return null;
       return (deps) => runMoveOff(moveRecord, deps, name, who.username, plan.moves);
     });
-    return null;
   },
   "move-home": async (name, who, body) => {
     if (body.confirm !== name) throw new AuthError(400, "The move wasn't confirmed.");
-    await startMoveJob(who, async () => {
+    return startMoveJob(who, async () => {
       if (!moveRecord.away[name]?.guests.length) throw new AuthError(400, `BossMox has nothing recorded as moved off ${name}.`);
       return (deps) => runMoveHome(moveRecord, deps, name, who.username);
     });
+  },
+  "move-stop": async (_name, who) => {
+    const job = moveRecord.job;
+    if (!job?.running) return null;
+    if (job.by !== who.username) throw new AuthError(403, `Only ${job.by}, who started these moves, can stop them.`);
+    // The move under way finishes; nothing new starts.
+    moveJob.stop = `${who.username} pressed Stop.`;
     return null;
   },
   "guest-power": (name, who, body) => {

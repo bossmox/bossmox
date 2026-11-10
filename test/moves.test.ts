@@ -28,7 +28,7 @@ function cluster(start: Record<number, string>, opts: { plan?: (from: string, id
       return { finished: true, ok: Boolean(t?.ok), error: "migration aborted" };
     },
     where: async () => new Map(where),
-    alive: () => opts.aliveFor === undefined || checks++ < opts.aliveFor,
+    stopped: () => (opts.aliveFor === undefined || checks++ < opts.aliveFor ? null : "root@pam signed out."),
     wait: async () => {},
     save: (r) => saves.push(structuredClone(r)),
   };
@@ -74,7 +74,7 @@ test("signing out stops the job before the next move", async () => {
   const record: MoveRecord = { away: {}, job: null };
   await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n3"]));
   assert.deepEqual(c.started, ["a->n2"]);
-  assert.match(record.job?.error ?? "", /signed out/);
+  assert.match(record.job?.error ?? "", /stopped before the next move: root@pam signed out/);
 });
 
 test("moving home sends back only what's still where BossMox left it, then clears the node", async () => {

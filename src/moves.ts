@@ -84,8 +84,8 @@ export interface MoveDeps {
   task(node: string, upid: string): Promise<TaskEnd>;
   /** Where every guest is right now. */
   where(): Promise<Map<number, string>>;
-  /** False once the person who started it has signed out. */
-  alive(): boolean;
+  /** Why to stop before the next move (signed out, or someone pressed Stop), or null to carry on. */
+  stopped(): string | null;
   wait(ms: number): Promise<void>;
   save(record: MoveRecord): void;
 }
@@ -121,7 +121,8 @@ export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: strin
   deps.save(record);
   try {
     for (const g of job.guests) {
-      if (!deps.alive()) throw new Error("The person who started this signed out, so BossMox stopped before the next move.");
+      const stop = deps.stopped();
+      if (stop) throw new Error(`BossMox stopped before the next move: ${stop}`);
       const left = job.guests.filter((x) => x.state === "waiting").map((x) => x.id);
       const fresh = await deps.plan(node, left);
       if (fresh.problems.length) throw new Error(`The room changed while moving: ${fresh.problems.join(" ")}`);
@@ -156,17 +157,21 @@ export function stillAway(record: MoveRecord, node: string, where: Map<number, s
 
 /** Sends a node's guests home, one at a time, each checked for room on the way back. */
 export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: string, by: string): Promise<void> {
-  const where = await deps.where();
-  const back = stillAway(record, node, where);
-  const job: JobView = { kind: "home", node, by, startedAt: Date.now(), finishedAt: null, running: true, error: null, guests: back.map((g) => ({ id: g.id, name: g.name, target: node, state: "waiting" })) };
+  // The job is on the record before anything waits, so whoever started it can follow it at once.
+  const job: JobView = { kind: "home", node, by, startedAt: Date.now(), finishedAt: null, running: true, error: null, guests: (record.away[node]?.guests ?? []).map((g) => ({ id: g.id, name: g.name, target: node, state: "waiting" })) };
   record.job = job;
-  const away = record.away[node];
-  // Guests that aren't where BossMox left them are dropped: whoever moved them decided where they live now.
-  if (away) away.guests = back;
   deps.save(record);
+  const away = record.away[node];
+  let back: AwayGuest[] = [];
   try {
+    back = stillAway(record, node, await deps.where());
+    // Guests that aren't where BossMox left them are dropped: whoever moved them decided where they live now.
+    job.guests = job.guests.filter((g) => back.some((b) => b.id === g.id));
+    if (away) away.guests = back;
+    deps.save(record);
     for (const g of back) {
-      if (!deps.alive()) throw new Error("The person who started this signed out, so BossMox stopped before the next move.");
+      const stop = deps.stopped();
+      if (stop) throw new Error(`BossMox stopped before the next move: ${stop}`);
       const jg = job.guests.find((x) => x.id === g.id) as JobGuest;
       const fresh = await deps.plan(g.to, [g.id], node);
       if (fresh.problems.length) throw new Error(fresh.problems.join(" "));
