@@ -92,19 +92,33 @@ export interface MoveDeps {
 
 /** After Proxmox says a move finished, how long to wait for the guest to show up there (HA moves report early). */
 const ARRIVE_MS = 10 * 60 * 1000;
+const BLIP_MS = 2 * 60 * 1000;
 
 /** Runs one move to the end: the task, then the guest seen on the target. Throws with a plain reason. */
 async function moveOne(deps: MoveDeps, move: Move, from: string): Promise<void> {
   const upid = await deps.migrate(move, from);
+  // Watching is a read: a blip in reaching Proxmox is waited out for a while, since the move carries on regardless.
+  let failingSince = 0;
+  const read = async <T>(get: () => Promise<T>): Promise<T | undefined> => {
+    try {
+      const value = await get();
+      failingSince = 0;
+      return value;
+    } catch (err) {
+      failingSince ||= Date.now();
+      if (Date.now() - failingSince > BLIP_MS) throw err;
+      return undefined;
+    }
+  };
   for (;;) {
     await deps.wait(2000);
-    const end = await deps.task(from, upid);
-    if (!end.finished) continue;
+    const end = await read(() => deps.task(from, upid));
+    if (!end?.finished) continue;
     if (!end.ok) throw new Error(`Proxmox couldn't move ${move.name}: ${end.error}`);
     break;
   }
   for (const until = Date.now() + ARRIVE_MS; ; await deps.wait(3000)) {
-    if ((await deps.where()).get(move.id) === move.target) return;
+    if ((await read(() => deps.where()))?.get(move.id) === move.target) return;
     if (Date.now() > until) throw new Error(`Proxmox finished moving ${move.name}, but it hasn't shown up on ${move.target}.`);
   }
 }

@@ -69,6 +69,20 @@ test("each move is planned again first, and a node that filled up stops the job"
   assert.match(record.job?.error ?? "", /room changed while moving: b has nowhere to go/);
 });
 
+test("a short blip while watching a move is waited out", async () => {
+  const c = cluster({ 1: "n1" });
+  let fails = 2;
+  const task = c.deps.task;
+  c.deps.task = async (node, upid) => {
+    if (fails-- > 0) throw new Error("connection reset");
+    return task(node, upid);
+  };
+  const record: MoveRecord = { away: {}, job: null };
+  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"]));
+  assert.equal(record.job?.error, null);
+  assert.equal(record.away.n1?.guests[0]?.to, "n2");
+});
+
 test("signing out stops the job before the next move", async () => {
   const c = cluster({ 1: "n1", 2: "n1" }, { aliveFor: 1 });
   const record: MoveRecord = { away: {}, job: null };

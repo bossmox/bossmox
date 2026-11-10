@@ -284,6 +284,13 @@ async function planEvacuation(ticket: string, from: string, ids?: number[], only
     memUsed: r.mem ?? 0,
     storages: storagesOf(r.node ?? ""),
   }));
+  // A guest that just arrived shows only the memory it has touched so far. Everything BossMox moved counts at its
+  // full set memory, so planning again between moves can't fill a node the first plan had already filled.
+  const arrived = new Set([...Object.values(moveRecord.away).flatMap((a) => a.guests.map((g) => g.id)), ...(moveRecord.job?.guests.filter((g) => g.state === "done").map((g) => g.id) ?? [])]);
+  for (const r of resources) {
+    const n = nodes.find((x) => x.name === r.node);
+    if (n && (r.type === "qemu" || r.type === "lxc") && r.status === "running" && arrived.has(Number(r.vmid))) n.memUsed += Math.max(0, (r.maxmem ?? 0) - (r.mem ?? 0));
+  }
   const guests = resources.filter((r) => (r.type === "qemu" || r.type === "lxc") && r.node === from && r.template !== 1 && (ids ? ids.includes(Number(r.vmid)) : r.status === "running" || r.status === "paused"));
   const needs = await Promise.all(guests.map(async (g) => {
     const type = g.type === "lxc" ? "lxc" : "qemu";
