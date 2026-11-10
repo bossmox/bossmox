@@ -39,7 +39,7 @@ export const INSTALL_COMMAND =
 
 export interface ShellConfig {
   readonly pveUrl: URL;
-  readonly pveCa?: string | undefined;
+  readonly pveCa?: string | Buffer | undefined;
   readonly pveTlsName?: string | undefined;
 }
 export interface ShellResult {

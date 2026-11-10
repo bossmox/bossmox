@@ -60,6 +60,10 @@ export interface MovePlan {
   moves: Move[];
   /** Guests stuck only because of a disc from the node's own storage: ejecting it lets them move. */
   ejectable?: Ejectable[];
+  /** Each guest that couldn't be placed, with its reason, so a person can choose to shut it down instead. */
+  unplaced?: { id: number; why: string }[];
+  /** Where every guest that could be placed would go, even when others couldn't. */
+  tentative?: Move[];
   /** One plain sentence per guest that can't be placed. Any at all means nothing moves. */
   problems: string[];
 }
@@ -183,11 +187,13 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
   if (!others.length && guests.length) return { moves: [], problems: ["There's no other online node to move anything to."] };
   const moves: Move[] = [];
   const problems: string[] = [];
+  const unplaced: { id: number; why: string }[] = [];
   const ejectable = guests.filter((g) => g.stuck && g.discSlots.length).map((g) => ({ id: g.id, name: g.name, slots: g.discSlots }));
   const order = [...guests].sort((a, b) => b.mem - a.mem || a.name.localeCompare(b.name));
   for (const g of order) {
     if (g.stuck) {
       problems.push(g.stuck);
+      unplaced.push({ id: g.id, why: g.stuck });
       continue;
     }
     const reasons: string[] = [];
@@ -207,6 +213,7 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
     }
     if (!best) {
       problems.push(`${g.name} (${gbText(g.mem)} memory) has nowhere to go: ${reasons.join("; ")}.`);
+      unplaced.push({ id: g.id, why: problems[problems.length - 1] as string });
       continue;
     }
     best.memUsed += g.mem;
@@ -217,5 +224,5 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
     }
     moves.push({ id: g.id, name: g.name, type: g.type, target: best.name, mem: g.mem });
   }
-  return problems.length ? { moves: [], problems, ejectable } : { moves, problems, ejectable };
+  return problems.length ? { moves: [], problems, ejectable, unplaced, tentative: moves } : { moves, problems, ejectable, unplaced, tentative: moves };
 }
