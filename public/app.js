@@ -3107,7 +3107,7 @@ document.addEventListener("click", (e) => {
     if (!items.length) return;
     const names = items.map((g) => g.name).join(", ");
     const where = items.length === 1 ? `${items[0].name}'s ${items[0].slots.length > 1 ? `drives ${items[0].slots.join(" and ")}` : `drive ${items[0].slots[0]}`}` : names;
-    return confirmAction(items.length === 1 ? `Eject the disc from ${names}?` : `Eject the discs from ${items.length} VMs?`, `The disc comes out of ${where}. They keep running, and the discs stay on their nodes, so they can go back in later.`, items.length === 1 ? `Eject from ${names}` : `Eject all ${items.length}`, async () => {
+    return confirmAction(items.length === 1 ? `Eject the disc from ${names}?` : `Eject the discs from ${items.length} VMs?`, items.length === 1 ? `The disc comes out of ${where}. ${items[0].name} keeps running, and the disc stays on the node, so it can go back in later.` : `The discs come out of ${where}. They keep running, and the discs stay on their nodes, so they can go back in later.`, items.length === 1 ? `Eject from ${names}` : `Eject all ${items.length}`, async () => {
       const { done, error } = await ejectDiscs(items);
       if (again === "rolling") {
         for (const g of done) S.notReady?.done.add(g.id);
