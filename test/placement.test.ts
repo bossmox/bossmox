@@ -130,6 +130,8 @@ test("guestNeed: what keeps a guest from moving at all", () => {
   assert.match(guestNeed({ ...base, config: {}, precondition: { local_resources: ["hostpci0"] } }).stuck ?? "", /hardware attached/);
   assert.match(guestNeed({ ...base, config: { ide2: "local:iso/alpine.iso,media=cdrom" } }).stuck ?? "", /Eject the disc/);
   assert.equal(guestNeed({ ...base, config: { ide2: "nfs:iso/alpine.iso,media=cdrom" } }).stuck, null, "a disc on shared storage is fine");
+  assert.match(guestNeed({ ...base, config: { ide2: "cdrom,media=cdrom" } }).stuck ?? "", /node's own disc drive/);
+  assert.equal(guestNeed({ ...base, config: { ide2: "none,media=cdrom" } }).stuck, null, "an empty drive is fine");
   assert.equal(guestNeed({ ...base, config: { ide2: "local-lvm:vm-1-cloudinit,media=cdrom" } }).stuck, null, "the cloud-init drive moves with the VM");
   assert.match(guestNeed({ ...base, config: { scsi0: "local-lvm:vm-1-disk-0,size=8G" }, hasSnapshots: true }).stuck ?? "", /snapshot/);
   assert.equal(guestNeed({ ...base, config: { cpu: "host" } }).hostCpu, true);

@@ -21,6 +21,8 @@ import { plainError } from "./plain-errors.js";
 import { buildHealth } from "./health.js";
 import { canChangeCluster, preferencesPath, readPreferences, scheduleWarnings, writePreferences, type Preferences } from "./preferences.js";
 import { settingsPath } from "./settings.js";
+import { gbText, guestNeed, planMoves, ROOM, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
+import { movesPath, readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps } from "./moves.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
 import { buildUsage, RANGES, type Range, type RawPoint } from "./usage.js";
 import { buildStorageMap, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
@@ -30,7 +32,6 @@ import {
   buildRollingPlan,
   buildTaskFeed, buildTaskLog,
   groupUpdates,
-  moveProblem,
   buildServerDetail,
   taskView,
   type RawBackupStorage,
@@ -94,13 +95,21 @@ const terminals = new Terminals({
   pveCa: config.pveCa,
   pveTlsName: config.pveTlsName,
 } as ConstructorParameters<typeof Terminals>[0]);
-sessions.onEnd = (session) => terminals.closeSession(session);
-sessions.isBusy = (session) => terminals.hasOpen(session);
+sessions.onEnd = (session) => {
+  terminals.closeSession(session);
+  if (session === moveJob.session) moveJob.ended = true;
+};
+// A move job keeps its person's Proxmox login renewed, like an open console does.
+sessions.isBusy = (session) => terminals.hasOpen(session) || session === moveJob.session;
 setInterval(() => void sessions.tick().catch((err: Error) => console.error("Session check failed:", err.message)), 60 * 1000).unref();
 const secureCookie = Boolean(config.tls) || config.behindProxy;
 // The __Host- prefix stops a sibling site or another port from setting this cookie over the real one.
 const COOKIE = secureCookie ? "__Host-bossmox_session" : "bossmox_session";
 // A proxy on a custom port often drops that port from Host, so behind one the configured names are enough.
+/** Guests moved off a node and the job moving them (ADR 0025). One job at a time across the cluster. */
+const MOVES_FILE = movesPath(settingsPath(process.env));
+const moveRecord = readMoves(MOVES_FILE);
+const moveJob: { session: Session | null; ended: boolean; starting: boolean } = { session: null, ended: false, starting: false };
 const proxiedNames = config.behindProxy || config.trustedProxies.size > 0 ? config.publicNames : new Set<string>();
 type Loaded = Overview & { tasks: TaskFeed; preferences: Preferences };
 const cache = new WeakMap<Session, { at: number; value: Promise<Loaded>; epoch: number }>();
@@ -253,14 +262,117 @@ async function loadCreatePlan(name: string, kind: "qemu" | "lxc", ticket: string
   };
 }
 
-/** Plain reasons why running VMs on a server won't be able to move off it. */
-async function moveProblems(name: string, data: Overview, ticket: string): Promise<string[]> {
-  const vms = data.vms.filter((v) => v.node === name && v.running && v.type === "qemu");
-  const found = await Promise.all(vms.map(async (v) => {
-    const raw = await pve.get<RawMovePrecondition>(`/nodes/${encodeURIComponent(name)}/qemu/${v.id}/migrate`, ticket).catch(() => ({}));
-    return moveProblem(v.name, raw, v.snapshots.length > 0);
+const enc = encodeURIComponent;
+/**
+ * Fresh numbers from Proxmox, and where each guest of `from` would go (ADR 0025). Without `ids` it plans every
+ * running guest. With `only`, that node is the one target allowed (sending guests home).
+ */
+async function planEvacuation(ticket: string, from: string, ids?: number[], only?: string) {
+  const resources = await pve.get<RawResource[]>("/cluster/resources", ticket);
+  const online = resources.filter((r) => r.type === "node" && r.status === "online" && (!only || r.node === from || r.node === only));
+  const statuses = await Promise.all(online.map((n) => pve.get<RawStatus>(`/nodes/${enc(n.node ?? "")}/status`, ticket).catch(() => null)));
+  const storagesOf = (node: string) => Object.fromEntries(resources
+    .filter((r) => r.type === "storage" && r.node === node && r.status === "available")
+    .map((r) => [r.storage ?? "", { free: (r.maxdisk ?? 0) - (r.disk ?? 0), total: r.maxdisk ?? 0, shared: r.shared === 1 }]));
+  const nodes: NodeRoom[] = online.map((r, i) => ({
+    name: r.node ?? "",
+    version: statuses[i]?.pveversion?.split("/")[1] ?? null,
+    cpuModel: statuses[i]?.cpuinfo?.model ?? null,
+    cores: r.maxcpu ?? 0,
+    cpuLoad: (r.cpu ?? 0) * (r.maxcpu ?? 0),
+    memTotal: r.maxmem ?? 0,
+    memUsed: r.mem ?? 0,
+    storages: storagesOf(r.node ?? ""),
   }));
-  return found.filter((p): p is string => p !== null);
+  const guests = resources.filter((r) => (r.type === "qemu" || r.type === "lxc") && r.node === from && r.template !== 1 && (ids ? ids.includes(Number(r.vmid)) : r.status === "running" || r.status === "paused"));
+  const needs = await Promise.all(guests.map(async (g) => {
+    const type = g.type === "lxc" ? "lxc" : "qemu";
+    const id = Number(g.vmid);
+    const base = `/nodes/${enc(from)}/${type}/${id}`;
+    const [config, snaps, precondition] = await Promise.all([
+      pve.get<RawConfig>(`${base}/config`, ticket),
+      pve.get<RawSnapshot[]>(`${base}/snapshot`, ticket).catch((): RawSnapshot[] => []),
+      // Older Proxmox has no migrate check for containers; BossMox's own storage check still applies.
+      pve.get<RawPrecondition>(`${base}/migrate`, ticket).catch((): RawPrecondition => ({})),
+    ]);
+    return guestNeed({
+      id,
+      type,
+      name: g.name ?? String(config.name ?? config.hostname ?? `VM ${id}`),
+      mem: g.maxmem ?? 0,
+      cores: g.maxcpu ?? 0,
+      cpuLoad: (g.cpu ?? 0) * (g.maxcpu ?? 0),
+      config,
+      hasSnapshots: snaps.some((s) => s.name !== "current"),
+      precondition,
+      sourceStorages: storagesOf(from),
+    });
+  }));
+  const plan: MovePlan = planMoves(from, needs, nodes);
+  // What each other node has now and would have after, so the person sees why it was picked.
+  const room = nodes.filter((n) => n.name !== from).map((n) => {
+    const adds = plan.moves.filter((m) => m.target === n.name).reduce((sum, m) => sum + (needs.find((g) => g.id === m.id)?.mem ?? 0), 0);
+    return { name: n.name, guests: plan.moves.filter((m) => m.target === n.name).length, freeNow: gbText(n.memTotal - n.memUsed), freeAfter: gbText(n.memTotal - n.memUsed - adds), keeps: gbText((n.memTotal * ROOM.memFreePct) / 100) };
+  });
+  return { ...plan, room };
+}
+
+/** How a move job reaches Proxmox: always with the person's current login, which renewals replace. */
+function moveDeps(session: Session): MoveDeps {
+  return {
+    plan: (from, ids, only) => planEvacuation(session.ticket, from, ids, only),
+    migrate: async (move, from) => {
+      const base = `/nodes/${enc(from)}/${move.type}/${move.id}`;
+      const now = await pve.get<{ status?: string }>(`${base}/status/current`, session.ticket);
+      const running = now.status === "running" || now.status === "paused";
+      const form: Record<string, string> = move.type === "qemu"
+        ? { target: move.target, "with-local-disks": "1", ...(running ? { online: "1" } : {}) }
+        : { target: move.target, ...(running ? { restart: "1" } : {}) };
+      // A node that has just come back can refuse a move for a few seconds. A refusal means nothing started.
+      for (const until = Date.now() + 60 * 1000; ; await new Promise((r) => setTimeout(r, 5000))) {
+        try {
+          return await pve.post<string>(`${base}/migrate`, session, form);
+        } catch (err) {
+          if (!(err instanceof PveError) || err.status === 401 || err.status === 403 || Date.now() > until) throw err;
+        }
+      }
+    },
+    task: async (node, upid) => {
+      const s = await pve.get<RawTaskStatus>(`/nodes/${enc(node)}/tasks/${enc(upid)}/status`, session.ticket);
+      const exit = s.exitstatus ?? "";
+      return { finished: s.status === "stopped", ok: exit === "OK" || exit.startsWith("WARNINGS"), error: exit || "unknown error" };
+    },
+    where: async () => new Map((await pve.get<RawResource[]>("/cluster/resources?type=vm", session.ticket)).map((r) => [Number(r.vmid), r.node ?? ""])),
+    alive: () => !moveJob.ended,
+    wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+    save: (record) => {
+      try {
+        writeMoves(MOVES_FILE, record);
+      } catch (err) {
+        console.error("Couldn't save the move record:", (err as Error).message);
+      }
+    },
+  };
+}
+
+/** Starts a move job in the background. The check and the claim happen before any wait, so two can't start. */
+async function startMoveJob(session: Session, prepare: () => Promise<((deps: MoveDeps) => Promise<void>) | null>) {
+  if (moveJob.starting || moveRecord.job?.running) throw new AuthError(409, `BossMox is already moving guests${moveRecord.job?.running ? ` (${moveRecord.job.kind === "off" ? "off" : "home to"} ${moveRecord.job.node})` : ""}. Wait for that to finish.`);
+  moveJob.starting = true;
+  try {
+    const run = await prepare();
+    if (!run) return;
+    moveJob.session = session;
+    moveJob.ended = false;
+    void run(moveDeps(session))
+      .catch((err: Error) => console.error("Move job failed:", err.message))
+      .finally(() => {
+        moveJob.session = null;
+        cache.delete(session);
+      });
+  } finally {
+    moveJob.starting = false;
+  }
 }
 
 async function loadRollingPlan(ticket: string) {
@@ -271,13 +383,16 @@ async function loadRollingPlan(ticket: string) {
     Promise.all(data.nodes.map(async (n): Promise<RollingInput> => {
       if (!n.online) return { name: n.name, online: false, version: null, updates: null, rebootNeeded: false, busy: [], cantMove: [] };
       const base = `/nodes/${encodeURIComponent(n.name)}`;
-      const [status, updates, active, cantMove] = await Promise.all([
+      const [status, updates, active] = await Promise.all([
         section(pve.get<RawStatus>(`${base}/status`, ticket)),
         section(pve.get<RawUpdate[]>(`${base}/apt/update`, ticket)),
         section(pve.get<RawTask[]>(`${base}/tasks?source=active`, ticket)),
-        moveProblems(n.name, data, ticket),
       ]);
       const list = updates.available ? groupUpdates(updates.value) : null;
+      // Each node that restarts is planned against the cluster as it is now: guests go home before the next one.
+      const cantMove = list?.rebootNeeded && list.total > 0
+        ? (await planEvacuation(ticket, n.name).catch((err: Error) => ({ problems: [`BossMox couldn't plan the moves: ${err.message}`] }))).problems.map((p) => `${n.name}: ${p}`)
+        : [];
       return {
         name: n.name,
         online: true,
@@ -502,7 +617,7 @@ async function keepsFiles(node: string, storage: string, ticket: string): Promis
 }
 
 /** Everything BossMox can change on Proxmox is listed here. There is no general pass-through. */
-const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string, unknown>) => Promise<string | null>> = {
+const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, unknown>) => Promise<string | null>> = {
   "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
   "update-channel": async (name, who, body) => {
     const target = body.channel;
@@ -534,11 +649,24 @@ const ACTIONS: Record<string, (name: string, who: Identity, body: Record<string,
       : { target, restart: "1" };
     return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${type}/${id}/migrate`, who, form);
   },
-  "move-all": (name, who, body) => {
-    const vms = text(body.guests, 256);
-    const target = text(body.target, 64);
-    if (!/^\d+(,\d+)*$/.test(vms) || !NODE_NAME.test(target) || target === name) throw new AuthError(400, "That move request isn't valid.");
-    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/migrateall`, who, { target, vms, "with-local-disks": "1", maxworkers: "1" });
+  "move-off": async (name, who, body) => {
+    // The browser sends this after the person has seen the plan and confirmed it for this node.
+    if (body.confirm !== name) throw new AuthError(400, "The move wasn't confirmed.");
+    await startMoveJob(who, async () => {
+      const plan = await planEvacuation(who.ticket, name);
+      if (plan.problems.length) throw new AuthError(400, plan.problems.join(" "));
+      if (!plan.moves.length) return null;
+      return (deps) => runMoveOff(moveRecord, deps, name, who.username, plan.moves);
+    });
+    return null;
+  },
+  "move-home": async (name, who, body) => {
+    if (body.confirm !== name) throw new AuthError(400, "The move wasn't confirmed.");
+    await startMoveJob(who, async () => {
+      if (!moveRecord.away[name]?.guests.length) throw new AuthError(400, `BossMox has nothing recorded as moved off ${name}.`);
+      return (deps) => runMoveHome(moveRecord, deps, name, who.username);
+    });
+    return null;
   },
   "guest-power": (name, who, body) => {
     const { id, path } = guestPath(name, body);
@@ -1182,7 +1310,7 @@ const handler: http.RequestListener = async (req, res) => {
       }
       return json(res, 200, { realms });
     }
-    if (route === "/api/usage" || route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/health" || route === "/api/setup-plan" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
+    if (route === "/api/usage" || route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/moves" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/health" || route === "/api/setup-plan" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -1354,12 +1482,21 @@ const handler: http.RequestListener = async (req, res) => {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
           const base = `/nodes/${encodeURIComponent(name)}`;
-          const [active, storages, cantMove] = await Promise.all([
+          const [active, storages, evacuate] = await Promise.all([
             section(pve.get<RawTask[]>(`${base}/tasks?source=active`, session.ticket)),
             section(pve.get<RawBackupStorage[]>(`${base}/storage?content=backup`, session.ticket)),
-            overview(session).then((data) => moveProblems(name, data, session.ticket)),
+            planEvacuation(session.ticket, name),
           ]);
-          return json(res, 200, buildRebootPlan(active, storages, cantMove));
+          return json(res, 200, { ...buildRebootPlan(active, storages, evacuate.problems), evacuate });
+        }
+        if (route === "/api/moves") {
+          // Only what's still where BossMox left it can go home; the rest was moved by someone since.
+          const data = await overview(session);
+          const where = new Map(data.vms.map((v) => [v.id, v.node]));
+          const away = Object.fromEntries(Object.entries(moveRecord.away)
+            .map(([node, a]) => [node, { by: a.by, at: a.at, guests: stillAway(moveRecord, node, where) }] as const)
+            .filter(([, a]) => a.guests.length > 0));
+          return json(res, 200, { away, job: moveRecord.job });
         }
         if (route === "/api/server") {
           const name = params.get("name") ?? "";

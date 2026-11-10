@@ -108,6 +108,7 @@ export function guestNeed(f: GuestFacts): GuestNeed {
   const discs = volumes.filter((v) => v.value.includes("media=cdrom") && !v.value.includes("cloudinit"));
   let stuck: string | null = null;
   if ((f.precondition.local_resources ?? []).length > 0) stuck = `${f.name} uses hardware attached to its node, so it can't move.`;
+  else if (Object.entries(f.config).some(([k, v]) => /^(ide|sata|scsi)\d+$/.test(k) && String(v).startsWith("cdrom"))) stuck = `${f.name} uses its node's own disc drive, so it can't move. Eject it first.`;
   else if (discs.some((d) => isLocal(d.storage))) stuck = `${f.name} has a disc image from its node's own storage in its drive, so it can't move. Eject the disc first.`;
   const copied = volumes.filter((v) => !v.value.includes("media=cdrom") && isLocal(v.storage));
   if (!stuck && f.hasSnapshots && copied.length > 0 && f.type === "qemu") stuck = `${f.name} has a snapshot on its node's own storage, so it can't move while running. Delete the snapshot or shut it down first.`;
