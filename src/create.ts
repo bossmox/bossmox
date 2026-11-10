@@ -89,13 +89,18 @@ export function containerForm(v: CreateInput): Record<string, string> {
 }
 
 /** Puts a disc in a VM's drive, or takes it out with "". A disc added goes on its boot list too. */
-export function discForm(disc: string, current: { boot?: string; ide2?: string } = {}): Record<string, string> {
-  if (current.ide2?.includes("cloudinit")) throw new CreateError("This VM uses that drive for its setup disk, so a disc can't go there.");
-  if (current.ide2 && !current.ide2.includes("media=cdrom")) throw new CreateError("This VM has a disk on that drive, so a disc can't go there.");
-  if (disc === "") return { ide2: "none,media=cdrom" };
+export function discForm(disc: string, current: Record<string, unknown> = {}, slot = "ide2"): Record<string, string> {
+  if (!/^(ide|sata|scsi)\d+$/.test(slot)) throw new CreateError("That isn't a disc drive.");
+  const now = typeof current[slot] === "string" ? (current[slot] as string) : undefined;
+  if (now?.includes("cloudinit")) throw new CreateError("This VM uses that drive for its setup disk, so a disc can't go there.");
+  if (now && !now.includes("media=cdrom")) throw new CreateError("This VM has a disk on that drive, so a disc can't go there.");
+  // Only ide2 may be added where there's no drive yet; any other slot has to be a disc drive already.
+  if (!now && slot !== "ide2") throw new CreateError("That VM has no disc drive there.");
+  if (disc === "") return { [slot]: "none,media=cdrom" };
   if (!VOLUME.test(disc)) throw new CreateError("That disc isn't valid.");
-  const form: Record<string, string> = { ide2: `${disc},media=cdrom` };
-  if (current.boot?.startsWith("order=") && !current.boot.includes("ide2")) form.boot = `${current.boot};ide2`;
+  const form: Record<string, string> = { [slot]: `${disc},media=cdrom` };
+  const boot = typeof current.boot === "string" ? current.boot : "";
+  if (boot.startsWith("order=") && !boot.split(/[=;]/).includes(slot)) form.boot = `${boot};${slot}`;
   return form;
 }
 

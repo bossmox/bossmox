@@ -26,6 +26,7 @@ const guest = (id: number, name: string, memGb: number, extra: Partial<GuestNeed
   hostCpu: false,
   stuck: null,
   refused: {},
+  discSlots: [],
   ...extra,
 });
 
@@ -118,7 +119,7 @@ test("a stuck guest stops the plan with its own reason", () => {
 
 test("no other node, no moves", () => {
   assert.match(planMoves("n1", [guest(1, "a", 2)], [node("n1", 64, 1)]).problems[0] as string, /no other online node/);
-  assert.deepEqual(planMoves("n1", [], [node("n1", 64, 1)]), { moves: [], problems: [] });
+  assert.deepEqual(planMoves("n1", [], [node("n1", 64, 1)]), { moves: [], problems: [], ejectable: [] });
 });
 
 const sourceStorages = { "local-lvm": { free: 0, total: 0, shared: false }, local: { free: 0, total: 0, shared: false }, nfs: { free: 0, total: 0, shared: true } };
@@ -163,4 +164,18 @@ test("sizes and versions", () => {
   assert.ok(compareVersions("8.4.1", "9.0.3") < 0);
   assert.equal(compareVersions("9.0.3", "9.0.3"), 0);
   assert.ok(compareVersions("9.0.10", "9.0.3") > 0);
+});
+
+test("a VM stuck only by a disc from local storage can be freed by ejecting it, from every drive that holds one", () => {
+  const base = { id: 7, name: "APP", type: "qemu" as const, mem: GB, cores: 1, cpuLoad: 0, hasSnapshots: false, sourceStorages, precondition: {} };
+  const two = guestNeed({ ...base, config: { ide0: "local:iso/virtio.iso,media=cdrom", ide2: "none,media=cdrom", sata1: "local:iso/b.iso,media=cdrom", scsi0: "nfs:7/vm-7-disk-0.qcow2" } });
+  assert.deepEqual(two.discSlots, ["ide0", "sata1"]);
+  const plan = planMoves("n1", [two], [node("n1", 64, 1), node("n2", 64, 1)]);
+  assert.deepEqual(plan.ejectable, [{ id: 7, name: "APP", slots: ["ide0", "sata1"] }]);
+  assert.equal(plan.moves.length, 0, "still nothing moves until it's ejected");
+  // A disc on shared storage isn't a problem, and passed-through hardware can't be fixed by ejecting.
+  assert.deepEqual(guestNeed({ ...base, config: { ide0: "nfs:iso/virtio.iso,media=cdrom" } }).discSlots, []);
+  assert.deepEqual(guestNeed({ ...base, config: { ide0: "local:iso/virtio.iso,media=cdrom" }, precondition: { local_resources: ["hostpci0"] } }).discSlots, []);
+  assert.deepEqual(guestNeed({ ...base, config: { ide2: "local:7/vm-7-cloudinit.qcow2,media=cdrom" } }).discSlots, [], "the cloud-init drive moves with the VM");
+  assert.deepEqual(guestNeed({ ...base, config: { ide2: "cdrom,media=cdrom" } }).discSlots, ["ide2"], "the node's own drive can be ejected too");
 });

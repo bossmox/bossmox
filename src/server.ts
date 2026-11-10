@@ -391,7 +391,7 @@ async function loadRollingPlan(ticket: string) {
     section(pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", ticket)),
     section(pve.get<{ State?: string }>("/cluster/config/qdevice", ticket)),
     Promise.all(data.nodes.map(async (n): Promise<RollingInput> => {
-      if (!n.online) return { name: n.name, online: false, version: null, updates: null, rebootNeeded: false, busy: [], cantMove: [] };
+      if (!n.online) return { name: n.name, online: false, version: null, updates: null, rebootNeeded: false, busy: [], cantMove: [], ejectable: [] };
       const base = `/nodes/${encodeURIComponent(n.name)}`;
       const [status, updates, active] = await Promise.all([
         section(pve.get<RawStatus>(`${base}/status`, ticket)),
@@ -400,9 +400,11 @@ async function loadRollingPlan(ticket: string) {
       ]);
       const list = updates.available ? groupUpdates(updates.value) : null;
       // Each node that restarts is planned against the cluster as it is now: guests go home before the next one.
-      const cantMove = list?.rebootNeeded && list.total > 0
-        ? (await planEvacuation(ticket, n.name).catch((err: Error) => ({ problems: [`BossMox couldn't plan the moves: ${err.message}`] }))).problems.map((p) => `${n.name}: ${p}`)
-        : [];
+      const evac = list?.rebootNeeded && list.total > 0
+        ? await planEvacuation(ticket, n.name).catch((err: Error) => ({ problems: [`BossMox couldn't plan the moves: ${err.message}`], ejectable: [] }))
+        : { problems: [], ejectable: [] };
+      const cantMove = evac.problems.map((p) => `${n.name}: ${p}`);
+      const ejectable = (evac.ejectable ?? []).map((g) => ({ ...g, node: n.name }));
       return {
         name: n.name,
         online: true,
@@ -411,6 +413,7 @@ async function loadRollingPlan(ticket: string) {
         rebootNeeded: list?.rebootNeeded ?? false,
         busy: buildRebootPlan(active, { available: false }).busy,
         cantMove,
+        ejectable,
       };
     })),
   ]);
@@ -847,9 +850,10 @@ const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, 
   "guest-disc": async (name, who, body) => {
     const { path } = guestPath(name, body);
     if (typeof body.disc !== "string" || body.disc.length > 256) throw new AuthError(400, "That disc isn't valid.");
+    const slot = body.slot === undefined ? "ide2" : text(body.slot, 12);
     const current = await pve.get<RawConfig>(`${path}/config`, who.ticket);
     try {
-      await pve.put<null>(`${path}/config`, who, discForm(body.disc, current as { boot?: string; ide2?: string }));
+      await pve.put<null>(`${path}/config`, who, discForm(body.disc, current, slot));
       return null;
     } catch (err) {
       if (err instanceof CreateError) throw new AuthError(400, err.message);
