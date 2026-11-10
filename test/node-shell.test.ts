@@ -7,7 +7,9 @@ test("the exit code is read from the marker, never from the echoed command", () 
   assert.equal(finished(echoed), null, "the typed line has $?, not a number");
   assert.equal(finished(echoed + "Setting up pve-manager ...\r\n__BOSSMOX_DONE__:0\r\nroot@pve1:~# "), 0);
   assert.equal(finished(echoed + "E: Sub-process /usr/bin/dpkg returned an error code (1)\r\n__BOSSMOX_DONE__:100\r\n"), 100);
-  assert.equal(finished("\x1b[01;32m__BOSSMOX_DONE__\x1b[0m:0"), null, "colour in the middle isn't the marker");
+  const chunks = ["Setting up x\r\n__BOSSMOX_DO", "NE__:0\r\n"];
+  assert.equal(finished(chunks[0] as string), null);
+  assert.equal(finished(chunks.join("")), 0, "a marker split across two pieces of output is found once joined");
 });
 
 test("a login prompt means no root shell", () => {
