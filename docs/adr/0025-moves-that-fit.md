@@ -10,7 +10,7 @@ Before this, emptying a node for a restart sent every running guest to one other
 
 **Placement.** Before anything moves, BossMox plans where each running guest goes, from fresh Proxmox numbers:
 
-- Memory: the target keeps at least 15% of its memory free after the move. A guest counts at its full set memory, because a VM can grow to it.
+- Memory: the target keeps at least 15% of its memory free after the move. A guest counts at its full set memory, because a VM can grow to it. Guests BossMox has just moved also count at their full memory on the node they went to, because one that just arrived shows only what it has touched so far.
 - Processor: the target's measured load plus the guest's stays under 80% of the target's cores, and a guest can't have more cores than the target.
 - Storage: every storage the guest uses must exist on the target (Proxmox's migrate check, and BossMox's own list as a second check). Disks on a node's own storage are copied, so that storage on the target must keep 10% free after the copy.
 - Never to an older Proxmox version. A VM set to the host's exact processor (`cpu: host`) only goes to a node with the same processor model.
@@ -31,4 +31,5 @@ Biggest guests are placed first, each onto the node with the most memory left af
 - If ZFS on a node counts its cache as used memory, BossMox sees less room than there really is. That errs safe. ⚠️ Not checked on a ZFS node.
 - The installer still needs a person at the page (ADR 0004); only the moves moved to the server.
 - A move-back remembered in a browser by 0.1.2 isn't carried over.
+- A move job can be stopped by the person who started it: the guest moving now finishes, nothing else starts.
 - HA may move guests on its own (its own rules or shutdown policy). BossMox only sends home the guests still where it left them.
