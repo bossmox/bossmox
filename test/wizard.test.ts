@@ -61,6 +61,8 @@ function lab(over: Partial<Outside> = {}) {
   const apt: Record<string, ReturnType<typeof aptNode>> = { n1: aptNode(), n2: aptNode(), n3: aptNode() };
   const subscriptions: Record<string, string> = {};
   const offline = new Set<string>();
+  // Each node on 10.0.0.x (where it was reached, and its heartbeat) and on a second network, 10.0.100.x.
+  const options: { migration?: string } = {};
   const name = (to: Pinned) => ({ "10.0.0.1": "n1", "pve1.lan": "n1", "10.0.0.2": "n2", "10.0.0.3": "n3" })[to.host] ?? "?";
   const out: Outside = {
     probe: async (host) => ({ fingerprint: FP(Number(host.split(".").pop())), subject: "x" }),
@@ -101,6 +103,16 @@ function lab(over: Partial<Outside> = {}) {
         members.push({ name: name(to), ip: to.host });
         return reply("UPID:2");
       }
+      if (p === "/cluster/config/nodes") return reply(members.map((m) => ({ node: m.name, ring0_addr: m.ip })));
+      if (p === "/cluster/options") {
+        if (method === "PUT") options.migration = opts.form?.migration;
+        return reply({ ...options });
+      }
+      const net = /^\/nodes\/([^/]+)\/network$/.exec(p);
+      if (net) {
+        const ip = members.find((m) => m.name === net[1])?.ip ?? "";
+        return reply([{ iface: "vmbr0", cidr: `${ip}/24` }, { iface: "eno1", cidr: `${ip.replace("10.0.0.", "10.0.100.")}/24` }, { iface: "lo" }]);
+      }
       if (p.endsWith("/certificates/info")) return reply([{ filename: "pve-root-ca.pem", pem: "CA" }]);
       throw new Error(`unexpected ${p}`);
     },
@@ -111,7 +123,7 @@ function lab(over: Partial<Outside> = {}) {
     now: () => clock,
     ...over,
   };
-  return { wizard: new Wizard(hash, out), apt, subscriptions, offline, calls, saved, guests, hash, tick: (ms: number) => { clock += ms; }, setCluster: (n: string) => { clusterName = n; }, setMembers: (m: typeof members) => { members.splice(0, members.length, ...m); } };
+  return { options, wizard: new Wizard(hash, out), apt, subscriptions, offline, calls, saved, guests, hash, tick: (ms: number) => { clock += ms; }, setCluster: (n: string) => { clusterName = n; }, setMembers: (m: typeof members) => { members.splice(0, members.length, ...m); } };
 }
 const signedIn = async (l: ReturnType<typeof lab>) => {
   l.wizard.enterCode(CODE);
@@ -389,4 +401,28 @@ test("setup only answers to an address or a bare machine name, not another site'
   assert.equal(setupHostAllowed("bossmox"), true);
   assert.equal(setupHostAllowed("evil.example.com"), false);
   assert.equal(setupHostAllowed(""), false);
+});
+
+test("a cluster whose nodes share a second network is offered it for moves, and choosing it sets Migration", async () => {
+  const l = lab();
+  await signedIn(l);
+  assert.equal((await l.wizard.networks()).known, false, "one node, nothing to ask");
+  l.setCluster("lab");
+  l.setMembers([{ name: "n1", ip: "10.0.0.1" }, { name: "n2", ip: "10.0.0.2" }, { name: "n3", ip: "10.0.0.3" }]);
+  const before = await l.wizard.networks();
+  assert.deepEqual({ shared: before.shared, moveNet: before.moveNet, others: before.others, current: before.current }, { shared: true, moveNet: "10.0.0.0/24", others: ["10.0.100.0/24"], current: null });
+  await assert.rejects(l.wizard.setMoveNetwork("192.168.1.0/24"), status(400));
+  const after = await l.wizard.setMoveNetwork("10.0.100.0/24");
+  assert.equal(l.options.migration, "type=secure,network=10.0.100.0/24");
+  assert.deepEqual({ shared: after.shared, batch: after.batch, current: after.current }, { shared: false, batch: 3, current: "10.0.100.0/24" });
+});
+
+test("an insecure move type someone chose stays insecure when the network is set", async () => {
+  const l = lab();
+  await signedIn(l);
+  l.setCluster("lab");
+  l.setMembers([{ name: "n1", ip: "10.0.0.1" }, { name: "n2", ip: "10.0.0.2" }]);
+  l.options.migration = "type=insecure";
+  await l.wizard.setMoveNetwork("10.0.100.0/24");
+  assert.equal(l.options.migration, "type=insecure,network=10.0.100.0/24");
 });

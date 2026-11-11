@@ -23,7 +23,7 @@ import { canChangeCluster, KEEP_FREE_CHOICES, preferencesPath, readPreferences, 
 import { settingsPath } from "./settings.js";
 import { gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
 import { movesPath, readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps } from "./moves.js";
-import { checkNetworks, SAFE_BATCH, type NetCheck } from "./cluster-net.js";
+import { checkNetworks, migrationNetwork, SAFE_BATCH, type NetCheck } from "./cluster-net.js";
 import { drive, readRun, runsPath, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
 import { INSTALL_COMMAND, runOnNode } from "./node-shell.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
@@ -509,9 +509,7 @@ async function readNetCheck(ticket: string): Promise<NetCheck> {
       const ifaces = await pve.get<{ cidr?: string }[]>(`/nodes/${enc(name)}/network`, ticket);
       return { name, links, addresses: ifaces.flatMap((i) => (i.cidr ? [i.cidr] : [])) };
     }));
-    const m = options.migration;
-    const net = typeof m === "string" ? /(?:^|,)network=([^,]+)/.exec(m)?.[1] ?? null : m?.network ?? null;
-    return checkNetworks(nodes, net);
+    return checkNetworks(nodes, migrationNetwork(options.migration));
   } catch {
     return checkNetworks([], null);
   }

@@ -71,6 +71,12 @@ const netFor = (ip: string, addresses: string[]) => {
   return null;
 };
 
+/** The network from Proxmox's Migration setting, given as "type=secure,network=10.0.100.0/24" or already split up. */
+export function migrationNetwork(m: string | { network?: string } | undefined): string | null {
+  if (typeof m === "string") return /(?:^|,)network=([^,]+)/.exec(m)?.[1] ?? null;
+  return m?.network ?? null;
+}
+
 export function checkNetworks(nodes: NodeNets[], migrationNet: string | null): NetCheck {
   const unknown: NetCheck = { known: false, shared: false, moveNet: null, others: [], batch: SAFE_BATCH };
   if (nodes.length < 2) return unknown;

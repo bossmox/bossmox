@@ -94,6 +94,22 @@ function joinScreen(joiner) {
     `${fingerprintBlock(joiner.fingerprint)}${field("Root password for that node", `<input id="password" type="password" autocomplete="off">`)}
      ${buttons(`<button class="btn" data-do="backcluster">Back</button>`, `<button class="btn primary" data-do="join">It matches, add it</button>`)}`);
 }
+/*
+ * Which network VM moves use (ADR 0028). Only asked when the nodes share another network besides the one moves
+ * would use now, and that one is also the heartbeat's only network.
+ */
+function networkScreen(n) {
+  S.net = n;
+  S.movenet = S.movenet && n.others.includes(S.movenet) ? S.movenet : n.others[0];
+  const keep = `keep:${n.moveNet}`;
+  const pick = (k, title, small) => `<button class="choice ${S.movenet === k ? "on" : ""}" role="radio" aria-checked="${S.movenet === k}" data-do="picknet" data-net="${esc(k)}"><b>${esc(title)}</b><small>${esc(small)}</small></button>`;
+  screen(4, "Network for moving VMs", `Moving a running VM sends all of its memory between nodes. Right now moves use ${n.moveNet}, which is also the only network the nodes use to check on each other. A few big moves at once can fill it, the nodes lose touch, and Proxmox restarts a node to protect its VMs. Every node is also on another network, so moves can use that instead.`,
+    `<div class="choices" role="radiogroup" aria-label="Network for moves" style="grid-template-columns:1fr">
+      ${n.others.map((o, i) => pick(o, `Use ${o} for moves`, i === 0 ? "Suggested. Moves stay off the nodes' check-in network. Pick the faster network if you know which it is." : "Another network every node is on.")).join("")}
+      ${pick(keep, `Leave moves on ${n.moveNet}`, "BossMox then moves one VM at a time, and Health check keeps reminding you.")}
+    </div>
+    ${buttons(`<button class="btn" data-do="backcluster">Back</button>`, `<button class="btn primary" data-do="movenet">Continue</button>`)}`);
+}
 const CHANNELS = [
   ["free", "No, use the free channel", "The same software as the paid channel, sooner and with less testing. Proxmox suggests it for testing and non-production use."],
   ["enterprise", "Yes, I have a subscription", "Uses Proxmox's tested enterprise channel. Each node's subscription key has to be added in Proxmox first."],
@@ -150,7 +166,22 @@ const ACTIONS = {
   }),
   backcluster: () => clusterScreen(),
   backchannel: () => channelScreen(),
-  done: () => channelScreen(),
+  done: (b) => run(b, "Checking the networks", async () => {
+    const n = S.cluster.clusterName && S.cluster.nodes.length > 1 ? await post("networks", {}).catch(() => null) : null;
+    if (n?.known && n.shared && n.others.length) return networkScreen(n);
+    channelScreen();
+  }),
+  picknet: (b) => {
+    S.movenet = b.dataset.net;
+    networkScreen(S.net);
+  },
+  movenet: (b) => {
+    if (S.movenet.startsWith("keep:")) return channelScreen();
+    return run(b, "Setting it", async () => {
+      await post("movenet", { network: S.movenet });
+      channelScreen();
+    });
+  },
   skipchannel: () => finishScreen(),
   pickchannel: (b) => {
     S.channel = b.dataset.channel;
