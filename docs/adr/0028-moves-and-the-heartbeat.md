@@ -24,3 +24,7 @@ Rocky: "This is one of those 'how would you ever know' problems." Proxmox's scre
 - **Port speeds.** Reading `/sys/class/net/*/speed` through a node's root console would work for root@pam only, and opens a console on every health check. Not worth it until a second heartbeat link or a faster-network suggestion needs it.
 - **Changing the Migration setting on an existing cluster from Health check.** Rocky asked for a warning there. The setting is one line in Proxmox and easy to reverse, so a button could come later.
 - **Moves on the storage network.** On Rocky's cluster the 10 Gb network also carries iSCSI. Moves there compete with disk traffic. That's still far safer than competing with the heartbeat, but it's his call, so the warning names the network and leaves the choice to him.
+
+## Tested (2026-11-11, 8.4 lab)
+
+Gave each of the three lab nodes a second network (10.0.31.x, beside the heartbeat's 10.0.30.x). Health check warned "VM moves and the cluster heartbeat share one network", named 10.0.31.0/24 and the Proxmox setting to change, and the restart plan showed one move at a time. Put the lab BossMox back into first-run setup and walked the wizard: after Finish adding it showed "Network for moving VMs" with 10.0.31.0/24 suggested. Choosing it set `migration: type=secure,network=10.0.31.0/24` in datacenter.cfg. After setup, Health check passed ("VM moves have a network of their own", up to 3 at a time), and a live move logged "use dedicated network address for sending migration traffic (10.0.31.245)".
