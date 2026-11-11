@@ -23,6 +23,7 @@ import { canChangeCluster, KEEP_FREE_CHOICES, preferencesPath, readPreferences, 
 import { settingsPath } from "./settings.js";
 import { gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
 import { movesPath, readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps } from "./moves.js";
+import { checkNetworks, SAFE_BATCH, type NetCheck } from "./cluster-net.js";
 import { drive, readRun, runsPath, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
 import { INSTALL_COMMAND, runOnNode } from "./node-shell.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
@@ -485,8 +486,37 @@ async function runPlan(ticket: string, kind: "update" | "restart", server: strin
   // Rooms counted with every VM moving; a person's Shut down choices only free more.
   const blocked = [...(rolling?.blocked.filter((b) => !rolling.servers.some((s) => b.startsWith(`${s.name}: `))) ?? [])];
   for (const n of out) for (const v of n.vms) if (v.self && !v.canMove) blocked.push(`BossMox runs in ${v.name} on ${n.name}, and it can't move: ${v.why} BossMox can't shut itself down, so this has to be fixed first.`);
-  return { kind, nodes: out, blocked, votes: rolling?.votes ?? null, keepsMajority: rolling?.keepsMajority ?? true, keepFreePct: preferences.keepFreePct };
+  const net = await readNetCheck(ticket);
+  return { kind, nodes: out, blocked, votes: rolling?.votes ?? null, keepsMajority: rolling?.keepsMajority ?? true, keepFreePct: preferences.keepFreePct, moveBatch: net.batch, moveShared: net.known && net.shared };
 }
+
+/**
+ * Whether moves share the heartbeat's only network (ADR 0028), read fresh from Proxmox. Anything it can't read
+ * gives "can't tell", which means the careful one-at-a-time moves.
+ */
+async function readNetCheck(ticket: string): Promise<NetCheck> {
+  try {
+    const [config, options, resources] = await Promise.all([
+      pve.get<Record<string, unknown>[]>("/cluster/config/nodes", ticket),
+      pve.get<{ migration?: string | { network?: string } }>("/cluster/options", ticket),
+      pve.get<RawResource[]>("/cluster/resources?type=node", ticket),
+    ]);
+    const online = new Set(resources.filter((r) => r.status === "online").map((r) => r.node));
+    if (config.some((c) => !online.has(String(c.node ?? c.name ?? "")))) return checkNetworks([], null);
+    const nodes = await Promise.all(config.map(async (c) => {
+      const name = String(c.node ?? c.name ?? "");
+      const links = Object.keys(c).filter((k) => /^ring\d+_addr$/.test(k)).sort().map((k) => String(c[k]));
+      const ifaces = await pve.get<{ cidr?: string }[]>(`/nodes/${enc(name)}/network`, ticket);
+      return { name, links, addresses: ifaces.flatMap((i) => (i.cidr ? [i.cidr] : [])) };
+    }));
+    const m = options.migration;
+    const net = typeof m === "string" ? /(?:^|,)network=([^,]+)/.exec(m)?.[1] ?? null : m?.network ?? null;
+    return checkNetworks(nodes, net);
+  } catch {
+    return checkNetworks([], null);
+  }
+}
+const batchFor = (ticket: string) => readNetCheck(ticket).then((c) => c.batch, () => SAFE_BATCH);
 
 /** How long bringing guests home waits for a just-restarted node's processor to calm down. */
 const RETURN_SETTLE_MS = 5 * 60 * 1000;
@@ -522,7 +552,7 @@ function runDeps(session: Session, run: Run): RunDeps {
     moveOff: async (node, ids) => {
       const plan = await planEvacuation(t(), node, ids);
       if (plan.problems.length) throw new Error(plan.problems.join(" "));
-      await runMoveOff(moveRecord, moves, node, session.username, plan.moves);
+      await runMoveOff(moveRecord, moves, node, session.username, plan.moves, await batchFor(t()));
       // Where each one is now, read from Proxmox: one may already have gone, moved home to another node earlier in the run.
       const where = await moves.where();
       const went = Object.fromEntries(ids.filter((id) => where.has(id) && where.get(id) !== node).map((id) => [id, where.get(id) as string]));
@@ -568,7 +598,7 @@ function runDeps(session: Session, run: Run): RunDeps {
           const s = await pve.get<RawStatus>(`/nodes/${enc(node)}/status`, t()).catch(() => null);
           if (s && (s.cpu ?? 0) * 100 <= cap) break;
         }
-        await runMoveHome(moveRecord, moves, node, session.username);
+        await runMoveHome(moveRecord, moves, node, session.username, await batchFor(t()));
         const job = moveRecord.job;
         if (job?.error) throw new Error(job.error);
         for (const g of job?.guests ?? []) if (g.state === "stayed") notes.set(g.id, g.note ?? "its home had no room");
@@ -734,7 +764,7 @@ async function loadHealth(session: Session) {
   const data = await overview(session);
   const online = data.nodes.filter((n) => n.online).map((n) => n.name);
   const weekAgo = Date.now() / 1000 - 7 * 86400;
-  const [status, nodeConfig, qdevice, jobs, tasks, details, maps] = await Promise.all([
+  const [status, nodeConfig, qdevice, jobs, tasks, details, maps, network] = await Promise.all([
     pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", t).catch(() => []),
     pve.get<{ node?: string; quorum_votes?: string | number }[]>("/cluster/config/nodes", t).catch(() => []),
     pve.get<Record<string, unknown>>("/cluster/config/qdevice", t).catch(() => ({})),
@@ -742,6 +772,7 @@ async function loadHealth(session: Session) {
     pve.get<(RawTask & { node?: string })[]>("/cluster/tasks", t).catch(() => []),
     Promise.all(online.map((n) => loadServerDetail(n, t).catch(() => null))),
     Promise.all(online.map((n) => storageMapFor(n, t, data).then((r) => r.map).catch(() => null))),
+    readNetCheck(t),
   ]);
   const cluster = status.find((x) => x.type === "cluster");
   const names = new Map(data.vms.map((v) => [String(v.id), v.name]));
@@ -750,6 +781,7 @@ async function loadHealth(session: Session) {
     ...(cluster ? { cluster: { quorate: cluster.quorate === 1 } } : {}),
     votes: nodeConfig.map((n) => ({ node: n.node ?? "", votes: Number(n.quorum_votes ?? 1) })),
     tieBreaker: Object.keys(qdevice ?? {}).length > 0,
+    network,
     channels: details.flatMap((d) => (d?.channel ? [{ node: d.name, ...d.channel }] : [])),
     updates: details.flatMap((d) => (d?.updates ? [{ node: d.name, total: d.updates.total }] : [])),
     guests: data.vms,
@@ -887,14 +919,16 @@ const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, 
       const plan = await planEvacuation(who.ticket, name);
       if (plan.problems.length) throw new AuthError(400, plan.problems.join(" "));
       if (!plan.moves.length) return null;
-      return (deps) => runMoveOff(moveRecord, deps, name, who.username, plan.moves);
+      const batch = await batchFor(who.ticket);
+      return (deps) => runMoveOff(moveRecord, deps, name, who.username, plan.moves, batch);
     });
   },
   "move-home": async (name, who, body) => {
     if (body.confirm !== name) throw new AuthError(400, "The move wasn't confirmed.");
     return startMoveJob(who, async () => {
       if (!moveRecord.away[name]?.guests.length) throw new AuthError(400, `BossMox has nothing recorded as moved off ${name}.`);
-      return (deps) => runMoveHome(moveRecord, deps, name, who.username);
+      const batch = await batchFor(who.ticket);
+      return (deps) => runMoveHome(moveRecord, deps, name, who.username, batch);
     });
   },
   "run-start": (_name, who, body) => startRun(who, body),

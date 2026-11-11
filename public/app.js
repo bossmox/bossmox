@@ -1460,6 +1460,7 @@ function drawRunStart(kind, server, plan, reboot) {
   const word = kind === "update" ? "confirm" : "reboot";
   dialog(`<h3>${kind === "update" ? `Update ${plan.nodes.length === 1 ? esc(plan.nodes[0].name) : `all ${plan.nodes.length} nodes`}?` : `Restart ${esc(server)}?`}</h3>
     <p>${how}</p>
+    ${restarts.some((n) => n.vms.length) ? `<p class="meta">${plan.moveBatch > 1 ? `Moves run up to ${plan.moveBatch} at a time.` : plan.moveShared ? "Moves run one at a time: they share the cluster heartbeat's only network. Health check says how to give them their own." : "Moves run one at a time."}</p>` : ""}
     ${plan.nodes.map(nodeBlock).join("")}
     ${restarts.some((n) => n.vms.length) ? keepFreeField(again) : ""}
     ${kind === "update" && !plan.keepsMajority && restarts.length ? `<div class="advice" style="margin-top:12px"><div><b>This cluster has only ${plan.votes} votes</b>Everything keeps running, but nothing can be started, stopped or changed while a node restarts.</div></div>` : ""}
