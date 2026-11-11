@@ -523,11 +523,10 @@ function runDeps(session: Session, run: Run): RunDeps {
       const plan = await planEvacuation(t(), node, ids);
       if (plan.problems.length) throw new Error(plan.problems.join(" "));
       await runMoveOff(moveRecord, moves, node, session.username, plan.moves);
-      const job = moveRecord.job;
-      if (job?.error) throw new Error(job.error);
       // Where each one is now, read from Proxmox: one may already have gone, moved home to another node earlier in the run.
       const where = await moves.where();
-      return Object.fromEntries(ids.filter((id) => where.has(id) && where.get(id) !== node).map((id) => [id, where.get(id) as string]));
+      const went = Object.fromEntries(ids.filter((id) => where.has(id) && where.get(id) !== node).map((id) => [id, where.get(id) as string]));
+      return { went, error: moveRecord.job?.error ?? null };
     },
     install: async (node) => {
       const proxy = await pve.post<TermProxy>(`/nodes/${enc(node)}/termproxy`, session);

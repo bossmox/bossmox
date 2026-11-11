@@ -1393,9 +1393,9 @@ async function stopMoves(server) {
  * runs it. This page, or any other, only follows: closing it changes nothing.
  */
 const PHASE_WORDS = { waiting: "Waiting its turn", checking: "Checking the cluster", emptying: "Moving and shutting down", installing: "Installing updates", restarting: "Restarting", starting: "Starting guests again", returning: "Bringing guests home", done: "Done", failed: "Stopped here" };
-function vmWords(v) {
+function vmWords(v, running = true) {
   return ({
-    waiting: v.choice === "shutdown" ? "Will shut down" : "Will move",
+    waiting: !running ? (v.choice === "shutdown" ? "Not shut down" : "Not moved") : v.choice === "shutdown" ? "Will shut down" : "Will move",
     moving: "Moving",
     moved: `On ${v.on ?? "another node"}`,
     stopping: "Shutting down",
@@ -1453,7 +1453,7 @@ function drawRunStart(kind, server, plan, reboot) {
     return `<select data-vmchoice="${v.id}" aria-label="What to do with ${esc(v.name)}">${opts}</select>`;
   };
   const row = (v) => `<div class="snap"><div>${esc(v.name)}${!v.canMove && !v.self ? `<small>${esc(v.why)}</small>` : ""}</div>${pick(v)}</div>`;
-  const nodeBlock = (n) => `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b><small>${kind === "update" ? `${n.updates} ${n.updates === 1 ? "update" : "updates"}${n.version ? `, version ${esc(n.version)}` : ""}` : "Restarts"}</small></div><span class="state">${n.restart ? (n.vms.length ? "Restarts" : "Restarts, nothing running") : "No restart needed"}</span></div>${n.vms.map(row).join("")}</div>`;
+  const nodeBlock = (n) => `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${kind === "update" ? `<small>${n.updates} ${n.updates === 1 ? "update" : "updates"}${n.version ? `, version ${esc(n.version)}` : ""}</small>` : ""}</div><span class="state">${n.restart ? (n.vms.length ? "Restarts" : "Restarts, nothing running") : "No restart needed"}</span></div>${n.vms.map(row).join("")}</div>`;
   const how = kind === "update"
     ? "BossMox updates one node at a time, in this order. For a node that restarts, it moves or shuts down each running VM as chosen below, installs, restarts, starts what it shut down and brings the rest home. Config files you've changed keep your version. It runs on the BossMox server: you can close this window, and follow it from any browser."
     : "BossMox moves or shuts down each running VM as chosen below, restarts the node, then starts what it shut down and brings the rest home. It runs on the BossMox server: you can close this window, and follow it from any browser.";
@@ -1510,7 +1510,7 @@ function drawRun(run) {
   const kept = run.nodes.flatMap((n) => n.keptConfig.map((f) => `${n.name}: ${f}`));
   const stayed = run.nodes.flatMap((n) => n.vms.filter((v) => v.state === "stayed"));
   const nodeBlock = (n, i) => `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${n.note ? `<small>${esc(n.note)}</small>` : ""}</div><span class="state"><span class="dot ${n.phase === "done" ? "running" : n.phase === "failed" ? "warn" : i === run.current && run.running ? "busy" : ""}"></span>${esc(PHASE_WORDS[n.phase] ?? n.phase)}</span></div>
-    ${n.restart ? n.vms.map((v) => `<div class="snap"><div>${esc(v.name)}${v.note && !["failed", "stayed"].includes(v.state) ? `<small>${esc(v.note)}</small>` : ""}</div><span class="state"><span class="dot ${vmDot(v)}"></span>${esc(vmWords(v))}</span></div>`).join("") : ""}</div>`;
+    ${n.restart ? n.vms.map((v) => `<div class="snap"><div>${esc(v.name)}${v.note && !["failed", "stayed"].includes(v.state) ? `<small>${esc(v.note)}</small>` : ""}</div><span class="state"><span class="dot ${vmDot(v)}"></span>${esc(vmWords(v, run.running))}</span></div>`).join("") : ""}</div>`;
   dialog(`<h3>${esc(title)}</h3>
     ${run.error ? `<p class="loginerr">${esc(run.error)}</p>` : run.running ? `<p>Started by ${esc(run.by)}. It runs on the BossMox server, so this window can be closed; open it again from the desktop.</p>` : `<p>Everything that was planned is done.</p>`}
     ${run.nodes.map(nodeBlock).join("")}

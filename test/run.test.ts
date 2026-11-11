@@ -20,7 +20,7 @@ function fake(opts: Partial<RunDeps> & { stopAfter?: string; at?: Run } = {}) {
     // By default each node runs exactly what the run listed for it.
     runningOn: async (n) => (opts.at?.nodes.find((x) => x.name === n)?.vms ?? []).map(({ id, name, type }) => ({ id, name, type })),
     shutdown: async (n, v) => { log.push(`shutdown ${v.name}`); },
-    moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return Object.fromEntries(ids.map((id) => [id, "elsewhere"])); },
+    moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { went: Object.fromEntries(ids.map((id) => [id, "elsewhere"])), error: null }; },
     install: async (n) => { log.push(`install ${n}`); return { exitCode: 0, keptConfig: [], left: 0 }; },
     restart: async (n) => { log.push(`restart ${n}`); if (opts.stopAfter === `restart ${n}`) stop = "root@pam pressed Stop."; },
     start: async (n, v) => { log.push(`start ${v.name}`); },
@@ -107,7 +107,7 @@ test("guests that didn't fit at home are shown as stayed, with why", async () =>
 test("a VM chosen to move that's still on the node stops the run before the install", async () => {
   // Live 2026-11-11: an empty move plan came back and the run went on to install and restart the node.
   const r = run([node("n1", [vm(1, "web"), vm(2, "db")]), node("n2", [])]);
-  const { deps, log } = fake({ at: r, moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { 1: "n2" }; } });
+  const { deps, log } = fake({ at: r, moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { went: { 1: "n2" }, error: null }; } });
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "moveOff n1 1,2"], "no install, no restart, no next node");
   assert.match(r.error ?? "", /db didn't move off n1, so it wasn't updated or restarted/);
@@ -119,7 +119,7 @@ test("a VM already gone from the node (moved home elsewhere earlier in the run) 
   const r = run([node("n2", [vm(3, "cache")])]);
   const { deps, log } = fake({
     runningOn: async () => [],
-    moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { 3: "n1" }; },
+    moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { went: { 3: "n1" }, error: null }; },
     moveHome: async (n, ids) => { log.push(`home ${n} ${ids.join(",")}`); return { 3: { on: "n1", why: "BossMox's record has another node as its home" } }; },
   });
   await drive(r, deps);
@@ -177,4 +177,28 @@ test("a run cut off by a BossMox restart reads as stopped, with where it was, an
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("Stop during the moves: what wasn't moved reads as still here, and what was shut down starts again", async () => {
+  // Live 2026-11-11: Stop during emptying left cache off for a restart that never came, and the rest read "Problem".
+  const r = run([node("n1", [vm(1, "web"), vm(2, "app", "shutdown"), vm(3, "db")])]);
+  const { deps, log } = fake({ at: r, moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); r.stop = "root@pam pressed Stop."; return { went: { 1: "n2" }, error: "BossMox stopped before the next move: root@pam pressed Stop." }; } });
+  deps.stopped = () => r.stop;
+  await drive(r, deps);
+  assert.deepEqual(log, ["check n1", "shutdown app", "moveOff n1 1,3", "start app"], "no install, no restart");
+  assert.match(r.error ?? "", /^Stopped: root@pam pressed Stop\. n1 stopped after emptying/);
+  assert.deepEqual(r.nodes[0]?.vms.map((v) => `${v.name}:${v.state}`), ["web:moved", "app:started", "db:waiting"]);
+  assert.match(r.nodes[0]?.vms[1]?.note ?? "", /started again: n1 wasn't restarted/);
+});
+
+test("a failed install starts again what was shut down; a failed restart doesn't try", async () => {
+  const a = run([node("n1", [vm(2, "app", "shutdown")])]);
+  const fa = fake({ at: a, install: async () => ({ exitCode: 1, keptConfig: [], left: 3 }) });
+  await drive(a, fa.deps);
+  assert.deepEqual(fa.log, ["check n1", "shutdown app", "start app"]);
+  const b = run([node("n1", [vm(2, "app", "shutdown")])]);
+  const fb = fake({ at: b, restart: async () => { throw new Error("n1 hasn't come back after 20 minutes."); } });
+  await drive(b, fb.deps);
+  assert.deepEqual(fb.log, ["check n1", "shutdown app", "install n1"]);
+  assert.equal(b.nodes[0]?.vms[0]?.state, "off");
 });

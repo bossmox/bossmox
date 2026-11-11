@@ -78,6 +78,10 @@ export interface InstallResult {
   /** Updates still waiting after the install, or null if BossMox couldn't read them. */
   left: number | null;
 }
+export interface MoveOffResult {
+  went: Record<number, string>;
+  error: string | null;
+}
 /** What a run needs from Proxmox and the move job, passed in so the run is tested without either. */
 export interface RunDeps {
   stopped(): string | null;
@@ -90,9 +94,10 @@ export interface RunDeps {
   shutdown(node: string, vm: RunVm): Promise<void>;
   /**
    * Moves these VMs off the node, in batches. Resolves with where each one is now that's no longer on the node,
-   * whoever moved it, or rejects with the reason. One missing from the answer is still on the node.
+   * whoever moved it, and why the moves ended early if they did. One missing from `went` is still on the node.
+   * Rejects only when it can't tell.
    */
-  moveOff(node: string, ids: number[]): Promise<Record<number, string>>;
+  moveOff(node: string, ids: number[]): Promise<MoveOffResult>;
   install(node: string): Promise<InstallResult>;
   restart(node: string): Promise<void>;
   start(node: string, vm: RunVm): Promise<void>;
@@ -157,24 +162,28 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
             if (!moving.length) return;
             for (const vm of moving) vm.state = "moving";
             deps.save(run);
+            let result: MoveOffResult;
             try {
-              const went = await deps.moveOff(node.name, moving.map((v) => v.id));
-              for (const vm of moving) {
-                if (went[vm.id]) {
-                  vm.state = "moved";
-                  vm.on = went[vm.id];
-                } else {
-                  vm.state = "failed";
-                  vm.note = `still on ${node.name}`;
-                }
-              }
-              // Never restart a node with a VM on it that was meant to be moved off.
-              const left = moving.filter((v) => v.state === "failed");
-              if (left.length) throw new Error(`${left.map((v) => v.name).join(", ")} didn't move off ${node.name}, so it wasn't updated or restarted.`);
+              result = await deps.moveOff(node.name, moving.map((v) => v.id));
             } catch (err) {
-              for (const vm of moving) if (vm.state === "moving") vm.state = "failed";
+              for (const vm of moving) vm.state = "failed";
               throw err;
             }
+            for (const vm of moving) {
+              const on = result.went[vm.id];
+              if (on) {
+                vm.state = "moved";
+                vm.on = on;
+              } else {
+                // Stopped or failed partway: the ones not reached yet are simply still here, running.
+                vm.state = result.error ? "waiting" : "failed";
+                vm.note = `still on ${node.name}`;
+              }
+            }
+            if (result.error) throw run.stop ? new StopError(run.stop) : new Error(result.error);
+            // Never restart a node with a VM on it that was meant to be moved off.
+            const left = moving.filter((v) => v.state === "failed");
+            if (left.length) throw new Error(`${left.map((v) => v.name).join(", ")} didn't move off ${node.name}, so it wasn't updated or restarted.`);
           });
         }
         if (node.install) {
@@ -224,6 +233,21 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
         node.note = node.vms.some((v) => v.state === "failed") ? `Done, but not everything started: ${node.vms.filter((v) => v.state === "failed").map((v) => v.name).join(", ")}.` : null;
         deps.save(run);
       } catch (err) {
+        // Ended before the restart: start again what was shut down for it, so nothing stays off for a restart
+        // that never came. (Live 2026-11-11, Stop during emptying left a container off.)
+        if (node.phase === "emptying" || node.phase === "installing") {
+          for (const vm of node.vms.filter((v) => v.state === "off")) {
+            try {
+              await deps.start(node.name, vm);
+              vm.state = "started";
+              vm.note = `started again: ${node.name} wasn't restarted`;
+            } catch (e) {
+              vm.state = "failed";
+              vm.note = `didn't start again: ${plain(e)}`;
+            }
+            deps.save(run);
+          }
+        }
         if (err instanceof StopError) {
           run.error = `Stopped: ${err.message} ${node.phase === "checking" ? `${node.name} wasn't touched.` : `${node.name} stopped after ${node.phase}.`}`;
           if (node.phase === "checking") node.phase = "waiting";
