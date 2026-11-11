@@ -93,9 +93,38 @@ test("a VM that won't start doesn't stop the run, but the node says so", async (
 
 test("guests that didn't fit at home are shown as stayed, with why", async () => {
   const r = run([node("n1", [vm(1, "web"), vm(2, "db")])]);
-  const { deps } = fake({ moveHome: async () => ({ 2: "db (8 GB memory) has nowhere to go" }) });
+  let asked: number[] = [];
+  const { deps } = fake({ moveHome: async (_n, ids) => { asked = ids; return { 2: { on: "n2", why: "db (8 GB memory) has nowhere to go" } }; } });
   await drive(r, deps);
+  assert.deepEqual(asked, [1, 2]);
   assert.deepEqual(r.nodes[0]?.vms.map((v) => `${v.name}:${v.state}`), ["web:home", "db:stayed"]);
+  assert.equal(r.nodes[0]?.vms[1]?.on, "n2");
+  assert.match(r.nodes[0]?.vms[1]?.note ?? "", /nowhere to go/);
+});
+
+test("a VM chosen to move that's still on the node stops the run before the install", async () => {
+  // Live 2026-11-11: an empty move plan came back and the run went on to install and restart the node.
+  const r = run([node("n1", [vm(1, "web"), vm(2, "db")]), node("n2", [])]);
+  const { deps, log } = fake({ moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { 1: "n2" }; } });
+  await drive(r, deps);
+  assert.deepEqual(log, ["check n1", "moveOff n1 1,2"], "no install, no restart, no next node");
+  assert.match(r.error ?? "", /db didn't move off n1, so it wasn't updated or restarted/);
+  assert.deepEqual(r.nodes[0]?.vms.map((v) => `${v.name}:${v.state}`), ["web:moved", "db:failed"]);
+});
+
+test("a VM already gone from the node (moved home elsewhere earlier in the run) counts as off it", async () => {
+  // Live 2026-11-11: an old record brought cache home to n1 before n2's turn; n2 then had nothing to move.
+  const r = run([node("n2", [vm(3, "cache")])]);
+  const { deps, log } = fake({
+    moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { 3: "n1" }; },
+    moveHome: async (n, ids) => { log.push(`home ${n} ${ids.join(",")}`); return { 3: { on: "n1", why: "BossMox's record has another node as its home" } }; },
+  });
+  await drive(r, deps);
+  assert.equal(r.error, null);
+  assert.deepEqual(log, ["check n2", "moveOff n2 3", "install n2", "restart n2", "home n2 3"]);
+  assert.equal(r.nodes[0]?.note, null, "nothing failed");
+  assert.equal(r.nodes[0]?.vms[0]?.state, "stayed");
+  assert.equal(r.nodes[0]?.vms[0]?.on, "n1");
 });
 
 test("a node that isn't ready is waited for, then given up on with the reason", async () => {

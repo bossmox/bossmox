@@ -488,6 +488,9 @@ async function runPlan(ticket: string, kind: "update" | "restart", server: strin
   return { kind, nodes: out, blocked, votes: rolling?.votes ?? null, keepsMajority: rolling?.keepsMajority ?? true, keepFreePct: preferences.keepFreePct };
 }
 
+/** How long bringing guests home waits for a just-restarted node's processor to calm down. */
+const RETURN_SETTLE_MS = 5 * 60 * 1000;
+
 /** How a run reaches Proxmox and the move job, always with the starting person's current login. */
 function runDeps(session: Session, run: Run): RunDeps {
   const t = () => session.ticket;
@@ -519,7 +522,9 @@ function runDeps(session: Session, run: Run): RunDeps {
       await runMoveOff(moveRecord, moves, node, session.username, plan.moves);
       const job = moveRecord.job;
       if (job?.error) throw new Error(job.error);
-      return Object.fromEntries((job?.guests ?? []).filter((g) => g.state === "done").map((g) => [g.id, g.target]));
+      // Where each one is now, read from Proxmox: one may already have gone, moved home to another node earlier in the run.
+      const where = await moves.where();
+      return Object.fromEntries(ids.filter((id) => where.has(id) && where.get(id) !== node).map((id) => [id, where.get(id) as string]));
     },
     install: async (node) => {
       const proxy = await pve.post<TermProxy>(`/nodes/${enc(node)}/termproxy`, session);
@@ -552,12 +557,28 @@ function runDeps(session: Session, run: Run): RunDeps {
         }
       }
     },
-    moveHome: async (node) => {
-      if (!moveRecord.away[node]?.guests.length) return {};
-      await runMoveHome(moveRecord, moves, node, session.username);
-      const job = moveRecord.job;
-      if (job?.error) throw new Error(job.error);
-      return Object.fromEntries((job?.guests ?? []).filter((g) => g.state === "stayed").map((g) => [g.id, g.note ?? "No room at home."]));
+    moveHome: async (node, ids) => {
+      const notes = new Map<number, string>();
+      if (moveRecord.away[node]?.guests.length) {
+        // A node just back from a restart is busy for a while. Give it up to 5 minutes to drop under the processor cap.
+        const cap = 100 - preferences.keepFreePct;
+        for (const until = Date.now() + RETURN_SETTLE_MS; Date.now() < until; await new Promise((r) => setTimeout(r, 10_000))) {
+          const s = await pve.get<RawStatus>(`/nodes/${enc(node)}/status`, t()).catch(() => null);
+          if (s && (s.cpu ?? 0) * 100 <= cap) break;
+        }
+        await runMoveHome(moveRecord, moves, node, session.username);
+        const job = moveRecord.job;
+        if (job?.error) throw new Error(job.error);
+        for (const g of job?.guests ?? []) if (g.state === "stayed") notes.set(g.id, g.note ?? "its home had no room");
+      }
+      const where = await moves.where();
+      const out: Record<number, { on: string; why: string }> = {};
+      for (const id of ids) {
+        const on = where.get(id);
+        if (on === undefined || on === node) continue;
+        out[id] = { on, why: notes.get(id) ?? "BossMox's record has another node as its home" };
+      }
+      return out;
     },
   };
 }

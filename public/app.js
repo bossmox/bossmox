@@ -1403,7 +1403,7 @@ function vmWords(v) {
     starting: "Starting",
     started: "Running again",
     home: "Back home",
-    stayed: `Stayed on ${v.on ?? "another node"}: no room at home`,
+    stayed: `Stayed on ${v.on ?? "another node"}`,
     failed: v.note ? `Problem: ${v.note}` : "Problem",
   })[v.state] ?? v.state;
 }
@@ -1508,13 +1508,14 @@ function drawRun(run) {
   const what = run.kind === "update" ? (run.nodes.length === 1 ? `Updating ${run.nodes[0].name}` : `Updating ${run.nodes.length} nodes`) : `Restarting ${run.nodes[0]?.name ?? ""}`;
   const title = run.running ? what : run.error ? `${what}: stopped` : run.kind === "update" ? "Updated" : `${run.nodes[0]?.name ?? ""} restarted`;
   const kept = run.nodes.flatMap((n) => n.keptConfig.map((f) => `${n.name}: ${f}`));
-  const stayed = run.nodes.flatMap((n) => n.vms.filter((v) => v.state === "stayed").map((v) => v.name));
+  const stayed = run.nodes.flatMap((n) => n.vms.filter((v) => v.state === "stayed"));
   const nodeBlock = (n, i) => `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${n.note ? `<small>${esc(n.note)}</small>` : ""}</div><span class="state"><span class="dot ${n.phase === "done" ? "running" : n.phase === "failed" ? "warn" : i === run.current && run.running ? "busy" : ""}"></span>${esc(PHASE_WORDS[n.phase] ?? n.phase)}</span></div>
     ${n.restart ? n.vms.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state"><span class="dot ${vmDot(v)}"></span>${esc(vmWords(v))}</span></div>`).join("") : ""}</div>`;
   dialog(`<h3>${esc(title)}</h3>
     ${run.error ? `<p class="loginerr">${esc(run.error)}</p>` : run.running ? `<p>Started by ${esc(run.by)}. It runs on the BossMox server, so this window can be closed; open it again from the desktop.</p>` : `<p>Everything that was planned is done.</p>`}
     ${run.nodes.map(nodeBlock).join("")}
-    ${stayed.length ? `<p class="meta">${esc(stayed.join(", "))} stayed where ${stayed.length === 1 ? "it is" : "they are"}, running: ${stayed.length === 1 ? "its" : "their"} home didn't have room. Move everything back on the node's Overview tries again later.</p>` : ""}
+    ${stayed.map((v) => `<p class="meta">${esc(v.name)} stays on ${esc(v.on ?? "another node")}, running: ${esc((v.note ?? "its home had no room").replace(/\.$/, ""))}.</p>`).join("")}
+    ${stayed.length ? `<p class="meta">Move everything back on a node's Overview tries again later.</p>` : ""}
     ${kept.length ? `<p class="meta">Config files you'd changed kept your version. The new one from the update sits beside each as .dpkg-dist: ${esc(kept.join(", "))}.</p>` : ""}
     <div class="row-end">${run.running ? `<button class="btn" data-runstop="1">Stop after this step</button>` : ""}<button class="btn" data-runclose="1">Close</button></div>`);
 }

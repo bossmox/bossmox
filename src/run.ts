@@ -86,13 +86,16 @@ export interface RunDeps {
   /** Why the cluster or this node isn't ready right now, or null. */
   notReady(node: string): Promise<string | null>;
   shutdown(node: string, vm: RunVm): Promise<void>;
-  /** Moves these VMs off the node, in batches. Resolves with where each went, or rejects with the reason. */
+  /**
+   * Moves these VMs off the node, in batches. Resolves with where each one is now that's no longer on the node,
+   * whoever moved it, or rejects with the reason. One missing from the answer is still on the node.
+   */
   moveOff(node: string, ids: number[]): Promise<Record<number, string>>;
   install(node: string): Promise<InstallResult>;
   restart(node: string): Promise<void>;
   start(node: string, vm: RunVm): Promise<void>;
-  /** Brings this node's moved VMs home. Resolves with the ones that stayed away, and why. */
-  moveHome(node: string): Promise<Record<number, string>>;
+  /** Brings this node's moved VMs home. Resolves with each of `ids` that isn't home afterwards: where it is, and why. */
+  moveHome(node: string, ids: number[]): Promise<Record<number, { on: string; why: string }>>;
 }
 
 const READY_WAIT_MS = 3 * 60 * 1000;
@@ -149,8 +152,14 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
                 if (went[vm.id]) {
                   vm.state = "moved";
                   vm.on = went[vm.id];
-                } else vm.state = "failed";
+                } else {
+                  vm.state = "failed";
+                  vm.note = `still on ${node.name}`;
+                }
               }
+              // Never restart a node with a VM on it that was meant to be moved off.
+              const left = moving.filter((v) => v.state === "failed");
+              if (left.length) throw new Error(`${left.map((v) => v.name).join(", ")} didn't move off ${node.name}, so it wasn't updated or restarted.`);
             } catch (err) {
               for (const vm of moving) if (vm.state === "moving") vm.state = "failed";
               throw err;
@@ -184,11 +193,14 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
           });
           if (node.vms.some((v) => v.state === "moved")) {
             await step(run, deps, node, "returning", async () => {
-              const stayed = await deps.moveHome(node.name);
-              for (const vm of node.vms.filter((v) => v.state === "moved")) {
-                if (stayed[vm.id] !== undefined) {
+              const moved = node.vms.filter((v) => v.state === "moved");
+              const stayed = await deps.moveHome(node.name, moved.map((v) => v.id));
+              for (const vm of moved) {
+                const away = stayed[vm.id];
+                if (away) {
                   vm.state = "stayed";
-                  vm.note = stayed[vm.id];
+                  vm.on = away.on;
+                  vm.note = away.why;
                 } else {
                   vm.state = "home";
                   delete vm.on;
