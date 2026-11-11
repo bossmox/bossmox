@@ -1510,7 +1510,7 @@ function drawRun(run) {
   const kept = run.nodes.flatMap((n) => n.keptConfig.map((f) => `${n.name}: ${f}`));
   const stayed = run.nodes.flatMap((n) => n.vms.filter((v) => v.state === "stayed"));
   const nodeBlock = (n, i) => `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${n.note ? `<small>${esc(n.note)}</small>` : ""}</div><span class="state"><span class="dot ${n.phase === "done" ? "running" : n.phase === "failed" ? "warn" : i === run.current && run.running ? "busy" : ""}"></span>${esc(PHASE_WORDS[n.phase] ?? n.phase)}</span></div>
-    ${n.restart ? n.vms.map((v) => `<div class="snap"><div>${esc(v.name)}</div><span class="state"><span class="dot ${vmDot(v)}"></span>${esc(vmWords(v))}</span></div>`).join("") : ""}</div>`;
+    ${n.restart ? n.vms.map((v) => `<div class="snap"><div>${esc(v.name)}${v.note && !["failed", "stayed"].includes(v.state) ? `<small>${esc(v.note)}</small>` : ""}</div><span class="state"><span class="dot ${vmDot(v)}"></span>${esc(vmWords(v))}</span></div>`).join("") : ""}</div>`;
   dialog(`<h3>${esc(title)}</h3>
     ${run.error ? `<p class="loginerr">${esc(run.error)}</p>` : run.running ? `<p>Started by ${esc(run.by)}. It runs on the BossMox server, so this window can be closed; open it again from the desktop.</p>` : `<p>Everything that was planned is done.</p>`}
     ${run.nodes.map(nodeBlock).join("")}

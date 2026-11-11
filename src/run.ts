@@ -85,6 +85,8 @@ export interface RunDeps {
   wait(ms: number): Promise<void>;
   /** Why the cluster or this node isn't ready right now, or null. */
   notReady(node: string): Promise<string | null>;
+  /** The guests running on the node right now. */
+  runningOn(node: string): Promise<{ id: number; name: string; type: "qemu" | "lxc" }[]>;
   shutdown(node: string, vm: RunVm): Promise<void>;
   /**
    * Moves these VMs off the node, in batches. Resolves with where each one is now that's no longer on the node,
@@ -127,9 +129,18 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
             if (Date.now() > until) throw new Error(why);
           }
         });
+        // The list made at the start is out of date by now: a guest that stayed away from an earlier node may be
+        // running here. Live 2026-11-11 one did, and went down with the restart. Anything new here is moved off.
+        const here = node.restart ? await deps.runningOn(node.name) : [];
+        for (const g of here) {
+          if (!node.vms.some((v) => v.id === g.id)) node.vms.push({ ...g, choice: "move", state: "waiting", note: "arrived during the run" });
+        }
+        const running = new Set(here.map((g) => g.id));
+        for (const v of node.vms) if (v.choice === "shutdown" && v.state === "waiting" && !running.has(v.id)) v.note = "wasn't running here at its turn";
         if (node.restart && node.vms.length) {
           await step(run, deps, node, "emptying", async () => {
-            for (const vm of node.vms.filter((v) => v.choice === "shutdown")) {
+            // One chosen to shut down that isn't running here any more is left alone.
+            for (const vm of node.vms.filter((v) => v.choice === "shutdown" && running.has(v.id))) {
               vm.state = "stopping";
               deps.save(run);
               try {

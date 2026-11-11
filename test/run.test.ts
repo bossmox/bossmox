@@ -9,7 +9,7 @@ const node = (name: string, vms: RunVm[], more: Partial<RunNode> = {}): RunNode 
 const run = (nodes: RunNode[]): Run => ({ id: "r1", kind: "update", by: "root@pam", startedAt: 1, finishedAt: null, running: false, stop: null, error: null, current: 0, nodes });
 
 /** A pretend cluster that logs every call in order. */
-function fake(opts: Partial<RunDeps> & { stopAfter?: string } = {}) {
+function fake(opts: Partial<RunDeps> & { stopAfter?: string; at?: Run } = {}) {
   const log: string[] = [];
   let stop: string | null = null;
   const deps: RunDeps = {
@@ -17,6 +17,8 @@ function fake(opts: Partial<RunDeps> & { stopAfter?: string } = {}) {
     save: () => {},
     wait: async () => {},
     notReady: async (n) => { log.push(`check ${n}`); return null; },
+    // By default each node runs exactly what the run listed for it.
+    runningOn: async (n) => (opts.at?.nodes.find((x) => x.name === n)?.vms ?? []).map(({ id, name, type }) => ({ id, name, type })),
     shutdown: async (n, v) => { log.push(`shutdown ${v.name}`); },
     moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return Object.fromEntries(ids.map((id) => [id, "elsewhere"])); },
     install: async (n) => { log.push(`install ${n}`); return { exitCode: 0, keptConfig: [], left: 0 }; },
@@ -30,7 +32,7 @@ function fake(opts: Partial<RunDeps> & { stopAfter?: string } = {}) {
 
 test("a node: shut down what was chosen, move the rest, install, restart, start, bring home; then the next node", async () => {
   const r = run([node("n1", [vm(1, "web"), vm(2, "app", "shutdown"), vm(3, "db")]), node("n2", [vm(4, "files")])]);
-  const { deps, log } = fake();
+  const { deps, log } = fake({ at: r });
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "shutdown app", "moveOff n1 1,3", "install n1", "restart n1", "start app", "home n1", "check n2", "moveOff n2 4", "install n2", "restart n2", "home n2"]);
   assert.equal(r.error, null);
@@ -41,7 +43,7 @@ test("a node: shut down what was chosen, move the rest, install, restart, start,
 
 test("no kernel means no restart and nothing moves", async () => {
   const r = run([node("n1", [vm(1, "web")], { restart: false })]);
-  const { deps, log } = fake();
+  const { deps, log } = fake({ at: r });
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "install n1"]);
   assert.equal(r.nodes[0]?.vms[0]?.state, "waiting", "it stayed where it was, running");
@@ -49,14 +51,14 @@ test("no kernel means no restart and nothing moves", async () => {
 
 test("a restart run doesn't install", async () => {
   const r = run([node("n1", [vm(1, "web")], { install: false })]);
-  const { deps, log } = fake();
+  const { deps, log } = fake({ at: r });
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "moveOff n1 1", "restart n1", "home n1"]);
 });
 
 test("a failed install stops before the restart, leaves later nodes untouched, and says why", async () => {
   const r = run([node("n1", [vm(1, "web")]), node("n2", [])]);
-  const { deps, log } = fake({ install: async (n) => { log.push(`install ${n}`); return { exitCode: 100, keptConfig: [], left: 2 }; } });
+  const { deps, log } = fake({ at: r, install: async (n) => { log.push(`install ${n}`); return { exitCode: 100, keptConfig: [], left: 2 }; } });
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "moveOff n1 1", "install n1"]);
   assert.match(r.error ?? "", /n1: The install on n1 ended with an error \(apt exit code 100\), so it wasn't restarted/);
@@ -66,7 +68,7 @@ test("a failed install stops before the restart, leaves later nodes untouched, a
 
 test("updates left after a clean install also stop the restart", async () => {
   const r = run([node("n1", [])]);
-  const { deps } = fake({ install: async () => ({ exitCode: 0, keptConfig: ["/etc/lvm/lvm.conf"], left: 1 }) });
+  const { deps } = fake({ at: r, install: async () => ({ exitCode: 0, keptConfig: ["/etc/lvm/lvm.conf"], left: 1 }) });
   await drive(r, deps);
   assert.match(r.error ?? "", /1 update is still waiting on n1/);
   assert.deepEqual(r.nodes[0]?.keptConfig, ["/etc/lvm/lvm.conf"]);
@@ -74,7 +76,7 @@ test("updates left after a clean install also stop the restart", async () => {
 
 test("Stop finishes the step under way and starts nothing new", async () => {
   const r = run([node("n1", [vm(1, "web")]), node("n2", [vm(2, "db")])]);
-  const { deps, log } = fake({ stopAfter: "restart n1" });
+  const { deps, log } = fake({ at: r, stopAfter: "restart n1" });
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "moveOff n1 1", "install n1", "restart n1"], "the restart finished; starting and coming home didn't begin");
   assert.match(r.error ?? "", /Stopped: root@pam pressed Stop\. n1 stopped after restarting/);
@@ -83,7 +85,7 @@ test("Stop finishes the step under way and starts nothing new", async () => {
 
 test("a VM that won't start doesn't stop the run, but the node says so", async () => {
   const r = run([node("n1", [vm(1, "app", "shutdown")]), node("n2", [])]);
-  const { deps, log } = fake({ start: async () => { throw new Error("timeout"); } });
+  const { deps, log } = fake({ at: r, start: async () => { throw new Error("timeout"); } });
   await drive(r, deps);
   assert.equal(r.error, null);
   assert.equal(r.nodes[0]?.vms[0]?.state, "failed");
@@ -94,7 +96,7 @@ test("a VM that won't start doesn't stop the run, but the node says so", async (
 test("guests that didn't fit at home are shown as stayed, with why", async () => {
   const r = run([node("n1", [vm(1, "web"), vm(2, "db")])]);
   let asked: number[] = [];
-  const { deps } = fake({ moveHome: async (_n, ids) => { asked = ids; return { 2: { on: "n2", why: "db (8 GB memory) has nowhere to go" } }; } });
+  const { deps } = fake({ at: r, moveHome: async (_n, ids) => { asked = ids; return { 2: { on: "n2", why: "db (8 GB memory) has nowhere to go" } }; } });
   await drive(r, deps);
   assert.deepEqual(asked, [1, 2]);
   assert.deepEqual(r.nodes[0]?.vms.map((v) => `${v.name}:${v.state}`), ["web:home", "db:stayed"]);
@@ -105,7 +107,7 @@ test("guests that didn't fit at home are shown as stayed, with why", async () =>
 test("a VM chosen to move that's still on the node stops the run before the install", async () => {
   // Live 2026-11-11: an empty move plan came back and the run went on to install and restart the node.
   const r = run([node("n1", [vm(1, "web"), vm(2, "db")]), node("n2", [])]);
-  const { deps, log } = fake({ moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { 1: "n2" }; } });
+  const { deps, log } = fake({ at: r, moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { 1: "n2" }; } });
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "moveOff n1 1,2"], "no install, no restart, no next node");
   assert.match(r.error ?? "", /db didn't move off n1, so it wasn't updated or restarted/);
@@ -116,6 +118,7 @@ test("a VM already gone from the node (moved home elsewhere earlier in the run) 
   // Live 2026-11-11: an old record brought cache home to n1 before n2's turn; n2 then had nothing to move.
   const r = run([node("n2", [vm(3, "cache")])]);
   const { deps, log } = fake({
+    runningOn: async () => [],
     moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { 3: "n1" }; },
     moveHome: async (n, ids) => { log.push(`home ${n} ${ids.join(",")}`); return { 3: { on: "n1", why: "BossMox's record has another node as its home" } }; },
   });
@@ -127,13 +130,30 @@ test("a VM already gone from the node (moved home elsewhere earlier in the run) 
   assert.equal(r.nodes[0]?.vms[0]?.on, "n1");
 });
 
+test("a guest that arrived on a later node during the run is moved off it before that node restarts", async () => {
+  // Live 2026-11-11: web stayed on n3 after n1's turn; n3 had been listed as running nothing and restarted with web on it.
+  const r = run([node("n1", [vm(1, "web")]), node("n3", [])]);
+  const { deps, log } = fake({ at: r, runningOn: async (n) => (n === "n3" ? [{ id: 1, name: "web", type: "qemu" }] : [{ id: 1, name: "web", type: "qemu" }]) });
+  await drive(r, deps);
+  assert.deepEqual(log, ["check n1", "moveOff n1 1", "install n1", "restart n1", "home n1", "check n3", "moveOff n3 1", "install n3", "restart n3", "home n3"]);
+  assert.deepEqual(r.nodes[1]?.vms.map((v) => `${v.name}:${v.choice}:${v.note}`), ["web:move:arrived during the run"]);
+});
+
+test("a VM chosen to shut down that isn't running there at its turn is left alone", async () => {
+  const r = run([node("n1", [vm(2, "app", "shutdown")])]);
+  const { deps, log } = fake({ at: r, runningOn: async () => [] });
+  await drive(r, deps);
+  assert.deepEqual(log, ["check n1", "install n1", "restart n1"]);
+  assert.equal(r.nodes[0]?.vms[0]?.note, "wasn't running here at its turn");
+});
+
 test("a node that isn't ready is waited for, then given up on with the reason", async () => {
   const r = run([node("n1", [])]);
   const real = Date.now;
   let now = 0;
   Date.now = () => now;
   try {
-    const { deps } = fake({ notReady: async () => "n1 is busy: Backup on 101.", wait: async (ms) => { now += ms; } });
+    const { deps } = fake({ at: r, notReady: async () => "n1 is busy: Backup on 101.", wait: async (ms) => { now += ms; } });
     await drive(r, deps);
   } finally {
     Date.now = real;

@@ -512,6 +512,9 @@ function runDeps(session: Session, run: Run): RunDeps {
       const busy = buildRebootPlan(active, { available: false }).busy;
       return busy.length ? `${node} is busy: ${busy.join(", ")}.` : null;
     },
+    runningOn: async (node) => (await pve.get<RawResource[]>("/cluster/resources?type=vm", t()))
+      .filter((r) => r.node === node && r.template !== 1 && (r.status === "running" || r.status === "paused"))
+      .map((r) => ({ id: Number(r.vmid), name: r.name ?? `VM ${r.vmid}`, type: r.type === "lxc" ? "lxc" as const : "qemu" as const })),
     shutdown: async (node, vm) => {
       const upid = await pve.post<string>(`/nodes/${enc(node)}/${vm.type}/${vm.id}/status/shutdown`, session, { timeout: "180", forceStop: "1" });
       await waitTask(node, upid, t(), 5 * 60 * 1000);
