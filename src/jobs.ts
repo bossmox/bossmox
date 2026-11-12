@@ -37,6 +37,9 @@ function ownMacs(): Set<string> {
   return new Set(Object.values(networkInterfaces()).flat().map((i) => i?.mac?.toLowerCase() ?? "").filter((m) => m && m !== "00:00:00:00:00:00"));
 }
 
+/** How long a sign-in must still have left to start a run: long enough for a slow cluster update. */
+export const RUN_NEEDS_MS = 4 * 60 * 60 * 1000;
+
 export function createJobs(ctx: JobsContext) {
   const { pve } = ctx;
   const enc = encodeURIComponent;
@@ -426,6 +429,9 @@ export function createJobs(ctx: JobsContext) {
   /** Starts a run with the person's choices. Everything is checked again here; the page's copy is only a request. */
   async function startRun(session: Session, kind: "update" | "restart", server: string, confirmed: boolean, choices: Record<string, unknown>): Promise<string> {
     if (!confirmed) throw new AuthError(400, "It wasn't confirmed.");
+    // A run stops when the sign-in that started it ends. One that won't last a long update is refused up front (#59).
+    const left = session.expiresAt - Date.now();
+    if (left < RUN_NEEDS_MS) throw new AuthError(400, `Your sign-in ends in ${Math.max(1, Math.round(left / 60000))} minutes, and a run stops when it does. Sign out and in again first, then start it.`);
     if (currentRun?.running || runState.starting) throw new AuthError(409, "A run is already going. Open it to follow or stop it.");
     if (moveRecord.job?.running || moveJob.starting) throw new AuthError(409, "BossMox is moving guests right now. Wait for that to finish.");
     runState.starting = true;

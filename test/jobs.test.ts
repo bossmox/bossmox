@@ -90,7 +90,7 @@ function cluster(opts: { nodes?: string[]; guests?: Guest[]; quorate?: boolean; 
     done: () => rmSync(dir, { recursive: true, force: true }),
   };
 }
-const person = { username: "root@pam", ticket: "t" } as unknown as Session;
+const person = { username: "root@pam", ticket: "t", expiresAt: Date.now() + 12 * 60 * 60 * 1000 } as unknown as Session;
 
 test("the run planner lists each running guest on the node with where it would go", async () => {
   const c = cluster();
@@ -187,6 +187,17 @@ test("a run that's refused never ejects the discs chosen to come out (#48)", asy
   try {
     await assert.rejects(createJobs(c.ctx).startRun(person, "restart", "n1", true, { 101: "eject" }), /Choose Shut down for it, or lower Keep free/);
     assert.deepEqual(c.writes, [], "nothing was ejected");
+  } finally {
+    c.done();
+  }
+});
+
+test("a run isn't started on a sign-in that would end before a long update could finish (#59)", async () => {
+  const c = cluster();
+  try {
+    const late = { ...person, expiresAt: Date.now() + 30 * 60 * 1000 } as Session;
+    await assert.rejects(c.jobs.startRun(late, "restart", "n1", true, {}), /Your sign-in ends in 30 minutes/);
+    assert.equal(c.writes.length, 0);
   } finally {
     c.done();
   }
