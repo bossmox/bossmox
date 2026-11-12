@@ -11,8 +11,10 @@ The one-line install puts BossMox in a small VM on a Proxmox node, which is the 
 ```sh
 docker build -t bossmox .
 docker run --rm --env-file .env -e PVE_CA_FILE=/ca.pem -e BOSSMOX_ALLOW_HTTP=1 \
-  -v "$PWD/pve-root-ca.pem:/ca.pem:ro" -p 127.0.0.1:8080:8080 bossmox
+  -v "$PWD/pve-root-ca.pem:/ca.pem:ro" -v bossmox-state:/var/lib/bossmox -p 127.0.0.1:8080:8080 bossmox
 ```
+
+The `bossmox-state` volume keeps settings, preferences and the record of runs and moved guests when the container is replaced.
 
 Then open http://localhost:8080.
 
