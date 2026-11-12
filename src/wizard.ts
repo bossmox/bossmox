@@ -69,6 +69,8 @@ export class Wizard {
   private csrf = "";
   private user = "";
   private password = "";
+  /** Goes up each time a sign-in is dropped, so one still waiting on Proxmox can tell it's stale. */
+  private round = 0;
   private nodeName = "";
   private clusterName = "";
   private nodes: NodeView[] = [];
@@ -144,7 +146,10 @@ export class Wizard {
   async signIn(address: string, fingerprint: string, user: string, realm: string, password: string) {
     if (!/^[\w.@+-]{1,64}$/.test(user) || !/^[\w.-]{1,32}$/.test(realm) || !password) throw new WizardError(400, "Enter a username and password.");
     const to = this.pin(address, fingerprint);
+    // A code entered while this sign-in waits on Proxmox starts setup over; this one mustn't land after it (review 2, S5).
+    const round = this.round;
     const login = await this.login(to, `${user}@${realm}`, password);
+    if (round !== this.round) throw new WizardError(409, "Setup started over while you were signing in. Sign in again.");
     if (login.NeedTFA) throw new WizardError(400, "This account uses a one-time code, which setup can't accept yet. Use root for setup.");
     this.first = to;
     this.ticket = login.ticket;
@@ -155,6 +160,7 @@ export class Wizard {
     const status = await this.out.call<{ type?: string; name?: string; local?: number }[]>(to, "GET", "/cluster/status", this.auth()).catch(() => []);
     const local = status.find((e) => e.type === "node" && e.local === 1)?.name;
     const nodes = local ? [] : await this.out.call<{ node: string }[]>(to, "GET", "/nodes", this.auth());
+    if (round !== this.round) throw new WizardError(409, "Setup started over while you were signing in. Sign in again.");
     this.nodeName = local ?? nodes[0]?.node ?? "";
     return this.state();
   }
@@ -168,6 +174,7 @@ export class Wizard {
 
   /** Everything a sign-in leaves behind, the root password first. The one place it's all forgotten. */
   private dropSignIn() {
+    this.round += 1;
     this.password = "";
     this.ticket = "";
     this.csrf = "";

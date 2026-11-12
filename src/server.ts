@@ -17,7 +17,7 @@ import { networkInterfaces } from "node:os";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { plainError } from "./plain-errors.js";
 import { buildHealth, type Leftover } from "./health.js";
-import { canChangeCluster, preferencesPath, readPreferences, scheduleWarnings, type Preferences } from "./preferences.js";
+import { canChangeCluster, preferencesPath, seesAllGuestsFrom, readPreferences, scheduleWarnings, type Preferences } from "./preferences.js";
 import { settingsPath } from "./settings.js";
 import { movesPath, } from "./moves.js";
 import { createJobs } from "./jobs.js";
@@ -516,8 +516,9 @@ async function viewerOf(session: Session, startedBy: string | undefined) {
 
 /** Whether this account can see every guest. Without it, a guest it can't see looks like a deleted one. */
 async function seesAllGuests(ticket: string): Promise<boolean> {
-  const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2Fvms", ticket).catch((): Record<string, Record<string, number>> => ({}));
-  return perms["/vms"]?.["VM.Audit"] === 1;
+  // Every path, not only /vms: a NoAccess further down hides guests (review 2, S1).
+  const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions", ticket).catch((): Record<string, Record<string, number>> => ({}));
+  return seesAllGuestsFrom(perms);
 }
 
 const guestRefs = (data: Overview): GuestRefs[] => data.vms.map((v) => ({ vmid: v.id, name: v.name, known: v.configLoaded, refs: v.refs }));

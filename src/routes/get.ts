@@ -214,8 +214,10 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
         // Only what's still where BossMox left it can go home; the rest was moved by someone since.
         const data = await overview(session);
         const where = new Map(data.vms.map((v) => [v.id, v.node]));
+        // Another person's username only goes to someone who can change the whole cluster (review 2, S6).
+        const admin = (await viewerOf(session, undefined)).full;
         const away = Object.fromEntries(Object.entries(jobs.moveRecord.away)
-          .map(([node, a]) => [node, { by: a.by, at: a.at, guests: stillAway(jobs.moveRecord, node, where) }] as const)
+          .map(([node, a]) => [node, { by: admin || a.by === session.username ? a.by : "Someone else", at: a.at, guests: stillAway(jobs.moveRecord, node, where) }] as const)
           .filter(([, a]) => a.guests.length > 0));
         return json(res, 200, { away, job: jobFor(jobs.moveRecord.job, await viewerOf(session, jobs.moveRecord.job?.by)) });
     },

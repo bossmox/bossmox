@@ -212,7 +212,7 @@ test("a failed install starts again what was shut down; a failed restart doesn't
 
 test("someone who can't see the whole cluster sees only their own nodes and guests of a run (review S6)", () => {
   const run: Run = {
-    id: "r1", kind: "update", by: "root@pam", startedAt: 1, finishedAt: null, running: true, stop: null, current: 0,
+    id: "r1", kind: "update", by: "root@pam", startedAt: 1, finishedAt: null, running: true, stop: "alice@pve pressed Stop.", current: 0,
     error: "secret-vm didn't move off n2, so it wasn't updated or restarted.",
     nodes: [
       { name: "n1", install: true, restart: true, updates: 3, phase: "emptying", note: "secret-vm arrived", keptConfig: [], vms: [{ id: 100, name: "mine", type: "qemu", choice: "move", state: "moving" }, { id: 200, name: "secret-vm", type: "qemu", choice: "move", state: "moving" }] },
@@ -225,6 +225,7 @@ test("someone who can't see the whole cluster sees only their own nodes and gues
   assert.deepEqual(seen.nodes[0]!.vms.map((v) => v.name), ["mine"]);
   assert.equal(JSON.stringify(seen).includes("secret-vm"), false, "no hidden guest's name anywhere");
   assert.equal(JSON.stringify(seen).includes("root@pam"), false, "not who started it");
+  assert.equal(JSON.stringify(seen).includes("alice@pve"), false, "not who pressed Stop (review 2, S6)");
   assert.equal(runFor(run, { ...limited, full: true }), run, "someone who can change the cluster sees all of it");
   assert.equal(runFor(null, limited), null);
 });

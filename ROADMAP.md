@@ -2,7 +2,9 @@
 
 What's coming to BossMox, in plain words. Each theme is a [GitHub milestone](https://github.com/bossmox/bossmox/milestones), and each item is an issue you can follow or comment on. There are no dates: a release ships when its whole theme is done and tested on a real cluster.
 
-## Next: [Cluster resilience](https://github.com/bossmox/bossmox/milestone/1) (0.1.10)
+Version numbers: fixes to a released version bump the last number (0.2.0 to 0.2.1); new features bump the middle one (0.1.x to 0.2.0). 1.0 is the first release called stable.
+
+## Next: [Cluster resilience](https://github.com/bossmox/bossmox/milestone/1) (0.2.0)
 
 Keeping a cluster running through a failure, and hearing about it when something goes wrong.
 

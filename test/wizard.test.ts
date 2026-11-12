@@ -443,3 +443,12 @@ test("entering the code again signs the last person out and drops their root pas
     await assert.rejects(l.wizard.finish("10.0.0.9"), /Sign in first/, after);
   }
 });
+
+test("a code entered while a sign-in waits on Proxmox stops that sign-in landing (review 2, S5)", async () => {
+  const l = lab();
+  l.wizard.enterCode(CODE);
+  const first = l.wizard.signIn("10.0.0.1:8006", FP(1), "root", "pam", "right");
+  l.wizard.enterCode(CODE);
+  await assert.rejects(first, status(409));
+  assert.equal(JSON.stringify(l.wizard).includes("right"), false, "the first person's password isn't kept");
+});
