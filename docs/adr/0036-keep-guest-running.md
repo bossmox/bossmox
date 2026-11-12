@@ -1,6 +1,6 @@
 # 0036: Keep this guest running (HA)
 
-**Date:** 2026-11-12. **Status:** proposed (Rocky reads before any code). Issue #32, 0.2.0 piece 2.
+**Date:** 2026-11-12. **Status:** accepted 2026-11-12 with Rocky's answers: both places, and the fencing explanation, aimed at the restart that wasn't needed. Issue #32, 0.2.0 piece 2.
 
 ## Context
 
@@ -27,7 +27,16 @@ First, every requirement is checked, and each one that fails is said in plain wo
 - **Nothing tied to one node:** from Proxmox's own migrate precheck (`local_resources`, `local_disks`): passed-through devices, USB, local disks.
 - **Room:** at least one other node could take it, by the same placement BossMox uses for moves.
 
-Then the confirmation names the guest. **The first time on a cluster, it also says what fencing means:** "From now on, a node that loses touch with the others for about a minute restarts itself, so a guest never runs twice. A backup heartbeat network (Settings) makes that much less likely." Turning it on sends `state: started` and nothing else: no HA groups (8.x) or rules (9.x), so Proxmox's defaults pick where the guest goes.
+Then the confirmation names the guest. **The first time on a cluster, it also explains fencing, aimed at what went wrong on 2026-11-10** (Rocky: "the problem we ran into though was that the server restarted on another host when it didn't need to"). There, nothing had failed: live moves filled the heartbeat's only network, node1 lost touch, the watchdog reset it, and eight healthy VMs were hard-restarted elsewhere (ADR 0028). So the window says:
+
+- "From now on, a node that loses touch with the others for about a minute restarts itself, and HA starts its protected guests on another node. That's right when a node has really failed. It's wrong when the node was fine and only its heartbeat network was busy or had a hiccup: then guests that were running fine get restarted."
+- Then what this cluster has, checked live, each with where to fix it:
+  - **The heartbeat has one network:** "If that network has a hiccup, HA can restart guests that didn't need it. Give it a backup network first (Settings → Redundancy)." When the cluster has no second port, it says that instead (ADR 0035).
+  - **Moves share the heartbeat's only network:** "Moves can fill it, which is what restarted guests that didn't need it on 2026-11-10. Health check has the fix." (ADR 0028.)
+  - Neither: "The heartbeat has a backup network, and moves don't share its only one. That's what keeps HA from restarting guests that didn't need it."
+- These are warnings, not blocks: it's the person's cluster. The window still leads with them, above the Turn on button.
+
+Turning it on sends `state: started` and nothing else: no HA groups (8.x) or rules (9.x), so Proxmox's defaults pick where the guest goes.
 
 ### Turning it off
 
@@ -47,7 +56,7 @@ The Migrate policy's Health check item gets one more line: "Before shutting ever
 
 ## Tests
 
-- **Unit:** the requirement checks (votes, disks, local resources, room); the error-state item; the fencing line only the first time.
+- **Unit:** the requirement checks (votes, disks, local resources, room); the error-state item; the fencing explanation only the first time, with the right warning for one heartbeat network, moves on it, and neither.
 - **Lab, bmx8:**
   1. Protect web (101) from its page. HA reports it started.
   2. Power node3 (web's node) off hard from Maverick (`qm stop 905`). HA restarts web on another node; measure how long. Start 905 again.
@@ -60,7 +69,7 @@ The Migrate policy's Health check item gets one more line: "Before shutting ever
 
 HA groups and rules (which nodes a guest prefers); max restart and relocate counts; protecting many guests in one go; the shutdown policy itself (ADR 0031 has it).
 
-## Open for Rocky
+## Decided (Rocky, 2026-11-12)
 
-1. Both places, the guest's page and the list in Settings → Redundancy? Or only one?
-2. The fencing explanation the first time HA is turned on: right to say it, or too much?
+- Both places: the switch on the guest's page and the list in Settings → Redundancy.
+- The fencing explanation the first time, aimed at the restart that wasn't needed, with the cluster's own heartbeat and move-network state checked live.
