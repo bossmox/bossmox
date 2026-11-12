@@ -2,9 +2,10 @@
  * Guests moved off a node, and the job that moves them (ADR 0025). The record lives on the BossMox server beside
  * its settings, so any browser and any person can see what's away and send it home.
  */
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, } from "node:fs";
 import path from "node:path";
 import type { Move, MovePlan } from "./placement.js";
+import { writeJsonAtomic } from "./json-file.js";
 
 export interface AwayGuest {
   id: number;
@@ -72,11 +73,7 @@ export function readMoves(file: string): MoveRecord {
 
 /** Written to a temporary file first, so a power cut can't leave half a file. */
 export function writeMoves(file: string, record: MoveRecord) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.new`;
-  writeFileSync(temp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o640 });
-  chmodSync(temp, 0o640);
-  renameSync(temp, file);
+  writeJsonAtomic(file, record);
 }
 
 export interface TaskEnd {
@@ -140,7 +137,7 @@ async function moveOne(deps: MoveDeps, move: Move, from: string): Promise<void> 
 const plainError = (err: unknown) => (err instanceof Error && err.message ? err.message : "BossMox lost contact with Proxmox.");
 
 /**
- * Moves the given guests off `node`, one at a time. Each move is planned again with fresh numbers first, so a node
+ * Moves the given guests off `node`, a batch at a time. Each move is planned again with fresh numbers first, so a node
  * that filled up meanwhile isn't used. Every finished move is written to the record at once.
  */
 export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: string, by: string, first: Move[], batch = BATCH): Promise<void> {

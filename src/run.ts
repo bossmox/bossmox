@@ -2,8 +2,9 @@
  * An update or restart run, driven by the BossMox server (ADR 0027). Kept in runs.json beside the settings, so any
  * browser can follow it and closing the page changes nothing. One node at a time; every step is saved as it ends.
  */
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, } from "node:fs";
 import path from "node:path";
+import { writeJsonAtomic } from "./json-file.js";
 
 export type Choice = "move" | "shutdown";
 export type VmState = "waiting" | "moving" | "moved" | "stopping" | "off" | "starting" | "started" | "home" | "stayed" | "failed";
@@ -88,11 +89,7 @@ export function readRun(file: string): Run | null {
 }
 
 export function writeRun(file: string, run: Run) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.new`;
-  writeFileSync(temp, `${JSON.stringify(run, null, 2)}\n`, { mode: 0o640 });
-  chmodSync(temp, 0o640);
-  renameSync(temp, file);
+  writeJsonAtomic(file, run);
 }
 
 export interface InstallResult {

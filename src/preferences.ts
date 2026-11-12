@@ -2,8 +2,9 @@
  * Cluster-wide preferences (ADR 0018): choices that apply to everyone using this BossMox, in every browser, kept
  * on the server beside its settings file. Separate from settings.json, whose existence is what locks setup.
  */
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, } from "node:fs";
 import path from "node:path";
+import { writeJsonAtomic } from "./json-file.js";
 
 export interface Preferences {
   /** The guests are backed up by something Proxmox doesn't know about (Veeam, a script, another server). */
@@ -32,11 +33,7 @@ export function readPreferences(file: string): Preferences {
 
 /** Written to a temporary file first, so a power cut can't leave half a file. */
 export function writePreferences(file: string, prefs: Preferences) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.new`;
-  writeFileSync(temp, `${JSON.stringify(prefs, null, 2)}\n`, { mode: 0o640 });
-  chmodSync(temp, 0o640);
-  renameSync(temp, file);
+  writeJsonAtomic(file, prefs);
 }
 
 /** Guests to warn about for not being on a schedule: none when backups happen another way. */
