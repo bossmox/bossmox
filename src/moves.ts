@@ -225,8 +225,8 @@ export function stillAway(record: MoveRecord, node: string, where: Map<number, s
 
 /** How long a guest turned away only because its home was too busy waits before it's tried again. */
 export const BUSY_RETRY_MS = 15_000;
-/** A refusal that only says the node's processor is too busy. That passes by itself; memory and storage don't. */
-export const onlyBusy = (problems: string[]) => problems.length > 0 && problems.every((p) => /% busy, over \d+%/.test(p) && !/of memory left|left on /.test(p));
+/** A refusal only because the node's processor is too busy. That passes by itself; memory and storage don't. */
+export const onlyBusy = (plan: MovePlan) => (plan.unplaced ?? []).length > 0 && (plan.unplaced ?? []).every((u) => u.busyOnly === true);
 
 /**
  * Sends a node's guests home, up to `batch` at a time. Each is checked for room with the rest of its batch already
@@ -269,7 +269,7 @@ export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: stri
         const move = fresh.moves[0];
         // No room at home isn't a failure: it stays where it is, still recorded as away, and the rest carry on.
         if (fresh.problems.length || !move) {
-          if (retries > 0 && onlyBusy(fresh.problems)) later.push(g);
+          if (retries > 0 && onlyBusy(fresh)) later.push(g);
           jg.state = "stayed";
           jg.note = fresh.problems[0] ?? `${g.name} is no longer on ${g.to}.`;
           continue;

@@ -194,3 +194,13 @@ test("planning as if ejected empties disc drives, keeps cloud-init, and names th
   assert.equal(config.ide0, "local-lvm:vm-1-cloudinit,media=cdrom");
   assert.equal(config.scsi0, "local-lvm:vm-1-disk-0");
 });
+
+test("the planner marks a guest refused only for a busy processor, and not one short of memory (#64)", () => {
+  const room = (name: string, over: Partial<NodeRoom> = {}): NodeRoom => ({ name, version: "8.4.21", cpuModel: "x", cores: 4, cpuLoad: 0.2, memTotal: 32 * 1024 ** 3, memUsed: 4 * 1024 ** 3, storages: {}, ...over });
+  const g = guestNeed({ id: 1, name: "db", type: "qemu", mem: 2 * 1024 ** 3, cores: 2, cpuLoad: 1, config: {}, hasSnapshots: false, precondition: {}, sourceStorages: {} });
+  const busy = planMoves("n1", [g], [room("n1"), room("n2", { cpuLoad: 3.9 })], 10);
+  assert.equal(busy.unplaced?.[0]?.busyOnly, true);
+  assert.match(busy.problems[0] ?? "", /n2 would be \d+% busy, over 90%/);
+  const full = planMoves("n1", [g], [room("n1"), room("n2", { cpuLoad: 3.9 }), room("n3", { memUsed: 31 * 1024 ** 3 })], 10);
+  assert.equal(full.unplaced?.[0]?.busyOnly, undefined, "one node is short of memory, which won't pass by itself");
+});

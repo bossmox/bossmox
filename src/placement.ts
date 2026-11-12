@@ -61,7 +61,7 @@ export interface MovePlan {
   /** Guests stuck only because of a disc from the node's own storage: ejecting it lets them move. */
   ejectable?: Ejectable[];
   /** Each guest that couldn't be placed, with its reason, so a person can choose to shut it down instead. */
-  unplaced?: { id: number; why: string }[];
+  unplaced?: { id: number; why: string; busyOnly?: boolean }[];
   /** Where every guest that could be placed would go, even when others couldn't. */
   tentative?: Move[];
   /** One plain sentence per guest that can't be placed. Any at all means nothing moves. */
@@ -161,8 +161,14 @@ interface Projected extends NodeRoom {
   storages: Record<string, StorageRoom>;
 }
 
-/** Why this node can't take this guest, or null if it can. */
-function whyNot(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number): string | null {
+const BUSY = Symbol("busy");
+/** Why this node can't take this guest, or null if it can. `busy` marks a refusal for processor load alone. */
+function whyNot(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number): { why: string; busy?: true } | null {
+  const why = roomCheck(g, n, from, keepPct);
+  if (why === BUSY) return { why: `would be ${Math.round(((n.cpuLoad + g.cpuLoad) / Math.max(1, n.cores)) * 100)}% busy, over ${room(keepPct).cpuMaxPct}%`, busy: true };
+  return why ? { why } : null;
+}
+function roomCheck(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number): string | typeof BUSY | null {
   const ROOM = room(keepPct);
   if (g.refused[n.name]) return g.refused[n.name] as string;
   const missing = g.storages.filter((s) => !n.storages[s]);
@@ -174,7 +180,7 @@ function whyNot(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number): st
   const left = n.memTotal - n.memUsed - g.mem;
   if (left < keep) return `would have ${gbText(Math.max(0, left))} of memory left, under the ${ROOM.memFreePct}% it keeps free (${gbText(keep)})`;
   const load = n.cpuLoad + g.cpuLoad;
-  if (load > (n.cores * ROOM.cpuMaxPct) / 100) return `would be ${Math.round((load / Math.max(1, n.cores)) * 100)}% busy, over ${ROOM.cpuMaxPct}%`;
+  if (load > (n.cores * ROOM.cpuMaxPct) / 100) return BUSY;
   const need = new Map<string, number>();
   for (const d of g.localDisks) need.set(d.storage, (need.get(d.storage) ?? 0) + d.bytes);
   for (const [storage, bytes] of need) {
@@ -198,7 +204,7 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
   if (!others.length && guests.length) return { moves: [], problems: ["There's no other online node to move anything to."] };
   const moves: Move[] = [];
   const problems: string[] = [];
-  const unplaced: { id: number; why: string }[] = [];
+  const unplaced: { id: number; why: string; busyOnly?: boolean }[] = [];
   const ejectable = guests.filter((g) => g.stuck && g.discSlots.length).map((g) => ({ id: g.id, name: g.name, slots: g.discSlots }));
   const order = [...guests].sort((a, b) => b.mem - a.mem || a.name.localeCompare(b.name));
   for (const g of order) {
@@ -208,12 +214,14 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
       continue;
     }
     const reasons: string[] = [];
+    let busyOnly = true;
     let best: Projected | null = null;
     let bestLeft = -Infinity;
     for (const n of others) {
-      const why = whyNot(g, n, source, keepPct);
-      if (why) {
-        reasons.push(`${n.name} ${why}`);
+      const no = whyNot(g, n, source, keepPct);
+      if (no) {
+        reasons.push(`${n.name} ${no.why}`);
+        if (!no.busy) busyOnly = false;
         continue;
       }
       const left = n.memTotal - n.memUsed - g.mem;
@@ -224,7 +232,8 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
     }
     if (!best) {
       problems.push(`${g.name} (${gbText(g.mem)} memory) has nowhere to go: ${reasons.join("; ")}.`);
-      unplaced.push({ id: g.id, why: problems[problems.length - 1] as string });
+      // Only a busy processor in the way: that passes by itself, so a caller may wait and ask again.
+      unplaced.push({ id: g.id, why: problems[problems.length - 1] as string, ...(busyOnly && reasons.length ? { busyOnly: true } : {}) });
       continue;
     }
     best.memUsed += g.mem;

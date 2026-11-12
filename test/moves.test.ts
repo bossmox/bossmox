@@ -183,8 +183,8 @@ test("a guest turned away only because home is busy is tried again, and comes ho
   const c = cluster({ 1: "n2", 2: "n2", 3: "n3", 4: "n3" }, {
     plan: (_from, ids, only) => {
       const id = ids[0];
-      if (id === 3 && ++cTries === 1) return { moves: [], problems: [busy] };
-      if (id === 4) return { moves: [], problems: ["d (8 GB memory) has nowhere to go: n1 would have 1 GB of memory left, under the 10% it keeps free (0.3 GB)."] };
+      if (id === 3 && ++cTries === 1) return { moves: [], problems: [busy], unplaced: [{ id: 3, why: busy, busyOnly: true }] };
+      if (id === 4) return { moves: [], problems: ["d (8 GB memory) has nowhere to go: n1 would have 1 GB of memory left."], unplaced: [{ id: 4, why: "d has nowhere to go" }] };
       return { moves: [{ id: id as number, name: "x", type: "qemu", target: only ?? "n1" }], problems: [] };
     },
   });
@@ -203,11 +203,10 @@ test("a guest turned away only because home is busy is tried again, and comes ho
   assert.equal(again.job?.guests[0]?.state, "stayed");
 });
 
-test("a refusal is only 'busy' when processor is the whole reason", () => {
-  assert.equal(onlyBusy(["db (0.5 GB memory) has nowhere to go: n1 would be 92% busy, over 90%."]), true);
-  assert.equal(onlyBusy(["d has nowhere to go: n1 would have 1 GB of memory left, under the 10% it keeps free."]), false);
-  assert.equal(onlyBusy(["e has nowhere to go: n1 would have 2 GB left on local-lvm after copying 30 GB, under the 10% it keeps free"]), false);
-  assert.equal(onlyBusy([]), false);
+test("a refusal is only 'busy' when the planner marks processor as the whole reason", () => {
+  assert.equal(onlyBusy({ moves: [], problems: ["x"], unplaced: [{ id: 1, why: "x", busyOnly: true }] }), true);
+  assert.equal(onlyBusy({ moves: [], problems: ["x", "y"], unplaced: [{ id: 1, why: "x", busyOnly: true }, { id: 2, why: "y" }] }), false);
+  assert.equal(onlyBusy({ moves: [], problems: [] }), false);
 });
 
 test("a move job shows only the viewer's own guests, and nothing on a node they can't see (review S6)", () => {
