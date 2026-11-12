@@ -369,6 +369,9 @@ export function createJobs(ctx: JobsContext) {
         // A node that has just come back can refuse for a few seconds.
         for (let i = 0; ; i++) {
           try {
+            // Start at boot or HA may have started it already, and starting a running guest fails (#59).
+            const now = await pve.get<{ status?: string }>(`/nodes/${enc(node)}/${vm.type}/${vm.id}/status/current`, t()).catch(() => null);
+            if (now?.status === "running") return;
             const upid = await pve.post<string>(`/nodes/${enc(node)}/${vm.type}/${vm.id}/status/start`, session);
             return await waitTask(node, upid, t(), 5 * 60 * 1000);
           } catch (err) {
