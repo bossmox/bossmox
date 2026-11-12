@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { loadConfig } from "../src/config.js";
-import { buildOverview, vmIssues, type RawResource } from "../src/model.js";
+import { buildOverview, vmIssues, volumeRefs, type RawResource } from "../src/model.js";
 
 const G = 1024 ** 3;
 
@@ -101,4 +101,16 @@ test("every disc drive is listed, on any slot, with what's in it", async () => {
     { slot: "ide2", disc: "" },
     { slot: "sata3", disc: "cdrom" },
   ]);
+});
+
+test("a disc or disk named with a space or '=' still counts as in use (review S3)", () => {
+  const refs = volumeRefs({
+    ide2: "local:iso/Windows 11.iso,media=cdrom",
+    sata1: "nas:iso/setup=v2.iso,media=cdrom",
+    scsi0: "local-lvm:vm-100-disk-0,size=32G",
+    net0: "virtio=BC:24:11:43:B9:D6,bridge=vmbr0",
+    description: "Note: the old ISO",
+    cores: 2,
+  });
+  assert.deepEqual(refs, ["local:iso/Windows 11.iso", "nas:iso/setup=v2.iso", "local-lvm:vm-100-disk-0"]);
 });
