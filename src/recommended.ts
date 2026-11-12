@@ -2,7 +2,7 @@
  * Recommended settings (ADR 0029): Proxmox settings BossMox suggests, each shown as a switch with what it does and
  * why. Everything here is read from and written to Proxmox itself, so nothing is kept in BossMox.
  */
-import { FULL_BATCH, inNetwork, type NetCheck } from "./cluster-net.js";
+import { freeNets, FULL_BATCH, inNetwork, type NetCheck } from "./cluster-net.js";
 
 export type SettingId = "move-network" | "move-limit" | "ha-shutdown" | "boot";
 export interface Choice {
@@ -68,8 +68,6 @@ export function props(v: unknown): Record<string, string> {
 }
 const joinProps = (p: Record<string, string>) => Object.entries(p).map(([k, v]) => (k ? `${k}=${v}` : v)).join(",");
 
-/** Networks every node shares that the heartbeat doesn't use, so moves there leave it alone. */
-const freeNets = (n: NetCheck) => n.others.filter((o) => !n.heartbeat?.includes(o));
 
 const list = (names: string[]) => (names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`);
 

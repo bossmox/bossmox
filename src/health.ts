@@ -10,11 +10,22 @@ import type { StorageMap } from "./storage-map.js";
 export type Status = "ok" | "warn" | "bad" | "off";
 export interface Fix {
   /** Which button the screen shows: each maps to something BossMox already does. */
-  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check" | "check-now" | "settings" | "move-network";
+  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check" | "check-now" | "settings" | "move-network" | "ha-policy" | "leftover";
   label: string;
   node?: string;
   channel?: string;
   vmids?: number[];
+  /** The leftover disks a Remove offers, each named so the person sees exactly what goes. */
+  disks?: Leftover[];
+}
+export interface Leftover {
+  vmid: number;
+  guest: string;
+  node: string;
+  type: "qemu" | "lxc";
+  slot: string;
+  volume: string;
+  sizeGb: number | null;
 }
 export interface Check {
   id: string;
@@ -33,6 +44,10 @@ export interface HealthInput {
   tieBreaker: boolean;
   /** Whether moves share the heartbeat's only network (ADR 0028). */
   network?: NetCheck;
+  /** Proxmox's HA shutdown policy and how many guests HA manages (ADR 0031). */
+  ha?: { policy: string; guests: number };
+  /** Disks detached from their guests but still on storage (ADR 0031). */
+  leftover?: Leftover[];
   channels: { node: string; ok: boolean; headline: string; note: string; offer: string | null }[];
   updates: { node: string; total: number }[];
   guests: { id: number; name: string; node: string; running: boolean; template: boolean; startsAtBoot: boolean; issues: { kind: string; title: string }[] }[];
@@ -74,6 +89,13 @@ export function buildHealth(h: HealthInput): Check[] {
       add({ id: "move-network", group: "Nodes", status: "warn", title: "VM moves and the cluster heartbeat share one network", detail: `Moves run on ${net.moveNet}, which is also the only network the nodes use to check on each other. A few big moves at once can fill it, the nodes lose touch, and HA restarts a node to protect its VMs. Until moves have their own network, BossMox moves one VM at a time.${fix}`, fix: { kind: "move-network", label: "Fix this" } });
     } else if (net?.known) {
       add({ id: "move-network", group: "Nodes", status: "ok", title: "VM moves have a network of their own", detail: `Moves run on ${net.moveNet}, apart from the cluster heartbeat, so BossMox moves up to ${net.batch} VMs at a time.` });
+    }
+    const ha = h.ha;
+    if (ha && ha.guests > 0 && h.nodes.length >= 2) {
+      const n = ha.guests === 1 ? "One guest is" : `${ha.guests} guests are`;
+      const them = ha.guests === 1 ? "it" : "them";
+      if (ha.policy !== "migrate") add({ id: "ha-shutdown", group: "Nodes", status: "warn", title: "HA stops its guests when a node restarts outside BossMox", detail: `${n} managed by HA. When a node is restarted from Proxmox or by hand, Proxmox's default stops ${them} until that node is back. With Migrate, HA moves ${them} to another node first and back afterwards. BossMox's own restarts move guests first either way.`, fix: { kind: "ha-policy", label: "Fix this" } });
+      else add({ id: "ha-shutdown", group: "Nodes", status: "ok", title: "HA moves its guests before a node restarts", detail: `${n} managed by HA. When a node restarts, HA moves ${them} to another node first.` });
     }
   }
   const badChannels = h.channels.filter((c) => !c.ok);
@@ -121,6 +143,12 @@ export function buildHealth(h: HealthInput): Check[] {
   if (issues.length) out.push(...issues);
   else add({ id: "storage", group: "Storage", status: "ok", title: "Storage and drives look healthy", detail: "Nothing nearly full or unreachable, and no drive reports a problem." });
 
+  const left = h.leftover ?? [];
+  if (left.length) {
+    const sized = left.filter((d) => d.sizeGb !== null);
+    const total = Math.round(sized.reduce((a, d) => a + (d.sizeGb ?? 0), 0));
+    add({ id: "leftover", group: "Storage", status: "warn", title: `${plural(left.length, "leftover disk")} ${left.length === 1 ? "is" : "are"} taking up space`, detail: `${list(left.map((d) => `${d.guest}: ${d.volume}${d.sizeGb !== null ? ` (${Math.round(d.sizeGb)} GB)` : ""}`), 3)}. ${left.length === 1 ? "It's" : "They're"} detached from ${left.length === 1 ? "its guest" : "their guests"} and nothing uses ${left.length === 1 ? "it" : "them"}, often left behind by an import or a disk move.${sized.length ? ` Removing ${left.length === 1 ? "it" : "them"} frees ${sized.length < left.length ? "at least " : ""}${total} GB.` : ""}`, fix: { kind: "leftover", label: "Review and remove", disks: left } });
+  }
   // Guests
   const noBoot = guests.filter((g) => g.running && !g.startsAtBoot);
   add(noBoot.length

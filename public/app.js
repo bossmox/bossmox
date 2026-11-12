@@ -368,6 +368,8 @@ function healthFix(f) {
     case "check-now": return b(`data-checknow="1"`);
     case "settings": return b(`data-open="settings"`);
     case "move-network": return b(`data-movefix="1"`);
+    case "ha-policy": return b(`data-hapolicy="1"`);
+    case "leftover": return b(`data-leftover="1"`);
     default: return "";
   }
 }
@@ -552,6 +554,44 @@ async function applyMoveFix() {
   S.healthChecks = null;
   if (wins.health) loadHealthCheck();
   if (wins.settings) drawSettings();
+}
+
+/*
+ * Leftover disks (ADR 0031): each one named with its guest and size, all ticked, and removed one by one. A removal
+ * deletes the disk file for good, so the button is red and says how many.
+ */
+function drawLeftover() {
+  const disks = S.healthChecks?.find((c) => c.id === "leftover")?.fix?.disks ?? [];
+  const keep = S.leftoverKeep ?? new Set();
+  const picked = disks.filter((d) => !keep.has(d.volume));
+  dialog(`<h3>Remove leftover disks?</h3><p>These disks are detached from their guests and nothing uses them. Removing one deletes its file from storage for good. The guests themselves aren't touched.</p>
+    <div class="lolist">${disks.map((d) => `<label class="mfline"><input type="checkbox" data-lokeep="${esc(d.volume)}" ${keep.has(d.volume) ? "" : "checked"}> <span><b>${esc(d.guest)}</b>: ${esc(d.volume)}${d.sizeGb !== null ? ` (${Math.round(d.sizeGb)} GB)` : ""}</span></label>`).join("")}</div>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" data-logo="1" ${picked.length ? "" : "disabled"}>Remove ${picked.length === 1 ? "1 disk" : `${picked.length} disks`}</button></div>`);
+}
+async function removeLeftover() {
+  const disks = (S.healthChecks?.find((c) => c.id === "leftover")?.fix?.disks ?? []).filter((d) => !(S.leftoverKeep ?? new Set()).has(d.volume));
+  const done = [];
+  dialog(`<h3>Removing</h3><p>Removing ${disks.length === 1 ? "1 disk" : `${disks.length} disks`}.</p>`);
+  let problem = "";
+  for (const d of disks) {
+    try {
+      const res = await post("api/action/leftover-remove", { server: d.node, guest: String(d.vmid), type: d.type, slot: d.slot, confirm: d.volume });
+      const body = await res.json();
+      if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+      if (!res.ok) throw new Error(body.error);
+      done.push(d);
+    } catch (err) {
+      problem = `${d.volume} wasn't removed: ${err.message || "BossMox lost contact with Proxmox."}`;
+      break;
+    }
+  }
+  const freed = Math.round(done.reduce((a, d) => a + (d.sizeGb ?? 0), 0));
+  dialog(`<h3>${problem ? "Stopped" : "Done"}</h3><p>${esc(`${done.length === 1 ? "1 disk" : `${done.length} disks`} removed${freed ? `, ${freed} GB freed` : ""}.`)}</p>${problem ? `<p class="loginerr">${esc(problem)}</p>` : ""}<div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
+  S.leftoverKeep = new Set();
+  S.healthChecks = null;
+  S.healthAgain = true;
+  drawHealthCheck();
+  loadHealthCheck();
 }
 
 /* Notices are one person's view, so this lives in the browser. The problem itself stays on the guest's own page. */
@@ -3088,6 +3128,18 @@ document.addEventListener("click", (e) => {
       : confirmAction("Check backup schedules again?", "BossMox will warn again about any guest that isn't on a Proxmox backup schedule, for everyone who uses it.", "Check schedules again", () => runAction("preferences-set", onlineNodes()[0], "Saving", { backupsElsewhere: false }, after));
   }
   if (d.movefix) return moveFix();
+  if (d.hapolicy) {
+    return confirmAction("Have HA move its guests before a node restarts?", "Proxmox's HA shutdown policy changes to Migrate for the whole cluster. When a node shuts down or restarts, from Proxmox or by hand, the guests HA manages move to another node first, and come back after. A guest that can't move holds up the shutdown.", "Turn it on", () => runAction("recommended-set", onlineNodes()[0], "Saving", { id: "ha-shutdown", on: true, choice: "" }, async () => {
+      S.healthChecks = null;
+      S.healthAgain = true;
+      await loadHealthCheck();
+    }));
+  }
+  if (d.leftover) {
+    S.leftoverKeep = new Set();
+    return drawLeftover();
+  }
+  if (d.logo) return removeLeftover();
   if (d.mfnet) {
     S.moveFix.net = d.mfnet;
     const c = S.recommended?.find((x) => x.id === "move-network")?.choices?.find((x) => x.value === d.mfnet);
@@ -3310,6 +3362,12 @@ document.addEventListener("input", (e) => {
   }
 });
 document.addEventListener("change", (e) => {
+  if (e.target.dataset?.lokeep !== undefined) {
+    S.leftoverKeep ??= new Set();
+    if (e.target.checked) S.leftoverKeep.delete(e.target.dataset.lokeep);
+    else S.leftoverKeep.add(e.target.dataset.lokeep);
+    return drawLeftover();
+  }
   if (e.target.id === "mflimit" || e.target.id === "mfspeed") {
     if (e.target.id === "mflimit") S.moveFix.limitOn = e.target.checked;
     else S.moveFix.speed = e.target.value;
