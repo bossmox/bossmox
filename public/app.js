@@ -111,7 +111,9 @@ function layoutIcons() {
     b.style.top = `${EDGE + r * CELL_H}px`;
   }
   // Tab order follows reading order: across each row, then down.
-  buttons.sort((a, b) => plan[a.dataset.open][1] - plan[b.dataset.open][1] || plan[a.dataset.open][0] - plan[b.dataset.open][0]).forEach((b) => box.append(b));
+  buttons.sort((a, b) => plan[a.dataset.open][1] - plan[b.dataset.open][1] || plan[a.dataset.open][0] - plan[b.dataset.open][0]).forEach((b) => {
+    box.append(b);
+  });
 }
 /** Puts an app's icon in a cell. Another icon already there swaps into the cell this one left. */
 function moveIcon(app, cell) {
@@ -653,8 +655,8 @@ function drag(el, handle) {
     const sx = e.clientX - el.offsetLeft, sy = e.clientY - el.offsetTop;
     handle.setPointerCapture(e.pointerId);
     const move = (m) => {
-      el.style.left = Math.min(innerWidth - 120, Math.max(-200, m.clientX - sx)) + "px";
-      el.style.top = Math.min(innerHeight - 60, Math.max(46, m.clientY - sy)) + "px";
+      el.style.left = `${Math.min(innerWidth - 120, Math.max(-200, m.clientX - sx))}px`;
+      el.style.top = `${Math.min(innerHeight - 60, Math.max(46, m.clientY - sy))}px`;
     };
     const up = () => {
       handle.removeEventListener("pointermove", move);
@@ -967,7 +969,7 @@ const SERVER_TAB = {
     if (!d.tasks.length) return `<p class="empty">No recent activity on this node.</p>`;
     const words = { running: "Running", ok: "Finished", warning: "Finished with warnings", failed: "Failed" };
     const dots = { running: "busy", ok: "running", warning: "warn", failed: "warn" };
-    return `<p class="seeall" style="margin:0 0 8px"><button class="linkbtn" data-tasklog="${esc(S.server)}">See all tasks on this node</button></p>` + d.tasks.map((t) => `<button class="snap tasksnap" data-taskview="${esc(t.upid)}" data-tasknode="${esc(S.server)}"><div>${esc(t.what)}${t.target ? ` on ${esc(t.target)}` : ""}<small>${esc(when(t.startedAt))}, by ${esc(t.who)}</small></div><span class="state"><span class="dot ${dots[t.result]}"></span>${words[t.result]}</span></button>`).join("");
+    return `<p class="seeall" style="margin:0 0 8px"><button class="linkbtn" data-tasklog="${esc(S.server)}">See all tasks on this node</button></p>${d.tasks.map((t) => `<button class="snap tasksnap" data-taskview="${esc(t.upid)}" data-tasknode="${esc(S.server)}"><div>${esc(t.what)}${t.target ? ` on ${esc(t.target)}` : ""}<small>${esc(when(t.startedAt))}, by ${esc(t.who)}</small></div><span class="state"><span class="dot ${dots[t.result]}"></span>${words[t.result]}</span></button>`).join("")}`;
   },
 };
 function renderServerDetail() {
@@ -1235,7 +1237,6 @@ function mapPane() {
   const nodes = onlineNodes();
   S.storeNode = nodes.includes(S.storeNode) ? S.storeNode : nodes[0];
   const m = S.storeMaps?.[S.storeNode];
-  const free = S.diskData?.[S.storeNode]?.filter((d) => d.free) ?? [];
   const pick = nodes.length > 1 ? `<label class="field stnode"><span>Node</span><select id="stnode">${nodes.map((n) => `<option ${n === S.storeNode ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : `<div></div>`;
   const top = `<div class="sttop">${pick}<div class="actions"><button class="btn primary" data-setupstart="1">Add storage</button></div></div>`;
   if (!m) return `${top}<p class="empty">${esc(S.mapError || "Looking at this node's disks and storage.")}</p>`;
@@ -1472,7 +1473,8 @@ async function runAction(action, server, title, extra = {}, after = null, help =
   S.afterTask = after;
   S.taskStarted = Date.now();
   S.taskHelp = help;
-  const me = S.taskToken = (S.taskToken ?? 0) + 1;
+  S.taskToken = (S.taskToken ?? 0) + 1;
+  const me = S.taskToken;
   drawTask(title);
   try {
     const res = await post(`api/action/${action}`, { server, ...extra });
@@ -1688,7 +1690,8 @@ async function startRun() {
 }
 /** Follows the run in a window until it's closed. The run itself doesn't care whether anyone is watching. */
 async function openRun() {
-  const me = (S.runView = (S.runView ?? 0) + 1);
+  S.runView = (S.runView ?? 0) + 1;
+  const me = S.runView;
   for (;;) {
     try {
       S.run = (await signal("api/run")).run;
@@ -2484,7 +2487,6 @@ async function startMove(id) {
 }
 
 function closeTerminal() {
-  const updater = term?.guest === null;
   term?.socket?.close();
   term?.xterm?.dispose();
   term?.observer?.disconnect();
@@ -2580,7 +2582,8 @@ function showTerminal(server, id, title, help, guest = null, typed = null) {
 }
 
 /** True when a terminal's latest output ends at a shell prompt (root's # or a user's $), colours stripped. */
-const atPrompt = (text) => /[#$] ?$/.test(text.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "").replace(/\r/g, ""));
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal escape codes is the point.
+const atPrompt = (text) => /[#$] ?$/.test(text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "").replace(/\r/g, ""));
 
 /* Console: a container gets a terminal, and a VM shows its screen */
 let vnc = null;

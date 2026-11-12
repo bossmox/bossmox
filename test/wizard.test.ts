@@ -28,7 +28,10 @@ function aptNode() {
       const std = r["standard-repos"]!.find((x) => x.handle === handle)!;
       const path = `/etc/apt/sources.list.d/${file}`;
       let f = r.files!.find((x) => x.path === path);
-      if (!f) r.files!.push((f = { path, repositories: [] }));
+      if (!f) {
+        f = { path, repositories: [] };
+        r.files!.push(f);
+      }
       const there = f.repositories!.find((x) => x.URIs?.[0] === uri);
       if (there) there.Enabled = true;
       else f.repositories!.push({ Enabled: true, URIs: [uri], Components: [comp] });

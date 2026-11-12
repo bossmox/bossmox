@@ -19,11 +19,11 @@ function fake(opts: Partial<RunDeps> & { stopAfter?: string; at?: Run } = {}) {
     notReady: async (n) => { log.push(`check ${n}`); return null; },
     // By default each node runs exactly what the run listed for it.
     runningOn: async (n) => (opts.at?.nodes.find((x) => x.name === n)?.vms ?? []).map(({ id, name, type }) => ({ id, name, type })),
-    shutdown: async (n, v) => { log.push(`shutdown ${v.name}`); },
+    shutdown: async (_n, v) => { log.push(`shutdown ${v.name}`); },
     moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { went: Object.fromEntries(ids.map((id) => [id, "elsewhere"])), error: null }; },
     install: async (n) => { log.push(`install ${n}`); return { exitCode: 0, keptConfig: [], left: 0 }; },
     restart: async (n) => { log.push(`restart ${n}`); if (opts.stopAfter === `restart ${n}`) stop = "root@pam pressed Stop."; },
-    start: async (n, v) => { log.push(`start ${v.name}`); },
+    start: async (_n, v) => { log.push(`start ${v.name}`); },
     moveHome: async (n) => { log.push(`home ${n}`); return {}; },
     ...opts,
   };

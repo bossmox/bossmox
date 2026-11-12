@@ -28,6 +28,7 @@ interface Pending extends TermProxy {
 }
 
 // What xterm.js sends by itself when a program asks about the terminal: cursor position, device reports, focus.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal escape codes is the point.
 const TERMINAL_REPLY = /^\x1b(\[\??[\d;]*[Rnc]|\[[IO]|\].*)$/s;
 
 /**

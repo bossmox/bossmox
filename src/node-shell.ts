@@ -10,7 +10,7 @@ import type { TermProxy } from "./terminal.js";
 
 /** Printed after the command with its exit code. Typed as `$?`, so the echoed command line never matches. */
 const DONE = /__BOSSMOX_DONE__:(\d+)/;
-// eslint-disable-next-line no-control-regex
+// biome-ignore lint/suspicious/noControlCharactersInRegex: stripping terminal escape codes is the point.
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-Za-z]|\r/g;
 
 export const plainText = (raw: string) => raw.replace(ANSI, "");
@@ -22,7 +22,7 @@ export function finished(output: string): number | null {
 }
 
 /** A login prompt instead of a shell: this account doesn't get a root console from Proxmox. */
-export const askedToLogIn = (output: string) => /(^|\n)[\w.-]+ login: ?$/.test(plainText(output).trimEnd() + " ");
+export const askedToLogIn = (output: string) => /(^|\n)[\w.-]+ login: ?$/.test(`${plainText(output).trimEnd()} `);
 
 /** Config files dpkg kept the old version of, because they were changed locally. The new one sits beside it. */
 export function keptConfigFiles(output: string): string[] {
