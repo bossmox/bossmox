@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
-import http from "node:http";
+import type http from "node:http";
 import https from "node:https";
 import path from "node:path";
 import tls from "node:tls";

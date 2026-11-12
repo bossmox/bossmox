@@ -173,6 +173,7 @@ export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: strin
         const elsewhere = Object.values(record.away).flatMap((a) => a.guests).find((a) => a.id === g.id);
         if (elsewhere) elsewhere.to = m.target;
         else {
+          // biome-ignore lint/suspicious/noAssignInExpressions: creates the node's entry on first use and returns it.
           const away = (record.away[node] ??= { by, at: Date.now(), guests: [] });
           away.guests.push({ id: g.id, name: g.name, type: m.type, to: m.target });
         }

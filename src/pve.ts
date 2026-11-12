@@ -53,7 +53,7 @@ export class PveClient {
   }
 
   private attempt<T>(base: URL, method: "GET" | "POST" | "PUT" | "DELETE", path: string, ticket?: string, body?: string, csrf?: string): Promise<T> {
-    const url = new URL("/api2/json" + path, base);
+    const url = new URL(`/api2/json${path}`, base);
     const secure = url.protocol === "https:";
     const headers: Record<string, string> = {};
     if (ticket) headers.Cookie = `PVEAuthCookie=${encodeURIComponent(ticket)}`;

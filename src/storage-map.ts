@@ -244,7 +244,10 @@ export function poolRemoval(map: StorageMap, id: string, config: RawStorageConfi
   const allowance = p.thin ? 0.1 : Math.max(1, p.totalGb * 0.015);
   if (!p.items.length && unseen > allowance) throw new Error(`Something Proxmox doesn't keep track of is using ${unseen} GB of ${id}, such as files or other data put there outside Proxmox. BossMox won't erase what it can't see. Check it in Proxmox's own screen.`);
   if (p.items.length) {
-    const counts = Object.entries(p.items.reduce<Record<string, number>>((a, i) => ({ ...a, [i.kind]: (a[i.kind] ?? 0) + 1 }), {})).map(([k, n]) => `${n} ${k}${n === 1 ? "" : "s"}`);
+    const counts = Object.entries(p.items.reduce<Record<string, number>>((a, i) => {
+      a[i.kind] = (a[i.kind] ?? 0) + 1;
+      return a;
+    }, {})).map(([k, n]) => `${n} ${k}${n === 1 ? "" : "s"}`);
     throw new Error(`There's still something on it: ${counts.join(", ")}. Delete or move ${p.items.length === 1 ? "it" : "them"} first.`);
   }
   const cleanup = "cleanup-config=1&cleanup-disks=1";

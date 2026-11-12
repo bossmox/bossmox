@@ -127,7 +127,7 @@ export function addNicForm(type: "qemu" | "lxc", config: Config, v: { bridge: st
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 const ipv4 = (s: string) => {
   const m = IPV4.exec(s);
-  return m && m.slice(1).every((n) => Number(n) <= 255) ? m.slice(1).reduce((a, n) => a * 256 + Number(n), 0) : null;
+  return m?.slice(1).every((n) => Number(n) <= 255) ? m.slice(1).reduce((a, n) => a * 256 + Number(n), 0) : null;
 };
 /** True when the gateway sits on the address's own network, the usual mistake being a typo in either. */
 export function sameNetwork(address: string, prefix: number, gateway: string) {

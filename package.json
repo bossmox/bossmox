@@ -10,11 +10,13 @@
   },
   "scripts": {
     "build": "tsc",
+    "lint": "biome lint",
     "start": "node --env-file-if-exists=.env dist/src/index.js",
     "test": "tsc && node --test \"dist/test/*.test.js\"",
     "mock": "node dev/mock-pve.mjs"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.6.4",
     "@types/node": "22.20.5",
     "@types/ws": "8.18.2",
     "@xterm/addon-fit": "0.11.0",
