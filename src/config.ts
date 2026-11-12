@@ -42,6 +42,23 @@ export function sameOrigin(origin: string, host: string | undefined, https: bool
   }
 }
 
+/**
+ * The host name in a Host header or a host:port setting: lowercased, with the port and any IPv6 brackets removed.
+ * A bare IPv6 address stays whole, since its last group isn't a port (#54).
+ */
+export function hostName(value: string): string {
+  const v = value.trim().toLowerCase();
+  const bracketed = v.match(/^\[([^\]]+)\](?::\d+)?$/);
+  if (bracketed) return bracketed[1] as string;
+  if (isIP(v) === 6) return v;
+  return v.replace(/:\d+$/, "");
+}
+
+/** A host as it's written in a URL: an IPv6 address goes in brackets (#54). */
+export function urlHost(host: string): string {
+  return isIP(host) === 6 ? `[${host}]` : host;
+}
+
 /** A request's path, or null when its target can't be read as one: "//" alone, for instance, throws in `new URL` (#52). */
 export function requestPath(target = "/"): string | null {
   try {
@@ -80,7 +97,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (pveUrls.some((u) => u.protocol !== "https:" && !isLoopback(u.hostname))) {
     throw new Error("PVE_URL must use https, so passwords are never sent in the clear.");
   }
-  const extra = (env.BOSSMOX_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase().replace(/:\d+$/, "")).filter(Boolean);
+  const extra = (env.BOSSMOX_ALLOWED_HOSTS ?? "").split(",").map(hostName).filter(Boolean);
   const config: Config = {
     pveUrl,
     pveUrls,
