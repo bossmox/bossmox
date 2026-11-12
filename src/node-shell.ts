@@ -63,6 +63,8 @@ export interface ShellResult {
   exitCode: number;
   /** The last part of what it printed, without colours. */
   tail: string;
+  /** Everything it printed that was kept (the last 64 KB), without colours. */
+  output: string;
   keptConfig: string[];
 }
 
@@ -118,7 +120,7 @@ export function runOnNode(config: ShellConfig, node: string, ticket: string, pro
         return;
       }
       const code = finished(output);
-      if (code !== null) end(null, { exitCode: code, tail: plainText(output).slice(-4000), keptConfig: keptConfigFiles(output) });
+      if (code !== null) end(null, { exitCode: code, tail: plainText(output).slice(-4000), output: plainText(output), keptConfig: keptConfigFiles(output) });
     });
     ws.on("error", (err) => end(new Error(`BossMox lost the console on ${node}: ${err.message}`)));
     ws.on("close", () => end(new Error(`The console on ${node} closed before the install finished.`)));
