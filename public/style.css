@@ -115,7 +115,7 @@ h1,h2,h3,p{margin:0}
 .look-x:hover{color:var(--ink)}
 .look-controls{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 14px;margin-top:10px;font-size:13.5px}
 .dot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block;background:var(--muted)}
-.dot.running{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.busy{background:var(--accent);animation:pulse 1s infinite}
+.dot.running{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.tip{background:var(--accent)} .dot.busy{background:var(--accent);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.3}}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}}
 
@@ -450,3 +450,8 @@ i.s1{background:var(--series1)}i.s2{background:var(--series2)}
 .utip{position:absolute;top:4px;transform:translateX(-50%);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-s);box-shadow:var(--shadow);padding:5px 8px;font-size:12px;white-space:nowrap;pointer-events:none;display:grid;gap:1px;z-index:2;font-variant-numeric:tabular-nums}
 .utip[hidden]{display:none}
 .uaxis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:4px}
+.hblist{margin:10px 0 10px 18px;display:grid;gap:3px}
+.hbdetails{margin:8px 0}
+.hbdetails summary{cursor:pointer;font-weight:600}
+.hbsteps{display:grid;gap:8px;margin:12px 0}
+.hbstep{display:flex;gap:9px;align-items:baseline}

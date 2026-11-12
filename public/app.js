@@ -358,8 +358,27 @@ function renderHealth() {
 }
 
 /* Health check (ADR 0017): every check, the passes included, each problem with its fix. */
-const HC_ORDER = { bad: 0, warn: 1, ok: 2, off: 3 };
-const HC_WORDS = { bad: "Needs attention", warn: "Worth a look", ok: "Looks good", off: "Turned off" };
+const HC_ORDER = { bad: 0, warn: 1, tip: 2, ok: 3, off: 4 };
+const HC_WORDS = { bad: "Needs attention", warn: "Worth a look", tip: "Best practice", ok: "Looks good", off: "Turned off" };
+/*
+ * Best-practice items can be dismissed in this browser (ADR 0035). The key includes the detail, so one whose situation
+ * changes shows again.
+ */
+const HC_DISMISSED = "bossmox-hc-dismissed";
+const hcKey = (c) => `${c.id}:${c.detail}`;
+function hcDismissed() {
+  try {
+    const list = JSON.parse(localStorage.getItem(HC_DISMISSED) ?? "[]");
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+function hcSaveDismissed(list) {
+  try {
+    localStorage.setItem(HC_DISMISSED, JSON.stringify(list));
+  } catch { /* kept for this page only */ }
+}
 function healthFix(f) {
   if (!f) return "";
   const b = (attrs) => `<button class="btn" ${attrs}>${esc(f.label)}</button>`;
@@ -394,11 +413,17 @@ function drawHealthCheck() {
   const bad = checks.filter((c) => c.status === "bad").length;
   const warn = checks.filter((c) => c.status === "warn").length;
   const head = bad ? `${bad === 1 ? "One thing needs" : `${bad} things need`} attention` : warn ? `${warn === 1 ? "One thing is" : `${warn} things are`} worth a look` : "Everything looks good";
-  const groups = ["Nodes", "Backups", "Storage", "Guests", "BossMox"].map((g) => [g, checks.filter((c) => c.group === g).sort((a, b) => HC_ORDER[a.status] - HC_ORDER[b.status])]).filter(([, l]) => l.length);
-  box.innerHTML = `<div class="sttop"><div><h2 class="hchead">${esc(head)}</h2><p class="meta" style="margin:2px 0 0">${checks.length} checks, ${checks.filter((c) => c.status === "ok").length} passed${checks.some((c) => c.status === "off") ? `, ${checks.filter((c) => c.status === "off").length} turned off` : ""}.</p></div><div class="actions"><button class="btn" data-hcagain="1">Check again</button></div></div>
+  const gone = hcDismissed();
+  const hidden = checks.filter((c) => c.status === "tip" && gone.includes(hcKey(c)));
+  // A dismissed key that no longer matches anything is forgotten, so it shows if it ever comes back.
+  const live = gone.filter((k) => checks.some((c) => hcKey(c) === k));
+  if (live.length !== gone.length) hcSaveDismissed(live);
+  const shown = checks.filter((c) => !hidden.includes(c));
+  const groups = ["Nodes", "Backups", "Storage", "Guests", "BossMox"].map((g) => [g, shown.filter((c) => c.group === g).sort((a, b) => HC_ORDER[a.status] - HC_ORDER[b.status])]).filter(([, l]) => l.length);
+  box.innerHTML = `<div class="sttop"><div><h2 class="hchead">${esc(head)}</h2><p class="meta" style="margin:2px 0 0">${checks.length} checks, ${checks.filter((c) => c.status === "ok").length} passed${checks.some((c) => c.status === "off") ? `, ${checks.filter((c) => c.status === "off").length} turned off` : ""}.${hidden.length ? ` <button class="linkbtn" data-hcback="1">Bring back ${hidden.length} dismissed</button>` : ""}</p></div><div class="actions"><button class="btn" data-hcagain="1">Check again</button></div></div>
     ${S.data?.cluster ? overallBars(S.data.cluster, S.data.nodes.length) : ""}
-    ${groups.map(([g, list]) => `<h3 class="sthd">${esc(g)}</h3><div class="stgroup hcgroup">${list.map((c) => `<div class="hcrow ${c.status}"><span class="dot ${c.status === "ok" ? "running" : c.status === "off" ? "" : "warn"}" aria-hidden="true"></span>
-      <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" && c.fix?.kind !== "check-now" ? "" : healthFix(c.fix)}${c.id === "scheduled" && c.status === "warn" ? `<button class="btn" data-backupselsewhere="on">We back up another way</button>` : ""}${c.id === "bossmox-version" && (c.status === "ok" || c.fix?.kind === "bossmox-update") ? `<button class="btn" data-updatecheck="off">Stop checking</button>` : ""}</div></div>`).join("")}</div>`).join("")}`;
+    ${groups.map(([g, list]) => `<h3 class="sthd">${esc(g)}</h3><div class="stgroup hcgroup">${list.map((c) => `<div class="hcrow ${c.status}"><span class="dot ${c.status === "ok" ? "running" : c.status === "off" ? "" : c.status === "tip" ? "tip" : "warn"}" aria-hidden="true"></span>
+      <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" && c.fix?.kind !== "check-now" ? "" : healthFix(c.fix)}${c.id === "scheduled" && c.status === "warn" ? `<button class="btn" data-backupselsewhere="on">We back up another way</button>` : ""}${c.id === "bossmox-version" && (c.status === "ok" || c.fix?.kind === "bossmox-update") ? `<button class="btn" data-updatecheck="off">Stop checking</button>` : ""}${c.status === "tip" ? `<button class="look-x" data-hcx="${esc(hcKey(c))}" aria-label="Dismiss ${esc(c.title)}" title="Dismiss">&times;</button>` : ""}</div></div>`).join("")}</div>`).join("")}`;
 }
 async function loadHealthCheck() {
   const run = S.loadRun;
@@ -435,14 +460,98 @@ function drawSettings() {
   box.innerHTML = `<div class="sttop"><div><h2 class="hchead">Recommended settings</h2><p class="meta" style="margin:2px 0 0">${matching} of ${leaning.length} set the way BossMox recommends. These are Proxmox's own settings, so they apply however you manage the cluster.</p></div><div class="actions"><button class="btn" data-setagain="1">Read again</button></div></div>
     <div class="stgroup">${list.map((s) => `<div class="setrow">
       <div class="hctext"><b>${esc(s.title)}</b>${advice(s)}<small>${esc(s.detail)}</small>${s.why && !s.can ? `<small class="setwhy">${esc(s.why)}</small>` : ""}${pick(s)}</div>
-      <button class="sw" role="switch" aria-checked="${s.on}" aria-label="${esc(s.title)}" data-setsw="${esc(s.id)}" ${locked(s) ? "disabled" : ""}><i></i></button></div>`).join("")}</div>`;
+      <button class="sw" role="switch" aria-checked="${s.on}" aria-label="${esc(s.title)}" data-setsw="${esc(s.id)}" ${locked(s) ? "disabled" : ""}><i></i></button></div>`).join("")}</div>
+    ${redundancySection()}`;
+}
+
+/* Redundancy (ADR 0035): a backup network for the cluster heartbeat, set up here when every node has a second port. */
+const HB_WHY = "The nodes check on each other over one network. If it has trouble, they lose touch, and HA can restart a node to protect its guests. A second network on its own port keeps them in touch.";
+function redundancySection() {
+  const v = S.heartbeat?.view;
+  if (!v || v.state === "single") return "";
+  const job = S.heartbeat.job;
+  let detail = "";
+  let action = "";
+  if (job?.running) {
+    detail = "Being set up now.";
+    action = `<button class="btn" data-hbwatch="1">Show progress</button>`;
+  } else if (v.state === "backed-up") detail = `Set up. The nodes check on each other over ${v.links} networks.`;
+  else if (v.state === "offer") {
+    detail = `${HB_WHY} Every node has ${v.network} on a second port.${v.sharesMoves ? " VM moves use that network too, which is fine for a backup: the heartbeat only falls back to it when the main network fails." : ""}`;
+    action = v.canSetUp ? `<button class="btn primary" data-hbsetup="1">Set up</button>` : "";
+    if (!v.canSetUp) detail += " Setting it up changes a file in a node's console, so it needs a root@pam sign-in.";
+  } else if (v.state === "no-port") detail = `${HB_WHY} That needs a second network port on every node, on a network of its own${v.nodes.length ? `. ${v.nodes.join(", ")} ${v.nodes.length === 1 ? "doesn't have one" : "don't have one"}` : ", shared by all of them"}.`;
+  else detail = v.why;
+  return `<h3 class="sthd">Redundancy</h3><div class="stgroup"><div class="setrow"><div class="hctext"><b>Backup network for the heartbeat</b>${v.state === "backed-up" ? `<span class="rec ok">Set up</span>` : `<span class="rec">Best practice</span>`}<small>${esc(detail)}</small></div><div class="actions">${action}</div></div></div>`;
+}
+function openHeartbeatSetup() {
+  const v = S.heartbeat?.view;
+  if (v?.state !== "offer") return;
+  const lines = Object.entries(v.addresses).map(([node, a]) => `<li>${esc(node)} gets ${esc(a)} as its backup heartbeat address</li>`).join("");
+  dialog(`<h3>Set up a backup network for the heartbeat?</h3>
+    <p>${esc(HB_WHY)} BossMox adds ${esc(v.network)} as a second heartbeat network. The current one stays the main one; the nodes only use the new one if the main one fails.</p>
+    <ul class="hblist">${lines}</ul>
+    ${v.sharesMoves ? `<p class="meta">VM moves use ${esc(v.network)} too. That's fine for a backup.</p>` : ""}
+    <details class="hbdetails"><summary>What changes, exactly</summary><p class="meta">In /etc/pve/corosync.conf, which Proxmox copies to every node: each node gets a ring${v.link}_addr line with the address above, the totem section gets an interface for link ${v.link}, and config_version goes up by one. First, BossMox checks every node can reach the others on ${esc(v.network)}. The old file is kept as corosync.conf.bak. If the new link isn't connected on every node within a minute, BossMox puts the old file back.</p></details>
+    <label class="field restartname"><span>Type the cluster's name, ${esc(v.clusterName)}, to confirm</span><input id="hbname" autocomplete="off" spellcheck="false"></label>
+    <p id="formerr" class="loginerr" hidden></p>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-hbgo="1">Set up</button></div>`);
+  $("#hbname").focus();
+}
+async function startHeartbeat() {
+  const v = S.heartbeat?.view;
+  if (v?.state !== "offer") return;
+  const confirm = $("#hbname").value.trim();
+  if (confirm !== v.clusterName) return formError(`Type ${v.clusterName} to confirm.`);
+  try {
+    const res = await post("api/action/heartbeat-link-add", { server: onlineNodes()[0], network: v.network, confirm });
+    const body = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) return dialog(`<h3>It didn't start</h3><p class="loginerr">${esc(body.error)}</p>${closeRow}`);
+  } catch (err) {
+    return dialog(`<h3>It didn't start</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  watchHeartbeat();
+}
+/** Follows the setup: one line per step, until it ends. */
+async function watchHeartbeat() {
+  S.taskRunning = true;
+  S.hbWatch = (S.hbWatch ?? 0) + 1;
+  const me = S.hbWatch;
+  for (;;) {
+    let h;
+    try {
+      h = await signal("api/heartbeat");
+    } catch (err) {
+      S.taskRunning = false;
+      if (err.message === "signed out") return;
+      return dialog(`<h3>Lost sight of it</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")} The change carries on; open Settings again to see how it ended.</p>${closeRow}`);
+    }
+    if (me !== S.hbWatch) return;
+    const j = h.job;
+    const steps = (j?.steps ?? []).map((s) => `<div class="hbstep"><span class="dot ${s.state === "ok" ? "running" : s.state === "failed" ? "warn" : "busy"}" aria-hidden="true"></span><span>${esc(s.text)}</span></div>`).join("");
+    const done = j && !j.running;
+    const head = !done ? "Setting up the backup heartbeat network" : j.result === "added" ? "The heartbeat has a backup network" : j.result === "restored" ? "It didn't connect, so nothing changed" : "It stopped";
+    dialog(`<h3>${esc(head)}</h3><div class="hbsteps" aria-live="polite">${steps || "<p>Starting.</p>"}</div>${done && j.error && j.result !== "restored" ? `<p class="loginerr">${esc(j.error)}</p>` : ""}${done ? closeRow : ""}`);
+    if (done) {
+      S.taskRunning = false;
+      S.heartbeat = h;
+      S.afterTask = () => {
+        S.healthChecks = null;
+        loadSettings();
+      };
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
 }
 async function loadSettings() {
   const run = S.loadRun;
   try {
-    const { settings } = await signal("api/recommended");
+    const [{ settings }, heartbeat] = await Promise.all([signal("api/recommended"), signal("api/heartbeat").catch(() => null)]);
     if (run !== S.loadRun) return;
     S.recommended = settings;
+    S.heartbeat = heartbeat;
     S.recommendedError = "";
   } catch (err) {
     if (err.message === "signed out" || run !== S.loadRun) return;
@@ -3209,6 +3318,17 @@ document.addEventListener("click", (e) => {
     drawSettings();
     return loadSettings();
   }
+  if (d.hcx) {
+    hcSaveDismissed([...hcDismissed(), d.hcx]);
+    return drawHealthCheck();
+  }
+  if (d.hcback) {
+    hcSaveDismissed([]);
+    return drawHealthCheck();
+  }
+  if (d.hbsetup) return openHeartbeatSetup();
+  if (d.hbgo) return startHeartbeat();
+  if (d.hbwatch) return watchHeartbeat();
   if (d.hcagain) {
     S.healthChecks = null;
     S.healthAgain = true;
