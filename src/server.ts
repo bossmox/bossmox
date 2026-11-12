@@ -52,7 +52,7 @@ import {
   type Section,
   type ServerDetail,
 } from "./server-detail.js";
-import { hostName } from "./config.js";
+import { hostName, requestPath } from "./config.js";
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public");
 /** Written into a release. A copy run from the repo has none, and the page then shows nothing. */
@@ -1680,7 +1680,9 @@ const handler: http.RequestListener = async (req, res) => {
     if (!hostAllowed(req.headers.host)) {
       return json(res, 403, { error: "This host name isn't allowed. Add it to BOSSMOX_ALLOWED_HOSTS." });
     }
-    const route = new URL(req.url ?? "/", "http://local").pathname;
+    // A target that can't be read as a path ("//") is the client's mistake, not Proxmox's: 400, not 502.
+    const route = requestPath(req.url);
+    if (route === null) return json(res, 400, { error: "That address isn't valid." });
     if (req.method === "POST") return await handlePost(req, res, route);
     if (req.method !== "GET") return json(res, 405, { error: "That method isn't allowed." });
     if (route === "/healthz") return json(res, 200, { ok: true });
