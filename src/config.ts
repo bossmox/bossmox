@@ -25,7 +25,10 @@ function plainAddress(a: string): string {
   const s = a.trim().toLowerCase();
   const bracket = s.match(/^\[([^\]]+)\](:\d+)?$/);
   const ip = bracket ? (bracket[1] as string) : s.replace(/^(\d+\.\d+\.\d+\.\d+):\d+$/, "$1");
-  return ip.replace(/^::ffff:/, "").replace(/%.*$/, "");
+  // The zone (fe80::1%eth0) is cut at the first %, without a regex a crafted address could make slow.
+  const plain = ip.replace(/^::ffff:/, "");
+  const zone = plain.indexOf("%");
+  return zone >= 0 ? plain.slice(0, zone) : plain;
 }
 
 /**
