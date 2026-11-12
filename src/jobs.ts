@@ -146,7 +146,8 @@ export function createJobs(ctx: JobsContext) {
 
   /** Starts a move job in the background. The check and the claim happen before any wait, so two can't start. */
   async function startMoveJob(session: Session, prepare: () => Promise<((deps: MoveDeps) => Promise<void>) | null>): Promise<string | null> {
-    if (currentRun?.running) throw new AuthError(409, "An update or restart run is going. Its moves are part of it.");
+    // A run claims the cluster before its first wait, while it plans; that counts as going too (#45).
+    if (currentRun?.running || runState.starting) throw new AuthError(409, "An update or restart run is going. Its moves are part of it.");
     if (moveJob.starting || moveRecord.job?.running) throw new AuthError(409, `BossMox is already moving guests${moveRecord.job?.running ? ` (${moveRecord.job.kind === "off" ? "off" : "home to"} ${moveRecord.job.node})` : ""}. Wait for that to finish.`);
     moveJob.starting = true;
     try {
