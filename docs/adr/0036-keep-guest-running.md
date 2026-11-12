@@ -1,0 +1,66 @@
+# 0036: Keep this guest running (HA)
+
+**Date:** 2026-11-12. **Status:** proposed (Rocky reads before any code). Issue #32, 0.2.0 piece 2.
+
+## Context
+
+Proxmox HA restarts a guest on another node when its node fails. Turning it on is one API call (`POST /cluster/ha/resources`, `sid` `vm:ID` or `ct:ID`), but it only works when several things are true, and Proxmox doesn't check them first: enough votes to stay quorate without the failed node, disks every node can reach, nothing tied to one node, and room elsewhere. Get one wrong and the guest isn't protected, or it lands in HA's error state with a reason buried in a log.
+
+Two more things people don't expect:
+- **The first HA guest arms fencing on every node.** From then on, a node that loses touch with the majority for about a minute restarts itself (watchdog), so it can't run a guest that another node is also starting. That's what makes HA safe, and it's also what restarted a node on a production cluster on 2026-11-10 (ADR 0028).
+- **Shutting every node down at once with the Migrate policy leaves an HA guest half-moved:** locked (`migrate`), then in HA's error state after the next start. It happened on the lab twice on 2026-11-12. That fix was meant for 0.1.9 but didn't ship (0.2.0 prep).
+
+Lab (bmx8, Proxmox 8.4): db (102) is HA-managed; web (101) isn't, and its disk is on shared iSCSI; no HA groups; shutdown policy Migrate (ADR 0031).
+
+## Decision
+
+### Where it lives
+
+- **On each guest's page:** a "Keep this guest running" switch, with its state ("Protected: HA restarts it on another node if this one fails", or why it can't be).
+- **Settings → Redundancy** (ADR 0035's section) lists the protected guests with HA's state for each, and a Stop protecting button per guest.
+
+### Turning it on
+
+First, every requirement is checked, and each one that fails is said in plain words, with its fix where BossMox has one:
+- **Votes:** three or more, or two nodes and a working tie-breaker. The same count runs use (`haQuorumBlock`, #43/#51).
+- **Disks:** every disk on storage every node can reach (shared, or the same name on each node and marked shared). A disc drive (ISO) counts, with Eject as its fix (ADR 0026).
+- **Nothing tied to one node:** from Proxmox's own migrate precheck (`local_resources`, `local_disks`): passed-through devices, USB, local disks.
+- **Room:** at least one other node could take it, by the same placement BossMox uses for moves.
+
+Then the confirmation names the guest. **The first time on a cluster, it also says what fencing means:** "From now on, a node that loses touch with the others for about a minute restarts itself, so a guest never runs twice. A backup heartbeat network (Settings) makes that much less likely." Turning it on sends `state: started` and nothing else: no HA groups (8.x) or rules (9.x), so Proxmox's defaults pick where the guest goes.
+
+### Turning it off
+
+"Stop protecting" deletes the HA resource. The guest keeps running where it is. When it's the last HA guest, the window says fencing stays armed until the nodes' HA services go idle, which Proxmox does by itself after a few minutes.
+
+### HA's error state
+
+A Health check item, **bad**, for each HA guest in `error`: "HA gave up on {guest}". Its detail gives Proxmox's reason when there is one, and whether the guest is locked. **Fix this**, after a confirmation naming the guest:
+1. Unlock it if it's locked, from Proxmox's config API with `delete=lock`. That needs root@pam; anyone else gets the same steps written out instead.
+2. Set it to disabled under HA, then started again.
+
+It ends with the state HA reports.
+
+### Shutting the whole cluster down
+
+The Migrate policy's Health check item gets one more line: "Before shutting every node down at once, stop the HA guests first. Otherwise HA can leave one half-moved and locked." And when a guest is in HA's error state, the cause above is named if the lock is `migrate`.
+
+## Tests
+
+- **Unit:** the requirement checks (votes, disks, local resources, room); the error-state item; the fencing line only the first time.
+- **Lab, bmx8:**
+  1. Protect web (101) from its page. HA reports it started.
+  2. Power node3 (web's node) off hard from Maverick (`qm stop 905`). HA restarts web on another node; measure how long. Start 905 again.
+  3. A guest that can't be protected (a local disk or a disc on local storage) says why, and nothing is sent to Proxmox.
+  4. Error state: lock db (`qm set 102 --lock migrate`) and restart it under HA, so HA can't start it. Health check shows the bad item; Fix this brings it back to started. If HA doesn't reach error that way, use the real cause: shut down every node at once with Migrate, as happened on 2026-11-12.
+  5. Stop protecting web: the HA resource is gone and web keeps running.
+- Snapshots of 903-905 before step 2 (the `preheartbeat` ones still stand).
+
+## Not in this
+
+HA groups and rules (which nodes a guest prefers); max restart and relocate counts; protecting many guests in one go; the shutdown policy itself (ADR 0031 has it).
+
+## Open for Rocky
+
+1. Both places, the guest's page and the list in Settings → Redundancy? Or only one?
+2. The fencing explanation the first time HA is turned on: right to say it, or too much?
