@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertCanWipe, buildStorageList, diskStorageForm, networkForm, readHardDisks, setupPlan, storageBlockers, usesForm } from "../src/storage.js";
+import { assertCanWipe, buildStorageList, diskStorageForm, eraseBlocker, networkForm, readHardDisks, setupPlan, storageBlockers, usesForm } from "../src/storage.js";
 
 const nfs = { kind: "nfs", id: "nas", host: "10.0.30.244", path: "/srv/nfs/backups", username: "", password: "", domain: "", uses: ["backup", "iso"] };
 const smb = { ...nfs, kind: "smb", path: "bmxsmb", username: "bmx", password: "secret" };
@@ -119,7 +119,7 @@ test("changing what a storage holds keeps the uses BossMox doesn't show", () => 
 });
 
 
-const hd = (path: string, sizeGb: number, free = true, canWipe = false) => ({ path, sizeGb, model: "", kind: "", used: free ? "" : "partitions", health: "OK", failing: false, wearLeft: null, free, canWipe });
+const hd = (path: string, sizeGb: number, free = true, canWipe = false) => ({ path, sizeGb, model: "", kind: "", used: free ? "" : "partitions", health: "OK", failing: false, wearLeft: null, free, canWipe, blocked: "" });
 
 test("Add storage picks the type from what it's for and how many drives", () => {
   const disks = [hd("/dev/sdb", 500), hd("/dev/sdc", 500), hd("/dev/sdd", 500)];
@@ -164,4 +164,25 @@ test("a drive given to a VM, a RAID member or an encrypted drive can't be wiped 
   assert.equal(d("/dev/sdd").canWipe, false);
   assert.equal(d("/dev/sde").canWipe, true, "old data nobody uses can still be wiped");
   assert.throws(() => setupPlan(disks, ["/dev/sdb"], "vms", "x"), /won't erase/);
+});
+
+test("when a guest's settings didn't load, or the account can't see every guest, no disk can be wiped or used (review S1)", () => {
+  // A VM's raw disk with a filesystem on it. Its owner's settings failed to load, so the disk isn't known to be passed
+  // through, and on its own it would look like old data that's fine to wipe.
+  const raw = [
+    { devpath: "/dev/sdb", size: 500 * 1024 ** 3, used: "partitions" },
+    { devpath: "/dev/sdb1", parent: "/dev/sdb", used: "ext4" },
+    { devpath: "/dev/sdc", size: 500 * 1024 ** 3 },
+  ];
+  assert.equal(readHardDisks(raw as never).find((x) => x.path === "/dev/sdb")!.canWipe, true, "without the check it would be wiped");
+  for (const [guests, sees, why] of [[[{ known: true }, { known: false }], true, /couldn't read every guest's settings/], [[{ known: true }], false, /can't see every guest/]] as const) {
+    const blocked = eraseBlocker(guests, sees);
+    assert.match(blocked ?? "", why);
+    const disks = readHardDisks(raw as never, [], blocked);
+    assert.deepEqual(disks.map((x) => [x.free, x.canWipe]), [[false, false], [false, false]], "nothing is free or wipeable");
+    assert.throws(() => assertCanWipe(disks, "/dev/sdb"), why, "Wipe refuses");
+    assert.throws(() => setupPlan(disks, ["/dev/sdb"], "vms", "x"), why, "Set up storage refuses");
+    assert.throws(() => diskStorageForm("lvmthin", disks, { name: "x", devices: ["/dev/sdc"], raid: "", filesystem: "" }), why, "making a pool on a blank disk refuses");
+  }
+  assert.equal(eraseBlocker([{ known: true }], true), null);
 });

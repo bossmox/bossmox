@@ -12,7 +12,7 @@ import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob 
 import { containerForm, CreateError, discDownload, discForm, FILE_STORAGE, installerLabel, vmForm, type CreateInput } from "./create.js";
 import { changesForm, SettingsError, waitingChanges } from "./guest-settings.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
-import { assertCanWipe, buildStorageList, setupPlan, deviceIsValid, diskStorageForm, hostIsValid, networkForm, readHardDisks, StorageError, storageBlockers, usesForm, type RawDisk, type RawStorageConfig } from "./storage.js";
+import { assertCanWipe, buildStorageList, eraseBlocker, setupPlan, deviceIsValid, diskStorageForm, hostIsValid, networkForm, readHardDisks, StorageError, storageBlockers, usesForm, type RawDisk, type RawStorageConfig } from "./storage.js";
 import { snapshotFix, addDiskForm, addNicForm, addressForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
 import { networkInterfaces } from "node:os";
 import { PveClient, PveError, type Identity } from "./pve.js";
@@ -754,9 +754,14 @@ function rule<T>(run: () => T): T {
 }
 /** Drives guests on this node use directly, by device path, so they never look free to wipe. */
 const passedThrough = (name: string, data: Overview) => data.vms.filter((v) => v.node === name).flatMap((v) => v.devices.map((device) => ({ device, guest: v.name })));
-/** The node's drives. Anything that can erase one passes a fresh overview, so a guest added a moment ago counts. */
-const nodeDisks = async (name: string, ticket: string, data: Overview) =>
-  readHardDisks(await pve.get<RawDisk[]>(`/nodes/${encodeURIComponent(name)}/disks/list?include-partitions=1`, ticket), passedThrough(name, data));
+/**
+ * The node's drives. Anything that can erase one passes a fresh overview, so a guest added a moment ago counts, and
+ * every drive is blocked when BossMox can't be sure no guest uses it (review S1).
+ */
+const nodeDisks = async (name: string, ticket: string, data: Overview) => {
+  const [raw, seesAll] = await Promise.all([pve.get<RawDisk[]>(`/nodes/${encodeURIComponent(name)}/disks/list?include-partitions=1`, ticket), seesAllGuests(ticket)]);
+  return readHardDisks(raw, passedThrough(name, data), eraseBlocker(guestRefs(data), seesAll));
+};
 const usesStorageNames = (body: unknown) => (Array.isArray(body) ? body.filter((d): d is string => typeof d === "string").slice(0, 32) : []);
 const kindOf = (body: Record<string, unknown>) => (body.type === "lxc" ? "lxc" as const : "qemu" as const);
 const VOLUME = /^[\w.-]+:[\w./-]+$/;
@@ -875,7 +880,7 @@ async function storageMapFor(name: string, t: string, data: Overview) {
     if (err instanceof PveError && err.status === 401) throw err;
     return fallback;
   });
-  const [disks, lvm, zfsList, directory, config, status, nodeStatus] = await Promise.all([
+  const [disks, lvm, zfsList, directory, config, status, nodeStatus, seesAll] = await Promise.all([
     quiet(pve.get<RawDisk[]>(`${base}/disks/list?include-partitions=1`, t), []),
     quiet(pve.get<RawLvm>(`${base}/disks/lvm`, t), null),
     quiet(pve.get<{ name: string }[]>(`${base}/disks/zfs`, t), []),
@@ -883,6 +888,7 @@ async function storageMapFor(name: string, t: string, data: Overview) {
     pve.get<RawStorageConfig[]>("/storage", t),
     pve.get<RawStorageStatus[]>(`${base}/storage`, t),
     quiet(pve.get<{ rootfs?: { total?: number } }>(`${base}/status`, t), {}),
+    seesAllGuests(t),
   ]);
   const zfsEntries = await Promise.all(zfsList.map(async (z) => [z.name, await quiet(pve.get<RawZfsDetail>(`${base}/disks/zfs/${encodeURIComponent(z.name)}`, t), {})] as const));
   const active = status.filter((s) => s.enabled !== 0 && s.active === 1);
@@ -905,9 +911,9 @@ async function storageMapFor(name: string, t: string, data: Overview) {
     passedThrough: passedThrough(name, data),
     guests: guestRefs(data),
     allNodesOnline: data.nodes.every((n) => n.online),
-    seesAllGuests: await seesAllGuests(t),
+    seesAllGuests: seesAll,
   }, data.nodes.length > 1);
-  return { map, diskList: readHardDisks(disks, passedThrough(name, data)), config, directory };
+  return { map, diskList: readHardDisks(disks, passedThrough(name, data), eraseBlocker(guestRefs(data), seesAll)), config, directory };
 }
 
 /** Whether this account can see every guest. Without it, a guest it can't see looks like a deleted one. */

@@ -3,7 +3,7 @@
  * space, and what it can do, in the words someone from Windows, Hyper-V or ESXi would use. Pure: server.ts
  * gathers Proxmox's answers for one node and passes them in.
  */
-import type { RawDisk, RawStorageConfig } from "./storage.js";
+import { eraseBlocker, type RawDisk, type RawStorageConfig } from "./storage.js";
 
 export interface RawLvm {
   children?: { name: string; children?: { name: string }[] }[];
@@ -72,10 +72,10 @@ export function poolItems(volumes: RawVolume[], guests: GuestRefs[], allNodesOnl
       else if (kind === "snippet" || kind === "other") whyNot = "BossMox doesn't manage these yet.";
       else if (usedBy.length) whyNot = kind === "disc" ? `It's in ${usedBy.join(", ")}'s disc drive.` : `${usedBy.join(", ")} still uses it.`;
       else if (!allNodesOnline) whyNot = "A node is offline, so BossMox can't be sure nothing there uses it.";
-      else if (!allKnown) whyNot = "BossMox couldn't read every guest's settings, so it can't be sure nothing uses it.";
+      else if (!allKnown) whyNot = eraseBlocker(guests, true) ?? "";
       // A guest this account can't see looks like no guest at all (security review L4), so a disk is only called
       // left over for an account that can see every guest.
-      else if (kind === "disk" && !owner && !seesAllGuests) whyNot = "Your Proxmox account can't see every guest, so BossMox can't be sure nothing uses this disk.";
+      else if (kind === "disk" && !owner) whyNot = eraseBlocker(guests, seesAllGuests) ?? "";
       return {
         volid,
         kind,
