@@ -8,23 +8,27 @@ const vm = (id: number, name: string, choice: "move" | "shutdown" = "move"): Run
 const node = (name: string, vms: RunVm[], more: Partial<RunNode> = {}): RunNode => ({ name, install: true, restart: true, updates: 3, phase: "waiting", vms, note: null, keptConfig: [], ...more });
 const run = (nodes: RunNode[]): Run => ({ id: "r1", kind: "update", by: "root@pam", startedAt: 1, finishedAt: null, running: false, stop: null, error: null, current: 0, nodes });
 
-/** A pretend cluster that logs every call in order. */
+/** A pretend cluster that logs every call in order. `stopAfter` presses Stop right after that call. */
 function fake(opts: Partial<RunDeps> & { stopAfter?: string; at?: Run } = {}) {
   const log: string[] = [];
   let stop: string | null = null;
+  const note = (entry: string) => {
+    log.push(entry);
+    if (opts.stopAfter === entry) stop = "root@pam pressed Stop.";
+  };
   const deps: RunDeps = {
     stopped: () => stop,
     save: () => {},
     wait: async () => {},
-    notReady: async (n) => { log.push(`check ${n}`); return null; },
+    notReady: async (n) => { note(`check ${n}`); return null; },
     // By default each node runs exactly what the run listed for it.
     runningOn: async (n) => (opts.at?.nodes.find((x) => x.name === n)?.vms ?? []).map(({ id, name, type }) => ({ id, name, type })),
-    shutdown: async (_n, v) => { log.push(`shutdown ${v.name}`); },
-    moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { went: Object.fromEntries(ids.map((id) => [id, "elsewhere"])), error: null }; },
-    install: async (n) => { log.push(`install ${n}`); return { exitCode: 0, keptConfig: [], left: 0 }; },
-    restart: async (n) => { log.push(`restart ${n}`); if (opts.stopAfter === `restart ${n}`) stop = "root@pam pressed Stop."; },
-    start: async (_n, v) => { log.push(`start ${v.name}`); },
-    moveHome: async (n) => { log.push(`home ${n}`); return {}; },
+    shutdown: async (_n, v) => { note(`shutdown ${v.name}`); },
+    moveOff: async (n, ids) => { note(`moveOff ${n} ${ids.join(",")}`); return { went: Object.fromEntries(ids.map((id) => [id, "elsewhere"])), error: null }; },
+    install: async (n) => { note(`install ${n}`); return { exitCode: 0, keptConfig: [], left: 0 }; },
+    restart: async (n) => { note(`restart ${n}`); },
+    start: async (_n, v) => { note(`start ${v.name}`); },
+    moveHome: async (n) => { note(`home ${n}`); return {}; },
     ...opts,
   };
   return { deps, log };
@@ -78,8 +82,8 @@ test("Stop finishes the step under way and starts nothing new", async () => {
   const r = run([node("n1", [vm(1, "web")]), node("n2", [vm(2, "db")])]);
   const { deps, log } = fake({ at: r, stopAfter: "restart n1" });
   await drive(r, deps);
-  assert.deepEqual(log, ["check n1", "moveOff n1 1", "install n1", "restart n1"], "the restart finished; starting and coming home didn't begin");
-  assert.match(r.error ?? "", /Stopped: root@pam pressed Stop\. n1 stopped after restarting/);
+  assert.deepEqual(log, ["check n1", "moveOff n1 1", "install n1", "restart n1"], "the restart finished; coming home didn't begin");
+  assert.match(r.error ?? "", /Stopped: root@pam pressed Stop\. n1 stopped after starting/);
   assert.equal(r.nodes[1]?.phase, "waiting");
 });
 
@@ -220,4 +224,18 @@ test("someone who can't see the whole cluster sees only their own nodes and gues
   assert.equal(JSON.stringify(seen).includes("root@pam"), false, "not who started it");
   assert.equal(runFor(run, { ...limited, full: true }), run, "someone who can change the cluster sees all of it");
   assert.equal(runFor(null, limited), null);
+});
+
+test("Stop at any point never leaves a guest switched off (#44)", async () => {
+  // Every call the run makes on n1, in order. Stop is pressed right after each one in turn.
+  const steps = ["check n1", "shutdown app", "moveOff n1 1", "install n1", "restart n1", "start app", "home n1"];
+  for (const at of steps) {
+    const r = run([node("n1", [vm(1, "web"), vm(2, "app", "shutdown")]), node("n2", [])]);
+    const { deps, log } = fake({ at: r, stopAfter: at });
+    await drive(r, deps);
+    const states = r.nodes[0]!.vms.map((v) => v.state);
+    assert.equal(states.includes("off"), false, `Stop after "${at}" left a guest off: ${states.join(", ")} (${log.join(" > ")})`);
+    assert.match(r.error ?? "", /Stopped/, at);
+    assert.equal(log.includes("check n2"), false, `nothing new starts after Stop (${at})`);
+  }
 });

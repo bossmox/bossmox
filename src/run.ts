@@ -131,9 +131,10 @@ export interface RunDeps {
 const READY_WAIT_MS = 3 * 60 * 1000;
 const plain = (err: unknown) => (err instanceof Error && err.message ? err.message : "BossMox lost contact with Proxmox.");
 
-async function step(run: Run, deps: RunDeps, node: RunNode, phase: Phase, work: () => Promise<void>) {
+/** One phase of a node. It begins only if nobody pressed Stop, unless it finishes something already under way. */
+async function step(run: Run, deps: RunDeps, node: RunNode, phase: Phase, work: () => Promise<void>, finishes = false) {
   const stop = deps.stopped();
-  if (stop) throw new StopError(stop);
+  if (stop && !finishes) throw new StopError(stop);
   node.phase = phase;
   deps.save(run);
   await work();
@@ -220,6 +221,7 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
         }
         if (node.restart) {
           await step(run, deps, node, "restarting", () => deps.restart(node.name));
+          // Starting what was shut down finishes this node's restart, so Stop doesn't skip it (#44).
           await step(run, deps, node, "starting", async () => {
             for (const vm of node.vms.filter((v) => v.state === "off")) {
               vm.state = "starting";
@@ -233,7 +235,7 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
               }
               deps.save(run);
             }
-          });
+          }, true);
           if (node.vms.some((v) => v.state === "moved")) {
             await step(run, deps, node, "returning", async () => {
               const moved = node.vms.filter((v) => v.state === "moved");
