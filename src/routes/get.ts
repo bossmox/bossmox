@@ -55,6 +55,14 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
     "/api/backups": async (_route, session, _params, _req, res) => {
         return json(res, 200, await loadBackups(session.ticket));
     },
+    "/api/ha": async (_route, session, params, _req, res) => {
+        const id = Number(params.get("id") ?? "");
+        if (params.has("id")) {
+          if (!Number.isInteger(id) || id < 1) return json(res, 400, { error: "That guest isn't valid." });
+          return json(res, 200, await c.ha.check(session, id));
+        }
+        return json(res, 200, { guests: await c.ha.list(session.ticket) });
+    },
     "/api/heartbeat": async (_route, session, _params, _req, res) => {
         const job = c.heartbeat.job();
         // Who started it is a username; only that person sees it (review 2, S6).

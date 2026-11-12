@@ -169,3 +169,13 @@ test("the heartbeat: a best-practice tip with a way to Settings, a tip without o
   assert.equal(by(cluster({ state: "unknown", why: "x" }), "heartbeat"), undefined, "nothing claimed when it can't be told");
   assert.equal(by(buildHealth(base()), "heartbeat"), undefined, "a single node says nothing");
 });
+
+test("HA gave up on a guest: bad, with the lock named and Fix this (ADR 0036)", () => {
+  const input = { ...base(), nodes: [{ name: "a", online: true }, { name: "b", online: true }, { name: "c", online: true }], cluster: { quorate: true } };
+  input.guests = [{ ...input.guests[0]!, name: "db", id: 102, node: "a", ha: "error", lock: "migrate" }];
+  const item = by(buildHealth(input), "ha-error-102");
+  assert.equal(item?.status, "bad");
+  assert.equal(item?.title, "HA gave up on db");
+  assert.match(item?.detail ?? "", /locked \(migrate\).*every node shutting down at once/);
+  assert.deepEqual(item?.fix, { kind: "ha-recover", label: "Fix this", vmids: [102], node: "a" });
+});

@@ -14,7 +14,7 @@ import type { StorageMap } from "./storage-map.js";
 export type Status = "ok" | "warn" | "bad" | "off" | "tip";
 export interface Fix {
   /** Which button the screen shows: each maps to something BossMox already does. */
-  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check" | "check-now" | "settings" | "move-network" | "ha-policy" | "leftover";
+  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check" | "check-now" | "settings" | "move-network" | "ha-policy" | "leftover" | "ha-recover";
   label: string;
   node?: string;
   channel?: string;
@@ -59,7 +59,7 @@ export interface HealthInput {
   leftover?: Leftover[];
   channels: { node: string; ok: boolean; headline: string; note: string; offer: string | null }[];
   updates: { node: string; total: number }[];
-  guests: { id: number; name: string; node: string; running: boolean; template: boolean; startsAtBoot: boolean; issues: { kind: string; title: string }[] }[];
+  guests: { id: number; name: string; node: string; running: boolean; template: boolean; startsAtBoot: boolean; issues: { kind: string; title: string }[]; ha?: string | null; lock?: string | null }[];
   unscheduled: number[];
   /** The person said the guests are backed up another way, so schedules aren't checked (ADR 0018). */
   backupsElsewhere?: boolean;
@@ -104,7 +104,12 @@ export function buildHealth(h: HealthInput): Check[] {
       const n = ha.guests === 1 ? "One guest is" : `${ha.guests} guests are`;
       const them = ha.guests === 1 ? "it" : "them";
       if (ha.policy !== "migrate") add({ id: "ha-shutdown", group: "Nodes", status: "warn", title: "HA stops its guests when a node restarts outside BossMox", detail: `${n} managed by HA. When a node is restarted from Proxmox or by hand, Proxmox's default stops ${them} until that node is back. With Migrate, HA moves ${them} to another node first and back afterwards. BossMox's own restarts move guests first either way.`, fix: { kind: "ha-policy", label: "Fix this" } });
-      else add({ id: "ha-shutdown", group: "Nodes", status: "ok", title: "HA moves its guests before a node restarts", detail: `${n} managed by HA. When a node restarts, HA moves ${them} to another node first.` });
+      else add({ id: "ha-shutdown", group: "Nodes", status: "ok", title: "HA moves its guests before a node restarts", detail: `${n} managed by HA. When a node restarts, HA moves ${them} to another node first. Before shutting every node down at once, stop the HA guests first: otherwise HA can leave one half-moved and locked.` });
+    }
+    // A guest HA gave up on (ADR 0036): it won't start again by itself.
+    for (const g of h.guests.filter((x) => x.ha === "error")) {
+      const lock = g.lock ? ` It's also locked (${g.lock})${g.lock === "migrate" ? ", which usually means a move was cut off, such as by every node shutting down at once" : ""}.` : "";
+      add({ id: `ha-error-${g.id}`, group: "Nodes", status: "bad", title: `HA gave up on ${g.name}`, detail: `HA couldn't start or move it, so it stopped trying. It won't come back by itself.${lock} Fix this ${g.lock ? "unlocks it, then " : ""}sets it to disabled under HA and starts it again.`, fix: { kind: "ha-recover", label: "Fix this", vmids: [g.id], node: g.node } });
     }
     // Best practice, not a fault: a backup network for the heartbeat (ADR 0035). Set up in Settings.
     const hb = h.heartbeat;

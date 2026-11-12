@@ -19,6 +19,9 @@ export interface RawResource {
   template?: number;
   shared?: number;
   uptime?: number;
+  /** HA's state for a guest it manages ("started", "error", ...), absent otherwise. */
+  hastate?: string;
+  lock?: string;
 }
 export type RawConfig = Record<string, string | number | undefined>;
 export interface RawSnapshot {
@@ -163,6 +166,9 @@ export function buildOverview(
         nics: config ? readNics(r.type === "lxc" ? "lxc" : "qemu", config) : [],
         agent: String(config?.agent ?? "").startsWith("1") || /enabled=1/.test(String(config?.agent ?? "")),
         startsAtBoot: config?.onboot === 1,
+        // HA's state when HA manages it (ADR 0036), and a lock such as a half-finished move.
+        ha: r.hastate ?? null,
+        lock: r.lock ?? (config?.lock ? String(config.lock) : null),
         memoryMb: Number(config?.memory ?? Math.round((r.maxmem ?? 0) / 1024 ** 2)),
         disc: String(config?.ide2 ?? "").startsWith("none") ? "" : String(config?.ide2 ?? "").split(",")[0],
         // Anything on that slot that isn't a disc drive, such as a data disk, must never be rewritten as one.

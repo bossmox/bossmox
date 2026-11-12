@@ -9,9 +9,27 @@ import type { ActionContext } from "../server.js";
 import type { Action } from "./action.js";
 import { HttpError } from "../http-error.js";
 
+const guestId = (v: unknown) => {
+  const id = Number(v);
+  if (!Number.isInteger(id) || id < 1) throw new HttpError(400, "That guest isn't valid.");
+  return id;
+};
+
 export function clusterActions(c: ActionContext): Record<string, Action> {
   const { audit, readOptions, pve, jobs, updates } = c;
   return {
+    "ha-protect": async (_name, who, body) => {
+      await c.ha.protect(who, guestId(body.id));
+      return null;
+    },
+    "ha-unprotect": async (_name, who, body) => {
+      await c.ha.unprotect(who, guestId(body.id));
+      return null;
+    },
+    "ha-recover": async (_name, who, body) => {
+      await c.ha.recover(who, guestId(body.id));
+      return null;
+    },
     "heartbeat-link-add": async (_name, who, body) => {
       await c.heartbeat.start(who, text(body.network, 32), text(body.confirm, 64));
       return null;

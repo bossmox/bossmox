@@ -51,6 +51,7 @@ import { clusterActions } from "./actions/cluster.js";
 import { guestActions } from "./actions/guests.js";
 import { storageActions } from "./actions/storage.js";
 import { backupActions } from "./actions/backups.js";
+import { createHa } from "./ha.js";
 import { createHeartbeat, nodeConsole } from "./heartbeat.js";
 import { getRoutes, type GetRoute } from "./routes/get.js";
 import { HttpError } from "./http-error.js";
@@ -129,6 +130,19 @@ const heartbeat = createHeartbeat({
   audit: (event, who, detail) => audit(event, who, "settings", detail),
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
   now: () => Date.now(),
+});
+
+/** Keep this guest running (ADR 0036). Where a guest could go comes from the same planning moves use. */
+const ha = createHa({
+  pve,
+  cantMove: async (t, node, id) => {
+    const plan = await jobs.planEvacuation(t, node, [id]);
+    return plan.unplaced?.find((u) => u.id === id)?.why ?? (plan.problems.length ? plan.problems.join(" ") : null);
+  },
+  heartbeat: (s) => heartbeat.view(s),
+  netCheck: (t) => jobs.readNetCheck(t),
+  audit: (event, who, detail) => audit(event, who, "guest", detail),
+  wait: (ms) => new Promise((r) => setTimeout(r, ms)),
 });
 
 /** Moves and runs (ADR 0025, 0027), in their own module; the server hands them Proxmox and its settings. */
@@ -551,6 +565,7 @@ const actionContext = {
   pve,
   jobs,
   heartbeat,
+  ha,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -782,7 +797,7 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
 
 
 /** What the GET routes get from the server (review #61). */
-const routeContext = { FULL_LOG, HEALTH_CACHE_MS, VERSION, cache, guestPath, healthCache, heartbeat, jobs, json, loadBackups, loadCreatePlan, loadHealth, loadNetwork, loadRecommended, loadRestorePlan, loadServerDetail, loadStorageMap, nodeDisks, overview, pve, snapshotFixFor, updateView, viewerOf, epoch: () => preferencesEpoch };
+const routeContext = { FULL_LOG, HEALTH_CACHE_MS, VERSION, cache, guestPath, healthCache, ha, heartbeat, jobs, json, loadBackups, loadCreatePlan, loadHealth, loadNetwork, loadRecommended, loadRestorePlan, loadServerDetail, loadStorageMap, nodeDisks, overview, pve, snapshotFixFor, updateView, viewerOf, epoch: () => preferencesEpoch };
 export type RouteContext = typeof routeContext;
 const GET_ROUTES = getRoutes(routeContext);
 
