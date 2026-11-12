@@ -75,7 +75,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       // The person who started it, or anyone who can change the cluster's settings.
       if (jobs.currentRun.by !== who.username) {
         const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", who.ticket).catch((): Record<string, Record<string, number>> => ({}));
-        if (!canChangeCluster(perms)) throw new AuthError(403, `Only ${jobs.currentRun.by}, or someone who can change the cluster's settings, can stop it.`);
+        if (!canChangeCluster(perms)) throw new AuthError(403, "Only the person who started it, or someone who can change the cluster's settings, can stop it.");
       }
       jobs.currentRun.stop = `${who.username} pressed Stop.`;
       jobs.saveRun(jobs.currentRun);

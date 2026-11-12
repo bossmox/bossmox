@@ -43,4 +43,12 @@ export const scheduleWarnings = <T>(prefs: Preferences, notBackedUp: T[]): T[] =
  * Changing a cluster-wide preference needs the same right as changing the cluster's own settings in Proxmox:
  * Sys.Modify on "/", from Proxmox's answer for that path. A limited account gets a plain no.
  */
+/**
+ * Whether this account can see every guest. /vms alone isn't enough: a NoAccess set on one VM or on a pool hides
+ * those guests while /vms still shows VM.Audit (review 2, S1). Any narrower path without VM.Audit means no.
+ */
+export const seesAllGuestsFrom = (perms: Record<string, Record<string, number>> | null | undefined) =>
+  perms?.["/vms"]?.["VM.Audit"] === 1 &&
+  Object.entries(perms).every(([path, privs]) => !(path.startsWith("/vms/") || path.startsWith("/pool/")) || privs["VM.Audit"] === 1);
+
 export const canChangeCluster = (perms: Record<string, Record<string, number>> | null | undefined) => perms?.["/"]?.["Sys.Modify"] === 1;

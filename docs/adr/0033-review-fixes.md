@@ -43,7 +43,7 @@ The fixes were made across three parallel lanes, then checked by a second review
 - **Branch and commits:** the branch holding the fixes was pushed only on release day.
 - **Lanes that merged earlier:** their pull request text and comments named no security item.
 - **Disclosure:** the six went public as closed issues (#78 to #83) once 0.1.9 was published.
-- **The second review's smaller security gaps:** still private, in the 0.1.10 plan.
+- **The second review's smaller security gaps:** fixed in 0.1.10 (ADR 0034).
 
 ## Not done
 

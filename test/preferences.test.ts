@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { canChangeCluster, preferencesPath, readPreferences, scheduleWarnings, writePreferences } from "../src/preferences.js";
+import { canChangeCluster, preferencesPath, seesAllGuestsFrom, readPreferences, scheduleWarnings, writePreferences } from "../src/preferences.js";
 
 test("the setting is kept on the server, beside the settings file, and survives a restart", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "bmx-prefs-"));
@@ -40,4 +40,14 @@ test("only an account that can change the cluster's settings can change it", () 
   assert.equal(canChangeCluster({ "/vms": { "Sys.Modify": 1 } }), false, "rights on part of the cluster aren't enough");
   assert.equal(canChangeCluster({}), false);
   assert.equal(canChangeCluster(null), false);
+});
+
+test("seeing every guest needs VM.Audit on /vms and on every narrower guest or pool path (review 2, S1)", () => {
+  assert.equal(seesAllGuestsFrom({ "/vms": { "VM.Audit": 1 } }), true);
+  assert.equal(seesAllGuestsFrom({ "/vms": { "VM.Audit": 1 }, "/vms/105": { "VM.Audit": 1, "VM.Console": 1 } }), true);
+  assert.equal(seesAllGuestsFrom({ "/vms": { "VM.Audit": 1 }, "/vms/105": {} }), false, "NoAccess on one VM");
+  assert.equal(seesAllGuestsFrom({ "/vms": { "VM.Audit": 1 }, "/pool/hr": {} }), false, "NoAccess on a pool");
+  assert.equal(seesAllGuestsFrom({ "/vms": { "VM.Audit": 1 }, "/storage/nas": {} }), true, "storage paths don't hide guests");
+  assert.equal(seesAllGuestsFrom({ "/": { "Sys.Audit": 1 } }), false);
+  assert.equal(seesAllGuestsFrom(null), false);
 });

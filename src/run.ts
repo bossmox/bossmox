@@ -63,6 +63,8 @@ export function runFor(run: Run | null, who: Viewer): Run | null {
   return {
     ...run,
     by: HIDDEN,
+    // Who pressed Stop is a username too (review 2, S6).
+    stop: run.stop ? "Someone pressed Stop." : null,
     error: run.error ? "It stopped before finishing." : null,
     nodes: run.nodes.filter((n) => who.nodes.has(n.name)).map((n) => ({ ...n, note: null, vms: n.vms.filter((v) => who.guests.has(v.id)) })),
   };
