@@ -24,6 +24,7 @@ import { settingsPath } from "./settings.js";
 import { gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
 import { movesPath, readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps } from "./moves.js";
 import { checkNetworks, migrationNetwork, SAFE_BATCH, type NetCheck } from "./cluster-net.js";
+import { buildRecommended, optionsForm, props, RecommendedError } from "./recommended.js";
 import { drive, readRun, runsPath, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
 import { INSTALL_COMMAND, runOnNode } from "./node-shell.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
@@ -516,6 +517,33 @@ async function readNetCheck(ticket: string): Promise<NetCheck> {
 }
 const batchFor = (ticket: string) => readNetCheck(ticket).then((c) => c.batch, () => SAFE_BATCH);
 
+/** The cluster options the recommended settings read and change, plus the move network judged from them. */
+async function readOptions(ticket: string) {
+  const [options, net] = await Promise.all([pve.get<Record<string, unknown>>("/cluster/options", ticket), readNetCheck(ticket)]);
+  return { options, net: { ...net, current: migrationNetwork(options.migration as string | { network?: string } | undefined) } };
+}
+
+/** Recommended settings (ADR 0029), read fresh from Proxmox each time the window opens. */
+async function loadRecommended(session: Session) {
+  const t = session.ticket;
+  const [data, { options, net }, ha, perms] = await Promise.all([
+    overview(session),
+    readOptions(t),
+    pve.get<{ sid?: string }[]>("/cluster/ha/resources", t).catch(() => []),
+    pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", t).catch((): Record<string, Record<string, number>> => ({})),
+  ]);
+  const limit = Number(props(options.bwlimit).migration);
+  return buildRecommended({
+    nodes: data.nodes.length,
+    net,
+    moveLimit: Number.isFinite(limit) && limit > 0 ? limit : null,
+    haPolicy: props(options.ha).shutdown_policy ?? "conditional",
+    haGuests: ha.filter((r) => /^(vm|ct):/.test(r.sid ?? "")).length,
+    noBoot: data.vms.filter((v) => v.running && !v.template && !v.startsAtBoot).map((v) => ({ id: v.id, name: v.name })),
+    canChange: canChangeCluster(perms),
+  });
+}
+
 /** How long bringing guests home waits for a just-restarted node's processor to calm down. */
 const RETURN_SETTLE_MS = 5 * 60 * 1000;
 
@@ -990,6 +1018,23 @@ const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, 
       if (!v) continue;
       await pve.put<null>(`/nodes/${encodeURIComponent(v.node)}/${v.type}/${id}/config`, who, { onboot: "1" });
     }
+    return null;
+  },
+  "recommended-set": async (_name, who, body) => {
+    const id = body.id;
+    if ((id !== "move-network" && id !== "move-limit" && id !== "ha-shutdown") || typeof body.on !== "boolean") throw new AuthError(400, "That request isn't valid.");
+    const { options, net } = await readOptions(who.ticket);
+    let form: Record<string, string>;
+    try {
+      form = optionsForm(id, body.on, text(body.choice, 43), options, net);
+    } catch (err) {
+      if (err instanceof RecommendedError) throw new AuthError(400, err.message);
+      throw err;
+    }
+    await pve.put<null>("/cluster/options", who, form);
+    audit("cluster-option", who.username, "settings", `${id}=${body.on ? "on" : "off"} ${Object.entries(form).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+    // Health check reads these too, so its kept answer is out of date now.
+    preferencesEpoch += 1;
     return null;
   },
   "snapshot-fix": async (name, who, body) => {
@@ -1597,7 +1642,7 @@ const handler: http.RequestListener = async (req, res) => {
       }
       return json(res, 200, { realms });
     }
-    if (route === "/api/usage" || route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/moves" || route === "/api/run" || route === "/api/run-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/health" || route === "/api/setup-plan" || route === "/api/guest-waiting" || route === "/api/cpu-types") {
+    if (route === "/api/usage" || route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/moves" || route === "/api/run" || route === "/api/run-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/health" || route === "/api/setup-plan" || route === "/api/guest-waiting" || route === "/api/cpu-types" || route === "/api/recommended") {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
@@ -1634,6 +1679,7 @@ const handler: http.RequestListener = async (req, res) => {
         }
         if (route === "/api/rolling-plan") return json(res, 200, await loadRollingPlan(session.ticket));
         if (route === "/api/backups") return json(res, 200, await loadBackups(session.ticket));
+        if (route === "/api/recommended") return json(res, 200, { settings: await loadRecommended(session) });
         if (route === "/api/cpu-types") {
           const name = params.get("server") ?? "";
           if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });

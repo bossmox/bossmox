@@ -9,6 +9,7 @@ const GLYPHS = {
   network: '<circle cx="16" cy="6" r="3"/><circle cx="6" cy="25" r="3"/><circle cx="26" cy="25" r="3"/><path d="M16 9v8M16 17H6v5M16 17h10v5"/>',
   backups: '<path d="M5 16a11 11 0 1 0 4-8.5L5 11V5"/><path d="M16 10v7l5 3"/>',
   health: '<path d="M16 27s-10-6-10-13a5.5 5.5 0 0 1 10-3 5.5 5.5 0 0 1 10 3c0 7-10 13-10 13z"/><path d="M9 16h4l2-4 3 7 2-3h3"/>',
+  settings: '<path d="M5 9h4M15 9h12M5 16h12M23 16h4M5 23h2M13 23h14"/><circle cx="12" cy="9" r="3"/><circle cx="20" cy="16" r="3"/><circle cx="10" cy="23" r="3"/>',
 };
 const APPS = {
   vms: { title: "Virtual Machines", color: "#0E7EA6", w: 920, h: 610 },
@@ -19,11 +20,12 @@ const APPS = {
   tasklog: { title: "All tasks", color: "#3C6E9E", w: 860, h: 610, noIcon: true },
   backups: { title: "Backups", color: "#C43838", w: 860, h: 610 },
   health: { title: "Health check", color: "#178A5F", w: 760, h: 640 },
+  settings: { title: "Settings", color: "#56636E", w: 720, h: 620 },
   terminal: { title: "Install updates", color: "#20262A", w: 860, h: 560, noIcon: true },
   console: { title: "Console", color: "#20262A", w: 980, h: 680, noIcon: true },
 };
 
-const S = { watching: false, data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", details: {}, nets: {}, loadRun: 0, ticks: 0 };
+const S = { setChoice: {}, watching: false, data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", details: {}, nets: {}, loadRun: 0, ticks: 0 };
 const wins = {};
 
 /* Desktop */
@@ -364,6 +366,7 @@ function healthFix(f) {
     case "bossmox-update": return b(`data-bmupdate="1"`);
     case "update-check": return b(`data-updatecheck="${S.data?.update?.on === false ? "on" : "off"}"`);
     case "check-now": return b(`data-checknow="1"`);
+    case "settings": return b(`data-open="settings"`);
     default: return "";
   }
 }
@@ -396,6 +399,70 @@ async function loadHealthCheck() {
     S.healthError = err.message || "BossMox lost contact with Proxmox.";
   }
   drawHealthCheck();
+}
+
+/*
+ * Settings (ADR 0029). Recommended settings are Proxmox's own cluster options, read fresh each time, each a switch
+ * with what it does and why. A flip asks first and names the change.
+ */
+function drawSettings() {
+  const box = $("#setbox");
+  if (!box) return;
+  const list = S.recommended;
+  if (!list) {
+    box.innerHTML = `<p class="empty">${esc(S.recommendedError || "Reading the cluster's settings.")}</p>`;
+    return;
+  }
+  const leaning = list.filter((s) => s.recommend !== null);
+  const matching = leaning.filter((s) => s.on === s.recommend).length;
+  const advice = (s) => (s.recommend === null ? "" : s.on === s.recommend ? `<span class="rec ok">As recommended</span>` : `<span class="rec">Recommended ${s.recommend ? "on" : "off"}</span>`);
+  const pick = (s) => (s.choices?.length > 1 || (s.choices?.length && !s.on) ? `<select class="setpick" data-setpick="${esc(s.id)}" aria-label="${esc(s.title)}: choice" ${s.can ? "" : "disabled"}>${s.choices.map((c) => `<option value="${esc(c.value)}" ${c.value === (S.setChoice[s.id] ?? s.choice) ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>` : "");
+  const locked = (s) => !s.can || (s.onlyOn && s.on);
+  box.innerHTML = `<div class="sttop"><div><h2 class="hchead">Recommended settings</h2><p class="meta" style="margin:2px 0 0">${matching} of ${leaning.length} set the way BossMox recommends. These are Proxmox's own settings, so they apply however you manage the cluster.</p></div><div class="actions"><button class="btn" data-setagain="1">Read again</button></div></div>
+    <div class="stgroup">${list.map((s) => `<div class="setrow">
+      <div class="hctext"><b>${esc(s.title)}</b>${advice(s)}<small>${esc(s.detail)}</small>${s.why && !s.can ? `<small class="setwhy">${esc(s.why)}</small>` : ""}${pick(s)}</div>
+      <button class="sw" role="switch" aria-checked="${s.on}" aria-label="${esc(s.title)}" data-setsw="${esc(s.id)}" ${locked(s) ? "disabled" : ""}><i></i></button></div>`).join("")}</div>`;
+}
+async function loadSettings() {
+  const run = S.loadRun;
+  try {
+    const { settings } = await signal("api/recommended");
+    if (run !== S.loadRun) return;
+    S.recommended = settings;
+    S.recommendedError = "";
+  } catch (err) {
+    if (err.message === "signed out" || run !== S.loadRun) return;
+    S.recommendedError = err.message || "BossMox lost contact with Proxmox.";
+  }
+  drawSettings();
+}
+/** What flipping a switch (or changing its pick while on) will do, in words, before anything changes. */
+function askSetting(id, on, choice) {
+  const s = S.recommended?.find((x) => x.id === id);
+  if (!s) return;
+  const after = async () => {
+    S.setChoice = {};
+    S.healthChecks = null;
+    await loadSettings();
+    if (wins.health) loadHealthCheck();
+  };
+  const save = (extra) => () => runAction(id === "boot" ? "boot-on" : "recommended-set", onlineNodes()[0], "Saving", extra, after);
+  if (id === "boot") {
+    const names = S.data?.vms.filter((v) => s.guests.includes(v.id)).map((v) => v.name) ?? [];
+    return confirmAction(`Start ${names.length === 1 ? names[0] : `${names.length} guests`} at boot?`, `${names.join(", ")} will start by themselves whenever ${names.length === 1 ? "its node" : "their nodes"} start. Nothing changes while ${names.length === 1 ? "it's" : "they're"} running now.`, "Start at boot", save({ guests: s.guests.join(",") }));
+  }
+  const words = {
+    "move-network": on
+      ? [`Move VMs over ${choice}?`, `Proxmox's Migration setting changes to ${choice} for the whole cluster. Moves started after this, from BossMox or Proxmox, use that network, and BossMox moves up to 3 at a time. Moves already running finish where they are.`, `Use ${choice}`]
+      : ["Move VMs over the heartbeat's network again?", "Proxmox's Migration setting is cleared, so moves go back to the network the cluster heartbeat uses, and BossMox moves one VM at a time.", "Clear it"],
+    "move-limit": on
+      ? [`Limit moves to ${choice} MB/s?`, `Every move in the cluster, from BossMox or Proxmox, runs at ${choice} MB/s or less. Bigger VMs take longer to move.`, `Limit to ${choice} MB/s`]
+      : ["Remove the move speed limit?", "Moves run as fast as their network allows.", "Remove the limit"],
+    "ha-shutdown": on
+      ? ["Have HA move its guests before a node shuts down?", "Proxmox's HA shutdown policy changes to Migrate for the whole cluster. When a node shuts down or restarts, the guests HA manages move to another node first, and come back after.", "Turn it on"]
+      : ["Go back to Proxmox's default shutdown policy?", "When a node restarts, the guests HA manages stop and wait for it to come back.", "Go back"],
+  }[id];
+  confirmAction(words[0], words[1], words[2], save({ id, on, choice }), !on && s.recommend === true);
 }
 
 /* Notices are one person's view, so this lives in the browser. The problem itself stays on the guest's own page. */
@@ -484,6 +551,11 @@ function render(app) {
   if (app === "health") {
     drawHealthCheck();
     loadHealthCheck();
+  }
+  if (app === "settings") {
+    S.recommended = null;
+    drawSettings();
+    loadSettings();
   }
   if (app === "storage") {
     drawStore();
@@ -2690,6 +2762,7 @@ const RENDER = {
   network: () => `<div class="vms"><aside><div id="netlist"></div></aside><div id="netdetail"></div></div>`,
   backups: () => `<div id="bkbox" class="bkbox"></div>`,
   health: () => `<div id="hcbox" class="bkbox"></div>`,
+  settings: () => `<div id="setbox" class="bkbox"></div>`,
 };
 
 /* Events */
@@ -2925,6 +2998,16 @@ document.addEventListener("click", (e) => {
       ? confirmAction("Stop warning about backup schedules?", "Use this if your guests are backed up by something Proxmox doesn't know about, such as Veeam, a script or another backup server. BossMox stops warning about guests without a Proxmox backup schedule, for everyone who uses it, in every browser. Failed Proxmox backups are still reported, and you can turn the warnings back on any time.", "Stop the warnings", () => runAction("preferences-set", onlineNodes()[0], "Saving", { backupsElsewhere: true }, after))
       : confirmAction("Check backup schedules again?", "BossMox will warn again about any guest that isn't on a Proxmox backup schedule, for everyone who uses it.", "Check schedules again", () => runAction("preferences-set", onlineNodes()[0], "Saving", { backupsElsewhere: false }, after));
   }
+  if (d.setsw) {
+    const s = S.recommended?.find((x) => x.id === d.setsw);
+    if (!s) return;
+    return askSetting(s.id, !s.on, S.setChoice[s.id] ?? s.choice ?? "");
+  }
+  if (d.setagain) {
+    S.recommended = null;
+    drawSettings();
+    return loadSettings();
+  }
   if (d.hcagain) {
     S.healthChecks = null;
     S.healthAgain = true;
@@ -3129,6 +3212,13 @@ document.addEventListener("input", (e) => {
   }
 });
 document.addEventListener("change", (e) => {
+  if (e.target.dataset?.setpick) {
+    const id = e.target.dataset.setpick;
+    S.setChoice[id] = e.target.value;
+    // Already on: a new pick is a change of its own, so it asks too. Off: it's what the switch will use.
+    if (S.recommended?.find((x) => x.id === id)?.on) askSetting(id, true, e.target.value);
+    return;
+  }
   if (e.target.id === "vmnode") {
     S.vmNode = e.target.value;
     return renderList();

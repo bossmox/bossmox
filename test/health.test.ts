@@ -46,8 +46,9 @@ test("moves sharing the heartbeat's only network are warned, with the network to
   const shared = by(buildHealth({ ...three, network: { known: true, shared: true, moveNet: "10.0.0.0/24", others: ["10.0.100.0/24"], batch: 1 } }), "move-network")!;
   assert.equal(shared.status, "warn");
   assert.match(shared.detail, /Moves run on 10\.0\.0\.0\/24/);
-  assert.match(shared.detail, /Migration Settings in Proxmox and set its network to 10\.0\.100\.0\/24/);
+  assert.match(shared.detail, /Every node is also on 10\.0\.100\.0\/24\. Settings can give moves that network/);
   assert.match(shared.detail, /one VM at a time/);
+  assert.equal(shared.fix!.kind, "settings");
   const lonely = by(buildHealth({ ...three, network: { known: true, shared: true, moveNet: "10.0.30.0/24", others: [], batch: 1 } }), "move-network")!;
   assert.match(lonely.detail, /second network card/);
   const own = by(buildHealth({ ...three, network: { known: true, shared: false, moveNet: "10.0.100.0/24", others: [], batch: 3 } }), "move-network")!;
