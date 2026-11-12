@@ -218,3 +218,42 @@ test("a move job shows only the viewer's own guests, and nothing on a node they 
   assert.equal(jobFor(job, { full: false, nodes: new Set(["n9"]), guests: new Set() }), null);
   assert.equal(jobFor(job, { full: true, nodes: new Set(), guests: new Set() }), job);
 });
+
+test("a move BossMox lost sight of but Proxmox finished is recorded where it went, so it can come home (#50)", async () => {
+  const c = cluster({ 1: "n1", 2: "n1" });
+  // Proxmox started a's move, then the answer was lost: BossMox sees an error, but a ends up on n2.
+  c.deps.migrate = async (move) => {
+    if (move.id === 1) {
+      c.where.set(1, move.target);
+      throw new Error("socket hang up");
+    }
+    c.where.set(move.id, move.target);
+    return `UPID:n1:${move.id}`;
+  };
+  c.deps.task = async () => ({ finished: true, ok: true, error: "" });
+  const record: MoveRecord = { away: {}, job: null };
+  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n3"]), 1);
+  assert.equal(record.job?.error, null, "nothing actually failed");
+  assert.deepEqual(record.job?.guests.map((g) => g.state), ["done", "done"]);
+  assert.match(record.job?.guests[0]?.note ?? "", /lost sight of the move, but it finished on n2/);
+  assert.deepEqual(record.away.n1?.guests.map((g) => `${g.name}->${g.to}`), ["a->n2", "b->n3"], "both can be sent home");
+});
+
+test("a move that errored and left the guest where it was is still a failure (#50)", async () => {
+  const c = cluster({ 1: "n1" });
+  c.deps.migrate = async () => { throw new Error("migration refused"); };
+  const record: MoveRecord = { away: {}, job: null };
+  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"]));
+  assert.equal(record.job?.guests[0]?.state, "failed");
+  assert.match(record.job?.error ?? "", /migration refused/);
+  assert.equal(record.away.n1, undefined);
+});
+
+test("moving a guest back onto its own home clears it from the away record (#50)", async () => {
+  // a lives on n1 and is away on n2. n2 is now being emptied, and a goes back to n1.
+  const c = cluster({ 1: "n2" }, { plan: (_from, ids) => ({ moves: ids.map((id) => ({ id, name: "a", type: "qemu", target: "n1" })), problems: [] }) });
+  const record: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests: [{ id: 1, name: "a", type: "qemu", to: "n2" }] } }, job: null };
+  await runMoveOff(record, c.deps, "n2", "root@pam", moves([1, "a", "n1"]));
+  assert.equal(record.away.n1, undefined, "home again, so not away");
+  assert.equal(record.away.n2, undefined, "and not recorded as away from n2 either");
+});

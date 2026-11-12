@@ -166,24 +166,27 @@ export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: strin
       }
       deps.save(record);
       const results = await Promise.allSettled(take.map((m) => moveOne(deps, m, node)));
+      // A move that errored may still have happened: BossMox lost sight of it, Proxmox carried on. Where each one
+      // is now decides, not the error (#50). If even that can't be read, it stays a failure.
+      const now = results.some((r) => r.status === "rejected") ? await deps.where().catch(() => null) : null;
       let failure: unknown = null;
       take.forEach((m, i) => {
         const g = job.guests.find((x) => x.id === m.id) as JobGuest;
         const r = results[i] as PromiseSettledResult<void>;
+        let to = m.target;
         if (r.status === "rejected") {
-          g.state = "failed";
-          failure ??= r.reason;
-          return;
+          const at = now?.get(g.id);
+          if (!at || at === node) {
+            g.state = "failed";
+            failure ??= r.reason;
+            return;
+          }
+          to = at;
+          g.target = at;
+          g.note = `BossMox lost sight of the move, but it finished on ${at}.`;
         }
         g.state = "done";
-        // A guest already away from another node keeps that node as its home; only where it is now changes.
-        const elsewhere = Object.values(record.away).flatMap((a) => a.guests).find((a) => a.id === g.id);
-        if (elsewhere) elsewhere.to = m.target;
-        else {
-          // biome-ignore lint/suspicious/noAssignInExpressions: creates the node's entry on first use and returns it.
-          const away = (record.away[node] ??= { by, at: Date.now(), guests: [] });
-          away.guests.push({ id: g.id, name: g.name, type: m.type, to: m.target });
-        }
+        recordAway(record, node, by, { id: g.id, name: g.name, type: m.type }, to);
       });
       deps.save(record);
       if (failure) throw failure;
@@ -194,6 +197,25 @@ export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: strin
   job.running = false;
   job.finishedAt = Date.now();
   deps.save(record);
+}
+
+/**
+ * Writes down where a guest moved off `node` went. A guest already away from another node keeps that node as its
+ * home, and only where it is now changes. One that has just arrived back on its own home isn't away any more.
+ */
+function recordAway(record: MoveRecord, node: string, by: string, g: { id: number; name: string; type: "qemu" | "lxc" }, to: string) {
+  const home = Object.entries(record.away).find(([, a]) => a.guests.some((x) => x.id === g.id));
+  if (home) {
+    const [homeNode, entry] = home;
+    if (homeNode === to) {
+      entry.guests = entry.guests.filter((x) => x.id !== g.id);
+      if (!entry.guests.length) delete record.away[homeNode];
+    } else (entry.guests.find((x) => x.id === g.id) as AwayGuest).to = to;
+    return;
+  }
+  // biome-ignore lint/suspicious/noAssignInExpressions: creates the node's entry on first use and returns it.
+  const away = (record.away[node] ??= { by, at: Date.now(), guests: [] });
+  away.guests.push({ id: g.id, name: g.name, type: g.type, to });
 }
 
 /** The guests still where BossMox left them. Anything moved elsewhere since is someone else's choice. */
