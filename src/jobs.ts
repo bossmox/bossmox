@@ -10,7 +10,7 @@ import { checkNetworks, migrationNetwork, SAFE_BATCH, type NetCheck } from "./cl
 import type { Overview, RawConfig, RawResource, RawSnapshot } from "./model.js";
 import { readMoves, runMoveHome, runMoveOff, writeMoves, type MoveDeps } from "./moves.js";
 import { INSTALL_COMMAND, runOnNode, type ShellConfig } from "./node-shell.js";
-import { gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
+import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
 import type { Preferences } from "./preferences.js";
 import { PveError, type PveClient } from "./pve.js";
 import { drive, readRun, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
@@ -47,7 +47,7 @@ export function createJobs(ctx: JobsContext) {
    * Fresh numbers from Proxmox, and where each guest of `from` would go (ADR 0025). Without `ids` it plans every
    * running guest. With `only`, that node is the one target allowed (sending guests home).
    */
-  async function planEvacuation(ticket: string, from: string, ids?: number[], only?: string, pending: Record<string, number> = {}) {
+  async function planEvacuation(ticket: string, from: string, ids?: number[], only?: string, pending: Record<string, number> = {}, assumeEjected: number[] = []) {
     const resources = await pve.get<RawResource[]>("/cluster/resources", ticket);
     const online = resources.filter((r) => r.type === "node" && r.status === "online" && (!only || r.node === from || r.node === only));
     const statuses = await Promise.all(online.map((n) => pve.get<RawStatus>(`/nodes/${enc(n.node ?? "")}/status`, ticket).catch(() => null)));
@@ -77,12 +77,16 @@ export function createJobs(ctx: JobsContext) {
       const type = g.type === "lxc" ? "lxc" : "qemu";
       const id = Number(g.vmid);
       const base = `/nodes/${enc(from)}/${type}/${id}`;
-      const [config, snaps, precondition] = await Promise.all([
+      const [read, snaps, checked] = await Promise.all([
         pve.get<RawConfig>(`${base}/config`, ticket),
         pve.get<RawSnapshot[]>(`${base}/snapshot`, ticket).catch((): RawSnapshot[] => []),
         // Older Proxmox has no migrate check for containers; BossMox's own storage check still applies.
         pve.get<RawPrecondition>(`${base}/migrate`, ticket).catch((): RawPrecondition => ({})),
       ]);
+      // Planned as if its discs were out, when a person chose to eject them; they only come out once every check passes.
+      const assumed = assumeEjected.includes(id);
+      const config = assumed ? (asEjected(read).config as RawConfig) : read;
+      const precondition = assumed ? { ...checked, local_disks: (checked.local_disks ?? []).filter((d) => !d.cdrom) } : checked;
       return guestNeed({
         id,
         type,
@@ -168,7 +172,7 @@ export function createJobs(ctx: JobsContext) {
     }
   }
 
-  async function loadRollingPlan(ticket: string) {
+  async function loadRollingPlan(ticket: string, assumeEjected: number[] = []) {
     const data = await ctx.loadOverview(ticket);
     const [cluster, tieBreaker, servers] = await Promise.all([
       section(pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", ticket)),
@@ -184,7 +188,7 @@ export function createJobs(ctx: JobsContext) {
         const list = updates.available ? groupUpdates(updates.value) : null;
         // Each node that restarts is planned against the cluster as it is now: guests go home before the next one.
         const evac = list?.rebootNeeded && list.total > 0
-          ? await planEvacuation(ticket, n.name).catch((err: Error) => ({ problems: [`BossMox couldn't plan the moves: ${err.message}`], ejectable: [] }))
+          ? await planEvacuation(ticket, n.name, undefined, undefined, {}, assumeEjected).catch((err: Error) => ({ problems: [`BossMox couldn't plan the moves: ${err.message}`], ejectable: [] }))
           : { problems: [], ejectable: [] };
         const cantMove = evac.problems.map((p) => `${n.name}: ${p}`);
         const ejectable = (evac.ejectable ?? []).map((g) => ({ ...g, node: n.name }));
@@ -233,15 +237,15 @@ export function createJobs(ctx: JobsContext) {
 
   interface PlanVm { id: number; name: string; type: "qemu" | "lxc"; canMove: boolean; why: string; to: string | null; self: boolean; discSlots: string[]; choice: "move" | "shutdown" }
   /** What a run would do on each node, with a choice per running VM: what it can do, and the safe default. */
-  async function runPlan(ticket: string, kind: "update" | "restart", server: string) {
+  async function runPlan(ticket: string, kind: "update" | "restart", server: string, assumeEjected: number[] = []) {
     const macs = (ctx.macs ?? ownMacs)();
-    const rolling = kind === "update" ? await loadRollingPlan(ticket) : null;
+    const rolling = kind === "update" ? await loadRollingPlan(ticket, assumeEjected) : null;
     const nodes = kind === "update"
       ? (rolling?.servers ?? []).map((s) => ({ name: s.name, version: s.version, updates: s.updates ?? 0, restart: s.rebootNeeded, install: true }))
       : [{ name: server, version: null, updates: 0, restart: true, install: false }];
     const out = await Promise.all(nodes.map(async (n) => {
       if (!n.restart) return { ...n, vms: [] as PlanVm[] };
-      const evac = await planEvacuation(ticket, n.name);
+      const evac = await planEvacuation(ticket, n.name, undefined, undefined, {}, assumeEjected);
       const resources = await pve.get<RawResource[]>("/cluster/resources?type=vm", ticket);
       const running = resources.filter((r) => r.node === n.name && (r.status === "running" || r.status === "paused") && r.template !== 1);
       const vms: PlanVm[] = await Promise.all(running.map(async (r) => {
@@ -408,18 +412,11 @@ export function createJobs(ctx: JobsContext) {
     if (moveRecord.job?.running || moveJob.starting) throw new AuthError(409, "BossMox is moving guests right now. Wait for that to finish.");
     runState.starting = true;
     try {
-      // Discs chosen to come out go first, so those VMs are planned as movable.
+      // Discs chosen to come out are planned as already out. Nothing is ejected until every check below passes (#48).
       const eject = Object.entries(choices).filter(([, c]) => c === "eject").map(([id]) => Number(id));
-      let plan = await runPlan(session.ticket, kind, server);
+      const plan = await runPlan(session.ticket, kind, server, eject);
       if (plan.blocked.length) throw new AuthError(400, plan.blocked.join(" "));
       if (kind === "update" && !plan.nodes.length) throw new AuthError(400, "Every node is up to date.");
-      for (const n of plan.nodes) for (const v of n.vms.filter((x) => eject.includes(x.id) && x.discSlots.length)) {
-        const path = `/nodes/${enc(n.name)}/qemu/${v.id}`;
-        const current = await pve.get<RawConfig>(`${path}/config`, session.ticket);
-        for (const slot of v.discSlots) await pve.put<null>(`${path}/config`, session, discForm("", current, slot));
-        ctx.audit("eject", session.username, "run", `node=${n.name} guest=${v.id}`);
-      }
-      if (eject.length) plan = await runPlan(session.ticket, kind, server);
       const nodes: RunNode[] = plan.nodes.map((n) => ({
         name: n.name, install: n.install, restart: n.restart, updates: n.updates, phase: "waiting", note: null, keptConfig: [],
         vms: n.vms.map((v) => {
@@ -432,8 +429,16 @@ export function createJobs(ctx: JobsContext) {
       for (const n of nodes) {
         const moving = n.vms.filter((v) => v.choice === "move").map((v) => v.id);
         if (!moving.length || !n.restart) continue;
-        const check = await planEvacuation(session.ticket, n.name, moving);
+        const check = await planEvacuation(session.ticket, n.name, moving, undefined, {}, eject);
         if (check.problems.length) throw new AuthError(400, `${n.name}: ${check.problems.join(" ")} Choose Shut down for it, or lower Keep free.`);
+      }
+      // Every check passed. Only now do the chosen discs come out.
+      for (const n of plan.nodes) for (const v of n.vms.filter((x) => eject.includes(x.id) && x.type === "qemu")) {
+        const path = `/nodes/${enc(n.name)}/qemu/${v.id}`;
+        const current = await pve.get<RawConfig>(`${path}/config`, session.ticket);
+        const { slots } = asEjected(current);
+        for (const slot of slots) await pve.put<null>(`${path}/config`, session, discForm("", current, slot));
+        if (slots.length) ctx.audit("eject", session.username, "run", `node=${n.name} guest=${v.id}`);
       }
       currentRun = { id: `run:${Date.now()}`, kind, by: session.username, startedAt: Date.now(), finishedAt: null, running: true, stop: null, error: null, current: 0, nodes };
       const run = currentRun;

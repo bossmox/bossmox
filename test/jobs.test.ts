@@ -175,3 +175,16 @@ test("on two votes a run won't restart a node while HA looks after guests; a con
     noHa.done();
   }
 });
+
+test("a run that's refused never ejects the discs chosen to come out (#48)", async () => {
+  // db has a disc from the node's own storage, so it can only move once the disc is out. The person chose Eject,
+  // but the cluster is too full for it to move, so the run is refused, and the disc has to still be in.
+  const c = cluster({ guests: [{ id: 101, name: "db", node: "n1", config: { ide2: "local:iso/setup.iso,media=cdrom" } }] });
+  c.ctx.preferences = () => ({ backupsElsewhere: false, updateCheck: false, keepFreePct: 95 });
+  try {
+    await assert.rejects(createJobs(c.ctx).startRun(person, "restart", "n1", true, { 101: "eject" }), /Choose Shut down for it, or lower Keep free/);
+    assert.deepEqual(c.writes, [], "nothing was ejected");
+  } finally {
+    c.done();
+  }
+});

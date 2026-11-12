@@ -111,6 +111,17 @@ export interface GuestFacts {
   sourceStorages: Record<string, StorageRoom>;
 }
 
+/**
+ * A guest's settings with its disc drives emptied (cloud-init drives stay), and the slots that empties. A run plans
+ * with this for the discs a person chose to eject, so every check passes before any disc comes out (#48).
+ */
+export function asEjected(config: Record<string, unknown>): { config: Record<string, unknown>; slots: string[] } {
+  const slots = Object.entries(config)
+    .filter(([k, v]) => /^(ide|sata|scsi)\d+$/.test(k) && /media=cdrom|^cdrom/.test(String(v)) && !String(v).includes("cloudinit") && !String(v).startsWith("none"))
+    .map(([k]) => k);
+  return { config: { ...config, ...Object.fromEntries(slots.map((s) => [s, "none,media=cdrom"])) }, slots };
+}
+
 const DISK_SLOT = /^(scsi|virtio|sata|ide|efidisk|tpmstate|unused|mp)\d+$|^rootfs$/;
 
 /** Turns what Proxmox says about a guest into what it needs from the node it goes to. */

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { compareVersions, guestNeed, parseSize, planMoves, type GuestNeed, type NodeRoom } from "../src/placement.js";
+import { asEjected, compareVersions, guestNeed, parseSize, planMoves, type GuestNeed, type NodeRoom } from "../src/placement.js";
 
 const GB = 1024 ** 3;
 const node = (name: string, memGb: number, usedGb: number, extra: Partial<NodeRoom> = {}): NodeRoom => ({
@@ -185,4 +185,12 @@ test("each guest that can't be placed is named, and the rest still get a place",
   assert.deepEqual(plan.moves, [], "all or nothing for a plain move");
   assert.deepEqual(plan.unplaced?.map((u) => u.id).sort(), [2, 3]);
   assert.deepEqual(plan.tentative?.map((m) => `${m.id}->${m.target}`), ["1->n2"]);
+});
+
+test("planning as if ejected empties disc drives, keeps cloud-init, and names the slots (#48)", () => {
+  const { config, slots } = asEjected({ ide2: "local:iso/setup.iso,media=cdrom", sata1: "cdrom,media=cdrom", ide0: "local-lvm:vm-1-cloudinit,media=cdrom", ide3: "none,media=cdrom", scsi0: "local-lvm:vm-1-disk-0" });
+  assert.deepEqual(slots, ["ide2", "sata1"]);
+  assert.equal(config.ide2, "none,media=cdrom");
+  assert.equal(config.ide0, "local-lvm:vm-1-cloudinit,media=cdrom");
+  assert.equal(config.scsi0, "local-lvm:vm-1-disk-0");
 });
