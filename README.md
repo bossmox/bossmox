@@ -91,7 +91,7 @@ Daylight, Dusk and Workbench, picked in the top bar.
 
 ## This is a preview
 
-It does a lot already, and everything in it is tested on a real Proxmox cluster, but there's more to come before a 1.0. Next up, in roughly this order: iSCSI storage, usage graphs, email alerts, USB passthrough, changing a node's or BossMox's own address safely, adding a node and a tie-breaker to a cluster, and high availability. Proxmox's own interface keeps working alongside BossMox for anything it doesn't cover yet.
+It does a lot already, and everything in it is tested on a real Proxmox cluster, but there's more to come before a 1.0. What's next is on the [roadmap](ROADMAP.md): first cluster resilience (a backup heartbeat link, high availability, a tie-breaker for two nodes, and email alerts), then address changes, USB passthrough and adding nodes. Proxmox's own interface keeps working alongside BossMox for anything it doesn't cover yet.
 
 Hardware security keys (WebAuthn) and recovery codes don't work in BossMox yet; authenticator-app codes do. The setup wizard needs a root account without 2FA.
 
@@ -132,7 +132,7 @@ Rocky Lott directs BossMox: what it does, how it should feel to someone new to P
 
 That doesn't make it vibe-coded. Nothing goes in because it looks right; every change has to prove itself first, and you can check each part of that here:
 
-- **Decided before it's built.** Each feature starts with a written decision record, including what was tried and didn't work. There are 17 so far, in [docs/adr](docs/adr).
+- **Decided before it's built.** Each feature starts with a written decision record, including what was tried and didn't work. There are 31 so far, in [docs/adr](docs/adr).
 - **Tested against real Proxmox.** Every feature runs on a three-node test cluster and a single-node install before release, and the screenshots above come from that cluster. When Proxmox turned out to do something risky without warning, such as deleting a disk a running VM still uses, BossMox got its own check instead of trusting it.
 - **Tests that can fail.** 191 automated tests run on every change. The important ones are deliberately broken once, to prove they'd catch the mistake they're there for.
 - **Reviewed by someone who didn't write it.** Five security reviews so far, each by a separate AI reviewer reading the code fresh. Their findings were fixed and each fix proven, apart from a few minor items still being worked on.
