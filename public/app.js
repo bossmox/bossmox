@@ -396,6 +396,7 @@ function drawHealthCheck() {
   const head = bad ? `${bad === 1 ? "One thing needs" : `${bad} things need`} attention` : warn ? `${warn === 1 ? "One thing is" : `${warn} things are`} worth a look` : "Everything looks good";
   const groups = ["Nodes", "Backups", "Storage", "Guests", "BossMox"].map((g) => [g, checks.filter((c) => c.group === g).sort((a, b) => HC_ORDER[a.status] - HC_ORDER[b.status])]).filter(([, l]) => l.length);
   box.innerHTML = `<div class="sttop"><div><h2 class="hchead">${esc(head)}</h2><p class="meta" style="margin:2px 0 0">${checks.length} checks, ${checks.filter((c) => c.status === "ok").length} passed${checks.some((c) => c.status === "off") ? `, ${checks.filter((c) => c.status === "off").length} turned off` : ""}.</p></div><div class="actions"><button class="btn" data-hcagain="1">Check again</button></div></div>
+    ${S.data?.cluster ? overallBars(S.data.cluster, S.data.nodes.length) : ""}
     ${groups.map(([g, list]) => `<h3 class="sthd">${esc(g)}</h3><div class="stgroup hcgroup">${list.map((c) => `<div class="hcrow ${c.status}"><span class="dot ${c.status === "ok" ? "running" : c.status === "off" ? "" : "warn"}" aria-hidden="true"></span>
       <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" && c.fix?.kind !== "check-now" ? "" : healthFix(c.fix)}${c.id === "scheduled" && c.status === "warn" ? `<button class="btn" data-backupselsewhere="on">We back up another way</button>` : ""}${c.id === "bossmox-version" && (c.status === "ok" || c.fix?.kind === "bossmox-update") ? `<button class="btn" data-updatecheck="off">Stop checking</button>` : ""}</div></div>`).join("")}</div>`).join("")}`;
 }
@@ -3692,6 +3693,9 @@ async function refresh() {
   stale.hidden = !(error && S.data);
   stale.textContent = "Showing old data, lost contact with Proxmox";
   renderHealth();
+  // The Health check window's gauges follow the live numbers; the rest of it changes only on Check again.
+  const hcGauges = $("#hcbox .overall");
+  if (hcGauges && S.data?.cluster) hcGauges.outerHTML = overallBars(S.data.cluster, S.data.nodes.length);
   renderList();
   if (S.tab !== "settings") renderDetail();
   renderServers();
