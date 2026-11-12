@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { askedToLogIn, finished, INSTALL_COMMAND, keptConfigFiles, plainText } from "../src/node-shell.js";
+import { askedToLogIn, finished, INSTALL_COMMAND, keptConfigFiles, plainText, typedLine } from "../src/node-shell.js";
 
 test("the exit code is read from the marker, never from the echoed command", () => {
   const echoed = "root@pve1:~# export DEBIAN_FRONTEND=noninteractive; ... ; echo __BOSSMOX_DONE__:$?\r\n";
@@ -32,7 +32,7 @@ test("the install keeps existing config files and prints its exit code", () => {
   assert.match(INSTALL_COMMAND, /systemd-run --quiet --wait --collect --unit=bossmox-update /);
   assert.doesNotMatch(INSTALL_COMMAND, /--pipe/);
   assert.match(INSTALL_COMMAND, /^if systemctl is-active --quiet bossmox-update; then \(exit 75\); else /);
-  assert.match(INSTALL_COMMAND, /journalctl -q -o cat -u bossmox-update --since "@\$s"; \(exit \$c\); fi; echo __BOSSMOX_DONE__:\$\?\n$/);
+  assert.match(INSTALL_COMMAND, /journalctl --no-pager -q -o cat -u bossmox-update --since "@\$s"; \(exit \$c\); fi; echo __BOSSMOX_DONE__:\$\?\n$/);
   assert.equal(plainText("\x1b[1mbold\x1b[0m\r\n"), "bold\n");
 });
 
@@ -41,4 +41,12 @@ test("the console's echo of the typed install command never reads as a finished 
   const echoed = `root@a-long-node-name-01:~# ${INSTALL_COMMAND}`;
   assert.equal(finished(echoed), null);
   assert.equal(finished(`${echoed}...\r\n__BOSSMOX_DONE__:75\r\n`), 75, "the real result still reads");
+});
+
+test("console commands never wait in a pager (Maverick, 2026-11-12)", () => {
+  assert.match(INSTALL_COMMAND, /journalctl --no-pager /, "the install prints its log without paging");
+  const line = typedLine(INSTALL_COMMAND);
+  assert.ok(line.startsWith("export PAGER=cat SYSTEMD_PAGER=cat"), "every typed command turns pagers off first");
+  assert.ok(line.endsWith(INSTALL_COMMAND));
+  assert.equal(finished(line), null, "the echo of the typed line still never reads as done");
 });

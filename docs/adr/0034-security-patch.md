@@ -13,6 +13,8 @@ The second outside review of 0.1.9 left a few smaller security gaps, kept privat
 - **Usernames** of other people no longer show in the guests-away list, a run's Stop note, or the "only the person who started it can stop it" message, unless the viewer can change the whole cluster.
 - **Setup sign-in:** a sign-in still waiting on Proxmox when someone enters the setup code again is refused, instead of landing after the reset with its password.
 
+- **Console commands never page.** Found on a real cluster the day 0.1.9 shipped: Update all nodes installed on the first node in seconds, then waited, because the install's journalctl opened a pager in the node's console and the done line never printed. Each node would have waited out the 45-minute limit. Every command BossMox types now starts with the pagers off, and the install's journalctl has `--no-pager`.
+
 ## Not done
 
 - The storage-erase check still relies on the space allowance for a ZFS dataset made outside Proxmox's storage list; the 120-second storage-setup list and by-ID alias matching are unchanged. Next patch.

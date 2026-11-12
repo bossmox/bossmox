@@ -45,7 +45,14 @@ export const INSTALL_COMMAND =
   `if systemctl is-active --quiet bossmox-update; then (exit ${STILL_RUNNING}); else s=$(date +%s); ` +
   "systemd-run --quiet --wait --collect --unit=bossmox-update --setenv=DEBIAN_FRONTEND=noninteractive " +
   "bash -c 'apt-get update -q >/dev/null 2>&1; apt-get -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade'; " +
-  'c=$?; journalctl -q -o cat -u bossmox-update --since "@$s"; (exit $c); fi; echo __BOSSMOX_DONE__:$?\n';
+  'c=$?; journalctl --no-pager -q -o cat -u bossmox-update --since "@$s"; (exit $c); fi; echo __BOSSMOX_DONE__:$?\n';
+
+/**
+ * The console is a terminal, so journalctl, systemctl and friends page anything longer than a screen and wait for a
+ * key nobody presses. The done line then never prints (seen on a real cluster, 2026-11-12). Every typed command
+ * starts with the pagers turned off.
+ */
+export const typedLine = (command: string) => `export PAGER=cat SYSTEMD_PAGER=cat SYSTEMD_LESS=; ${command}`;
 
 export interface ShellConfig {
   readonly pveUrl: URL;
@@ -99,7 +106,7 @@ export function runOnNode(config: ShellConfig, node: string, ticket: string, pro
       if (settled || typed) return;
       if (askedToLogIn(output)) return end(new Error(`Your Proxmox account doesn't get a root console on ${node}, so BossMox can't install there. Sign in as root@pam to run updates.`));
       typed = true;
-      send(command);
+      send(typedLine(command));
     };
     ws.on("open", () => ws.send(`${proxy.user}:${proxy.ticket}\n`));
     ws.on("message", (data) => {
