@@ -9,7 +9,7 @@ import { discForm } from "./create.js";
 import { checkNetworks, migrationNetwork, SAFE_BATCH, type NetCheck } from "./cluster-net.js";
 import type { Overview, RawConfig, RawResource, RawSnapshot } from "./model.js";
 import { readMoves, runMoveHome, runMoveOff, writeMoves, type MoveDeps } from "./moves.js";
-import { INSTALL_COMMAND, runOnNode, type ShellConfig } from "./node-shell.js";
+import { INSTALL_COMMAND, runOnNode, STILL_RUNNING, type ShellConfig } from "./node-shell.js";
 import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
 import type { Preferences } from "./preferences.js";
 import { PveError, type PveClient } from "./pve.js";
@@ -349,6 +349,7 @@ export function createJobs(ctx: JobsContext) {
       install: async (node) => {
         const proxy = await pve.post<TermProxy>(`/nodes/${enc(node)}/termproxy`, session);
         const r = await runOnNode(ctx.shell(), node, t(), proxy, INSTALL_COMMAND);
+        if (r.exitCode === STILL_RUNNING) throw new Error(`An earlier update is still installing on ${node}, so BossMox didn't start another. Wait for it to finish, then run again.`);
         const left = await pve.get<RawUpdate[]>(`/nodes/${enc(node)}/apt/update`, t()).then((u) => groupUpdates(u).total, () => null);
         return { exitCode: r.exitCode, keptConfig: r.keptConfig, left };
       },

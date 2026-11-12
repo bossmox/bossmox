@@ -27,6 +27,9 @@ test("config files dpkg kept are listed once each", () => {
 test("the install keeps existing config files and prints its exit code", () => {
   assert.match(INSTALL_COMMAND, /--force-confold/);
   assert.match(INSTALL_COMMAND, /--force-confdef/);
-  assert.match(INSTALL_COMMAND, /dist-upgrade; echo __BOSSMOX_DONE__:\$\?\n$/);
+  // apt runs as its own systemd job, so a closed console can't stop it mid-upgrade, and never twice at once (#59).
+  assert.match(INSTALL_COMMAND, /systemd-run --quiet --pipe --wait --collect --unit=bossmox-update /);
+  assert.match(INSTALL_COMMAND, /^if systemctl is-active --quiet bossmox-update; then echo __BOSSMOX_DONE__:75; else /);
+  assert.match(INSTALL_COMMAND, /dist-upgrade'; echo __BOSSMOX_DONE__:\$\?; fi\n$/);
   assert.equal(plainText("\x1b[1mbold\x1b[0m\r\n"), "bold\n");
 });
