@@ -22,7 +22,7 @@ export interface JobsContext {
   pve: Pick<PveClient, "get" | "post" | "put">;
   preferences: () => Preferences;
   loadOverview: (ticket: string) => Promise<Overview>;
-  audit: (event: string, who: string, address: string, detail?: string) => void;
+  audit: (event: string, who: string, address: string, fields?: Record<string, string | number>) => void;
   /** A job ended: the person's cached overview is out of date. */
   jobEnded: (session: Session) => void;
   shell: () => ShellConfig;
@@ -441,7 +441,7 @@ export function createJobs(ctx: JobsContext) {
         const current = await pve.get<RawConfig>(`${path}/config`, session.ticket);
         const { slots } = asEjected(current);
         for (const slot of slots) await pve.put<null>(`${path}/config`, session, discForm("", current, slot));
-        if (slots.length) ctx.audit("eject", session.username, "run", `node=${n.name} guest=${v.id}`);
+        if (slots.length) ctx.audit("eject", session.username, "run", { node: n.name, guest: v.id });
       }
       currentRun = { id: `run:${Date.now()}`, kind, by: session.username, startedAt: Date.now(), finishedAt: null, running: true, stop: null, error: null, current: 0, nodes };
       const run = currentRun;

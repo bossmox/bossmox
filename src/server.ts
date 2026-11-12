@@ -29,6 +29,7 @@ import { runFor, runsPath, } from "./run.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
 import { buildUsage, RANGES, type Range, type RawPoint } from "./usage.js";
 import { buildStorageMap, isListedBackup, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
+import { auditLine } from "./audit.js";
 import {
   buildMovePlan,
   buildRebootPlan,
@@ -673,7 +674,7 @@ const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, 
       throw err;
     }
     await pve.put<null>("/cluster/options", who, form);
-    audit("cluster-option", who.username, "settings", `${id}=${body.on ? "on" : "off"} ${Object.entries(form).map(([k, v]) => `${k}=${v}`).join(" ")}`);
+    audit("cluster-option", who.username, "settings", { [id]: body.on ? "on" : "off", ...form });
     // Health check reads these too, so its kept answer is out of date now.
     preferencesEpoch += 1;
     return null;
@@ -1107,13 +1108,13 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
   if (!session) return json(res, 401, { error: "Sign in to continue." });
   try {
     if (action === "guest-console") {
-      audit("console", session.username, addressOf(req), `node=${text(body.server, 64)} guest=${text(body.guest, 12)}`);
+      audit("console", session.username, addressOf(req), { node: text(body.server, 64), guest: text(body.guest, 12) });
       return await openConsole(res, body, session);
     }
     const name = text(body.server, 64);
     if (action === "install-updates" || action === "node-console") {
       if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-      audit(action === "install-updates" ? "updater" : "console", session.username, addressOf(req), `node=${name}`);
+      audit(action === "install-updates" ? "updater" : "console", session.username, addressOf(req), { node: name });
       return await openNodeTerminal(res, name, session, action === "install-updates" ? { cmd: "upgrade" } : {});
     }
     const run = Object.hasOwn(ACTIONS, action) ? ACTIONS[action] : undefined;
@@ -1122,7 +1123,7 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
     const task = await run(name, session, body);
     // No task means it's already done, so nothing else will clear the old view of it.
     if (!task) cache.delete(session);
-    audit(action, session.username, addressOf(req), `node=${name}${text(body.guest, 12) ? ` guest=${text(body.guest, 12)}` : ""}`);
+    audit(action, session.username, addressOf(req), { node: name, ...(text(body.guest, 12) ? { guest: text(body.guest, 12) } : {}) });
     return json(res, 200, { task });
   } catch (err) {
     if (answerPveError(res, id, err) === false) throw err;
@@ -1176,10 +1177,8 @@ function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
 const text = (v: unknown, max: number) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : "");
 
 /** Who did what, for anyone looking into an incident. Names and addresses only, never tickets, passwords or request bodies. */
-function audit(event: string, who: string, address: string, detail = "") {
-  // Some of this comes from the request, so nothing in it gets to start a new line or colour a terminal.
-  const line = (s: string) => s.replace(/[^\x20-\x7e]/g, "?");
-  console.log(`audit ${new Date().toISOString()} ${event} user=${line(who).replace(/ /g, "?")} from=${line(address).replace(/ /g, "?")}${detail ? ` ${line(detail)}` : ""}`);
+function audit(event: string, who: string, address: string, fields: Record<string, string | number> = {}) {
+  console.log(auditLine(new Date(), event, who, address, fields));
 }
 let lastLockoutLog = 0;
 /** A lockout can be hammered, and one line every 10 seconds says all it needs to without filling a small disk. */
@@ -1188,7 +1187,7 @@ function auditRefused(event: string, who: string, address: string, status: numbe
     if (Date.now() - lastLockoutLog < 10000) return;
     lastLockoutLog = Date.now();
   }
-  audit(event, who, address, `status=${status}`);
+  audit(event, who, address, { status });
 }
 function addressOf(req: http.IncomingMessage): string {
   const forwarded = req.headers["x-forwarded-for"];
@@ -1247,7 +1246,7 @@ async function upload(req: http.IncomingMessage, res: http.ServerResponse) {
   if (!NODE_NAME.test(name) || !STORAGE.test(storage)) return json(res, 400, { error: "That upload isn't valid." });
   if (!UPLOAD_NAME.test(filename)) return json(res, 400, { error: "That has to be an .iso or .img file, with a plain file name." });
   if (!Number.isInteger(size) || size < 1 || size > MAX_UPLOAD) return json(res, 400, { error: "That file is too large." });
-  audit("upload", session.username, addressOf(req), `node=${name} storage=${storage} file=${filename} bytes=${size}`);
+  audit("upload", session.username, addressOf(req), { node: name, storage, file: filename, bytes: size });
   try {
     const task = await pve.upload(`/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}/upload`, session, { content: "iso" }, { name: filename, size, stream: req });
     return json(res, 200, { task });
