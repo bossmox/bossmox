@@ -1,3 +1,4 @@
+import { PveError } from "./pve.js";
 /** Turns raw Proxmox node answers into the Servers app's plain-language view. */
 import { plainError } from "./plain-errors.js";
 
@@ -355,3 +356,13 @@ export function buildServerDetail(
   };
 }
 export type ServerDetail = ReturnType<typeof buildServerDetail>;
+
+/** One part of a page: a part Proxmox wouldn't give is left out, but a lost sign-in still ends the request. */
+export async function section<T>(load: Promise<T>): Promise<Section<T>> {
+  try {
+    return { available: true, value: await load };
+  } catch (err) {
+    if (err instanceof PveError && err.status === 401) throw err;
+    return { available: false };
+  }
+}
