@@ -14,7 +14,7 @@ import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type MovePlan
 import type { Preferences } from "./preferences.js";
 import { PveError, type PveClient } from "./pve.js";
 import { drive, readRun, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
-import { buildRebootPlan, buildRollingPlan, groupUpdates, haQuorumBlock, section, tieBreakerVotes, type RawStatus, type RawTask, type RawTaskStatus, type RawUpdate, type RollingInput, type Section } from "./server-detail.js";
+import { buildRebootPlan, buildRollingPlan, failedCheck, groupUpdates, haQuorumBlock, section, tieBreakerVotes, type RawStatus, type RawTask, type RawTaskStatus, type RawUpdate, type RollingInput, type Section } from "./server-detail.js";
 import type { TermProxy } from "./terminal.js";
 import { HttpError } from "./http-error.js";
 
@@ -198,12 +198,15 @@ export function createJobs(ctx: JobsContext) {
       Promise.all(data.nodes.map(async (n): Promise<RollingInput> => {
         if (!n.online) return { name: n.name, online: false, version: null, updates: null, rebootNeeded: false, busy: [], cantMove: [], ejectable: [] };
         const base = `/nodes/${encodeURIComponent(n.name)}`;
-        const [status, updates, active] = await Promise.all([
+        const [status, updates, active, checks] = await Promise.all([
           section(pve.get<RawStatus>(`${base}/status`, ticket)),
           section(pve.get<RawUpdate[]>(`${base}/apt/update`, ticket)),
           section(pve.get<RawTask[]>(`${base}/tasks?source=active`, ticket)),
+          section(pve.get<RawTask[]>(`${base}/tasks?typefilter=aptupdate&limit=1`, ticket)),
         ]);
-        const list = updates.available ? groupUpdates(updates.value) : null;
+        // A check that failed leaves a stale list; that node sits the run out instead of looking up to date (#55, #73).
+        const checkFailed = checks.available ? failedCheck(checks.value) : null;
+        const list = updates.available && !checkFailed ? groupUpdates(updates.value) : null;
         // Each node that restarts is planned against the cluster as it is now: guests go home before the next one.
         const evac = list?.rebootNeeded && list.total > 0
           ? await planEvacuation(ticket, n.name, undefined, undefined, {}, assumeEjected).catch((err: Error) => ({ problems: [`BossMox couldn't plan the moves: ${err.message}`], ejectable: [] }))
@@ -219,6 +222,7 @@ export function createJobs(ctx: JobsContext) {
           busy: buildRebootPlan(active, { available: false }).busy,
           cantMove,
           ejectable,
+          checkFailed,
         };
       })),
     ]);
@@ -299,7 +303,7 @@ export function createJobs(ctx: JobsContext) {
     const haBlock = restarts && members && ha ? haQuorumBlock(votes, members.length, ha.filter((r) => /^(vm|ct):/.test(r.sid ?? "")).length) : null;
     if (haBlock) blocked.push(haBlock);
     const net = await readNetCheck(ticket);
-    return { kind, nodes: out, blocked, votes, keepsMajority: votes >= 3, keepFreePct: ctx.preferences().keepFreePct, moveBatch: net.batch, moveShared: net.known && net.shared };
+    return { kind, nodes: out, notChecked: rolling?.notChecked ?? [], blocked, votes, keepsMajority: votes >= 3, keepFreePct: ctx.preferences().keepFreePct, moveBatch: net.batch, moveShared: net.known && net.shared };
   }
 
   /**

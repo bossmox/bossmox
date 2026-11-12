@@ -274,6 +274,16 @@ export interface RollingInput {
   cantMove: string[];
   /** Guests that only need a disc ejected to move (ADR 0026). */
   ejectable?: { id: number; name: string; slots: string[]; node: string }[];
+  /** Proxmox's reason when this node's last check for updates failed: its list may be stale, so it sits this run out (#73). */
+  checkFailed?: string | null;
+}
+
+/** Why the latest check for updates failed, from Proxmox's task list; null when it passed, is running, or never ran. */
+export function failedCheck(tasks: RawTask[]): string | null {
+  const last = tasks.filter((t) => t.type === "aptupdate").sort((a, b) => (b.starttime ?? 0) - (a.starttime ?? 0))[0];
+  const s = last?.status;
+  if (!last || !s || s === "OK" || s.startsWith("WARNINGS")) return null;
+  return s;
 }
 const versionParts = (v: string | null) => (v ?? "").split(/[.-]/).map((p) => Number(p) || 0);
 function olderFirst(a: RollingInput, b: RollingInput): number {
@@ -310,20 +320,24 @@ export function buildRollingPlan(servers: RollingInput[], quorate: Section<boole
   if (offline.length) blocked.push(`Bring these back online first: ${offline.join(", ")}.`);
   if (!quorate.available) blocked.push("BossMox can't tell whether the cluster is healthy.");
   else if (!quorate.value) blocked.push("The cluster has lost its majority, so it can't make changes right now.");
-  const unknown = servers.filter((s) => s.online && s.updates === null).map((s) => s.name);
+  // A node whose check failed doesn't hold up the others; it's left out and named (#73).
+  const notChecked = servers.filter((s) => s.online && s.checkFailed).map((s) => ({ name: s.name, why: s.checkFailed as string }));
+  const checked = servers.filter((s) => !(s.online && s.checkFailed));
+  const unknown = checked.filter((s) => s.online && s.updates === null).map((s) => s.name);
   if (unknown.length) blocked.push(`BossMox can't read the updates on: ${unknown.join(", ")}.`);
-  for (const s of servers) if (s.busy.length) blocked.push(`${s.name} is busy. Wait for this to finish: ${s.busy.join(", ")}.`);
+  for (const s of checked) if (s.busy.length) blocked.push(`${s.name} is busy. Wait for this to finish: ${s.busy.join(", ")}.`);
   // Guests only have to move off a server that's going to restart.
-  for (const s of servers) if (s.rebootNeeded && (s.updates ?? 0) > 0) blocked.push(...s.cantMove);
+  for (const s of checked) if (s.rebootNeeded && (s.updates ?? 0) > 0) blocked.push(...s.cantMove);
   const tieVote = tieBreaker.available && tieBreakerVotes(tieBreaker.value) ? 1 : 0;
   const votes = servers.length + tieVote;
   return {
     blocked,
     // Offered beside the reasons, so a disc can be ejected from the same window.
-    ejectable: servers.filter((s) => s.rebootNeeded && (s.updates ?? 0) > 0).flatMap((s) => s.ejectable ?? []),
+    ejectable: checked.filter((s) => s.rebootNeeded && (s.updates ?? 0) > 0).flatMap((s) => s.ejectable ?? []),
     votes,
     keepsMajority: votes >= 3,
-    servers: [...servers].sort(olderFirst).filter((s) => (s.updates ?? 0) > 0).map(({ name, version, updates, rebootNeeded }) => ({ name, version, updates, rebootNeeded })),
+    notChecked,
+    servers: [...checked].sort(olderFirst).filter((s) => (s.updates ?? 0) > 0).map(({ name, version, updates, rebootNeeded }) => ({ name, version, updates, rebootNeeded })),
   };
 }
 

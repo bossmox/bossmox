@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildMovePlan, buildRebootPlan, buildRollingPlan, buildTaskFeed, buildTaskLog, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
+import { buildMovePlan, buildRebootPlan, buildRollingPlan, buildTaskFeed, failedCheck, buildTaskLog, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
 
 const repo = (uri: string, component: string, enabled = true): RawRepositories => ({
   files: [{ repositories: [{ Enabled: enabled, URIs: [uri], Components: [component] }] }],
@@ -199,4 +199,24 @@ test("the full task list merges every node, newest first, and says what it could
   assert.equal(log.items[0]?.result, "failed");
   assert.equal(log.more, true, "a node hit the limit, so there may be more");
   assert.deepEqual(log.unreachable, ["c"]);
+});
+
+test("a node whose update check failed sits the run out and doesn't block the others (#73)", () => {
+  const why = "command 'apt-get update' failed: exit code 100";
+  const plan = buildRollingPlan([rolling("a", "9.2.26", 2), rolling("b", "9.2.26", null, { checkFailed: why, busy: ["a backup"], cantMove: ["b: stuck"] }), rolling("c", "9.2.26", 2)], healthy, voteOn);
+  assert.deepEqual(plan.blocked, [], "b's failed check, busy task and moves don't stop a and c");
+  assert.deepEqual(plan.servers.map((s) => s.name), ["a", "c"]);
+  assert.deepEqual(plan.notChecked, [{ name: "b", why }]);
+  const unread = buildRollingPlan([rolling("a", "9.2.26", 2), rolling("b", "9.2.26", null)], healthy, voteOn);
+  assert.deepEqual(unread.blocked, ["BossMox can't read the updates on: b."], "an unreadable list with no failed check still blocks");
+});
+
+test("the latest check for updates decides, read from Proxmox's task list (#73)", () => {
+  const t = (starttime: number, status?: string) => ({ upid: `U${starttime}`, type: "aptupdate", starttime, ...(status ? { status } : {}) });
+  assert.equal(failedCheck([]), null, "never checked");
+  assert.equal(failedCheck([t(1, "command 'apt-get update' failed: exit code 100")]), "command 'apt-get update' failed: exit code 100");
+  assert.equal(failedCheck([t(1, "exit code 100"), t(2, "OK")]), null, "a later check passed");
+  assert.equal(failedCheck([t(1, "WARNINGS: 1")]), null);
+  assert.equal(failedCheck([t(1)]), null, "still running");
+  assert.equal(failedCheck([{ upid: "X", type: "vzdump", starttime: 9, status: "job errors" }]), null, "other tasks don't count");
 });

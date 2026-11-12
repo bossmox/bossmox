@@ -1637,9 +1637,8 @@ async function openRunStart(kind, server = "") {
         const res = await post("api/action/check-updates", { server: n });
         const body = await res.json();
         if (!res.ok) throw new Error(body.error);
-        // A failed check leaves the node's update list stale, and the plan would call it up to date (#55).
-        const view = await followTask(n, body.task);
-        if (view.result === "failed") throw new Error(`The update check failed on ${n}: ${view.message || "Proxmox didn't say why"}. Nothing was planned.`);
+        // A failed check leaves that node's list stale. The plan reads Proxmox's task list and leaves it out, named (#55, #73).
+        await followTask(n, body.task);
       }));
     } else dialog(`<h3>Planning the restart of ${esc(server)}</h3><p>Reading what runs there and where it can go.</p>`);
     const [plan, reboot] = await Promise.all([
@@ -1660,7 +1659,8 @@ function drawRunStart(kind, server, plan, reboot) {
   const busy = reboot?.busy?.length ? [`Wait for this to finish first: ${reboot.busy.join(", ")}.`] : [];
   const blocked = [...plan.blocked, ...busy];
   if (blocked.length) return dialog(`<h3>Not ready</h3>${blocked.map((b) => `<p class="loginerr">${esc(b)}</p>`).join("")}<div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn" data-runagain="${esc(again)}">Check again</button></div>`);
-  if (!plan.nodes.length) return dialog(`<h3>Every node is up to date</h3><p>Nothing is waiting to install.</p>${closeRow}`);
+  const skipped = (plan.notChecked ?? []).map((n) => `<p class="loginerr">Left out: ${esc(n.name)}. Its check for updates failed (${esc(n.why)}), so BossMox doesn't know what it needs. If its update channel needs a subscription it doesn't have, Health check can switch it to the free one.</p>`).join("");
+  if (!plan.nodes.length) return dialog(skipped ? `<h3>Nothing to install on the nodes that were checked</h3>${skipped}${closeRow}` : `<h3>Every node is up to date</h3><p>Nothing is waiting to install.</p>${closeRow}`);
   const restarts = plan.nodes.filter((n) => n.restart);
   const pick = (v) => {
     if (v.self) return `<span class="state">BossMox itself: moves${v.to ? ` to ${esc(v.to)}` : ""}</span>`;
@@ -1677,8 +1677,8 @@ function drawRunStart(kind, server, plan, reboot) {
     ? "BossMox updates one node at a time, in this order. For a node that restarts, it moves or shuts down each running VM as chosen below, installs, restarts, starts what it shut down and brings the rest home. Config files you've changed keep your version. It runs on the BossMox server: you can close this window, and follow it from any browser."
     : "BossMox moves or shuts down each running VM as chosen below, restarts the node, then starts what it shut down and brings the rest home. It runs on the BossMox server: you can close this window, and follow it from any browser.";
   const word = kind === "update" ? "confirm" : "reboot";
-  dialog(`<h3>${kind === "update" ? `Update ${plan.nodes.length === 1 ? esc(plan.nodes[0].name) : `all ${plan.nodes.length} nodes`}?` : `Restart ${esc(server)}?`}</h3>
-    <p>${how}</p>
+  dialog(`<h3>${kind === "update" ? `Update ${plan.nodes.length === 1 ? esc(plan.nodes[0].name) : `${skipped ? "" : "all "}${plan.nodes.length} nodes`}?` : `Restart ${esc(server)}?`}</h3>
+    <p>${how}</p>${skipped}
     ${restarts.some((n) => n.vms.length) ? `<p class="meta">${plan.moveBatch > 1 ? `Moves run up to ${plan.moveBatch} at a time.` : plan.moveShared ? "Moves run one at a time: they share the cluster heartbeat's only network. Health check says how to give them their own." : "Moves run one at a time."}</p>` : ""}
     ${plan.nodes.map(nodeBlock).join("")}
     ${restarts.some((n) => n.vms.length) ? keepFreeField(again) : ""}
