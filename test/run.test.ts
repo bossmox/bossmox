@@ -271,3 +271,18 @@ test("one that arrives and can't move off stops the run before the restart (#49)
   assert.equal(log.includes("restart n1"), false, "never restarted with a guest still on it");
   assert.match(r.error ?? "", /late arrived on n1 during the run and didn't move off/);
 });
+
+test("a node that ends before its reboot is asked for starts again what was shut down (review 2)", async () => {
+  // The late-arrival move just before the reboot fails: the node never restarts, so app mustn't stay off.
+  const r = run([node("n1", [vm(1, "web"), vm(2, "app", "shutdown")])]);
+  let installed = false;
+  const { deps, log } = fake({
+    at: r,
+    install: async (n) => { log.push(`install ${n}`); installed = true; return { exitCode: 0, keptConfig: [], left: 0 }; },
+    runningOn: async () => (installed ? [{ id: 9, name: "late", type: "qemu" as const }] : [{ id: 1, name: "web", type: "qemu" as const }, { id: 2, name: "app", type: "qemu" as const }]),
+    moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return ids.includes(9) ? { went: {}, error: null } : { went: Object.fromEntries(ids.map((id) => [id, "elsewhere"])), error: null }; },
+  });
+  await drive(r, deps);
+  assert.equal(log.includes("restart n1"), false);
+  assert.equal(r.nodes[0]!.vms.find((v) => v.name === "app")!.state, "started");
+});

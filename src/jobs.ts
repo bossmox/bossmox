@@ -287,12 +287,16 @@ export function createJobs(ctx: JobsContext) {
     }
     // Votes for both kinds of run, counted the same way (#43, #51).
     const [members, qdevice, ha] = await Promise.all([
-      pve.get<unknown[]>("/cluster/config/nodes", ticket).catch(() => []),
+      pve.get<{ quorum_votes?: string | number }[]>("/cluster/config/nodes", ticket).catch(() => null),
       pve.get<{ State?: string }>("/cluster/config/qdevice", ticket).catch(() => null),
-      pve.get<{ sid?: string }[]>("/cluster/ha/resources", ticket).catch(() => []),
+      pve.get<{ sid?: string }[]>("/cluster/ha/resources", ticket).catch(() => null),
     ]);
-    const votes = rolling?.votes ?? members.length + (tieBreakerVotes(qdevice) ? 1 : 0);
-    const haBlock = out.some((n) => n.restart) ? haQuorumBlock(votes, members.length, ha.filter((r) => /^(vm|ct):/.test(r.sid ?? "")).length) : null;
+    // Each node's own vote count, and the tie-breaker only when connected.
+    const votes = (members ?? []).reduce((a, m) => a + Number(m.quorum_votes ?? 1), 0) + (tieBreakerVotes(qdevice) ? 1 : 0);
+    const restarts = out.some((n) => n.restart);
+    // Not knowing is a refusal, not a pass: an account that can't read these, or a failed read, mustn't skip the check (review 2).
+    if (restarts && (!members || !ha)) blocked.push("BossMox couldn't read the cluster's votes or which guests HA looks after, so it won't restart a node. Try again, or sign in with an account that can see the whole cluster.");
+    const haBlock = restarts && members && ha ? haQuorumBlock(votes, members.length, ha.filter((r) => /^(vm|ct):/.test(r.sid ?? "")).length) : null;
     if (haBlock) blocked.push(haBlock);
     const net = await readNetCheck(ticket);
     return { kind, nodes: out, blocked, votes, keepsMajority: votes >= 3, keepFreePct: ctx.preferences().keepFreePct, moveBatch: net.batch, moveShared: net.known && net.shared };

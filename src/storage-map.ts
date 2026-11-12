@@ -81,7 +81,8 @@ export function poolItems(volumes: RawVolume[], guests: GuestRefs[], allNodesOnl
       else if (!allKnown) whyNot = eraseBlocker(guests, true) ?? "";
       // A guest this account can't see looks like no guest at all (security review L4), so a disk is only called
       // left over for an account that can see every guest.
-      else if (kind === "disk" && !owner) whyNot = eraseBlocker(guests, seesAllGuests) ?? "";
+      // A disc in a hidden VM's drive looks unused the same way (review 2), so discs and templates ask it too.
+      else if ((kind === "disk" && !owner) || kind === "disc" || kind === "template") whyNot = eraseBlocker(guests, seesAllGuests) ?? "";
       return {
         volid,
         kind,

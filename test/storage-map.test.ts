@@ -185,7 +185,9 @@ test("an account that can't see every guest is never told a disk is left over (s
   const list = poolItems(vols, guests, true, false);
   assert.equal(list.find((i) => i.volid === "fast:vm-958-disk-0")!.canDelete, false);
   assert.match(list.find((i) => i.volid === "fast:vm-958-disk-0")!.whyNot, /can't see every guest/);
-  assert.equal(list.find((i) => i.volid === "local:iso/old.iso")!.canDelete, true, "a spare disc is still fine");
+  // A disc in a VM this account can't see looks spare too, so discs ask the same question (review 2).
+  assert.equal(list.find((i) => i.volid === "local:iso/old.iso")!.canDelete, false);
+  assert.equal(poolItems(vols, guests, true, true).find((i) => i.volid === "local:iso/old.iso")!.canDelete, true, "for an account that sees every guest, a spare disc is fine");
 });
 
 test("Delete backup only deletes a volume its storage lists as a backup (review S4)", () => {

@@ -146,6 +146,8 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
   try {
     for (; run.current < run.nodes.length; run.current++) {
       const node = run.nodes[run.current] as RunNode;
+      // Set the moment the reboot is asked for. Before that, ending the node starts again what was shut down (review 2).
+      let rebootAsked = false;
       try {
         await step(run, deps, node, "checking", async () => {
           // A node that just came back can look busy or absent for a moment.
@@ -239,6 +241,7 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
               const left = lateVms.filter((v) => v.state === "failed");
               if (left.length) throw new Error(`${left.map((v) => v.name).join(", ")} arrived on ${node.name} during the run and didn't move off, so it wasn't restarted.`);
             }
+            rebootAsked = true;
             await deps.restart(node.name);
           });
           // Starting what was shut down finishes this node's restart, so Stop doesn't skip it (#44).
@@ -280,7 +283,7 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
       } catch (err) {
         // Ended before the restart: start again what was shut down for it, so nothing stays off for a restart
         // that never came. (Live 2026-11-11, Stop during emptying left a container off.)
-        if (node.phase === "emptying" || node.phase === "installing") {
+        if (node.phase === "emptying" || node.phase === "installing" || (node.phase === "restarting" && !rebootAsked)) {
           for (const vm of node.vms.filter((v) => v.state === "off")) {
             try {
               await deps.start(node.name, vm);

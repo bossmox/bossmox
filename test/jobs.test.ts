@@ -202,3 +202,15 @@ test("a run isn't started on a sign-in that would end before a long update could
     c.done();
   }
 });
+
+test("when Proxmox won't say how many votes or which guests HA looks after, a restart is refused (review 2)", async () => {
+  const c = cluster({ nodes: ["n1", "n2"], ha: ["vm:101"] });
+  const get = c.ctx.pve.get;
+  c.ctx.pve.get = ((p: string, t?: string) => (p === "/cluster/ha/resources" ? Promise.reject(new Error("403")) : get(p, t))) as typeof get;
+  try {
+    const plan = await createJobs(c.ctx).runPlan("t", "restart", "n1");
+    assert.match(plan.blocked.join(" "), /couldn't read the cluster's votes or which guests HA looks after/);
+  } finally {
+    c.done();
+  }
+});
