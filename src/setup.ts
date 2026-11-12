@@ -2,10 +2,11 @@ import { readFile } from "node:fs/promises";
 import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import type http from "node:http";
 import https from "node:https";
+import net from "node:net";
 import path from "node:path";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
-import { sameOrigin } from "./config.js";
+import { hostName, requestPath, sameOrigin } from "./config.js";
 import { call, probe } from "./pinned.js";
 import { saveSettings, settingsPath } from "./settings.js";
 import { setupHostAllowed, Wizard, WizardError } from "./wizard.js";
@@ -43,7 +44,7 @@ const wizard = new Wizard(env.BOSSMOX_SETUP_HASH ?? path.join(path.dirname(setti
   call,
   verifies: (host, port, ca, name) => new Promise((resolve) => {
     const identity = name ? { checkServerIdentity: (_h: string, cert: tls.PeerCertificate) => tls.checkServerIdentity(name, cert) } : {};
-    const socket = tls.connect({ host, port, ca, servername: /^[\d.]+$/.test(host) ? undefined : host, timeout: 8000, ...identity }, () => {
+    const socket = tls.connect({ host, port, ca, servername: net.isIP(host) ? undefined : host, timeout: 8000, ...identity }, () => {
       socket.destroy();
       resolve(socket.authorized);
     });
@@ -135,7 +136,7 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
     return json(res, 200, out);
   }
   if (route === "/setup/finish") {
-    await wizard.finish((req.headers.host ?? "").replace(/:\d+$/, "").toLowerCase());
+    await wizard.finish(hostName(req.headers.host ?? ""));
     log("finished, restarting as normal BossMox");
     json(res, 200, { ok: true });
     setTimeout(() => process.exit(0), 400);
@@ -145,8 +146,10 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
 }
 
 const handler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
-  const route = new URL(req.url ?? "/", "http://local").pathname;
+  const route = requestPath(req.url);
   try {
+    // Unreadable targets used to throw before this try and stop the setup server, losing the wizard's progress (#52).
+    if (route === null) return json(res, 400, { error: "That address isn't valid." });
     if (route === "/healthz") return json(res, 200, { ok: true, setup: true });
     if (req.method === "POST" && !wizard.finished) return await handlePost(req, res, route);
     if (req.method !== "GET") return json(res, 405, { error: "Not allowed." });

@@ -5,6 +5,7 @@ import type { Peer, Pinned } from "./pinned.js";
 import { parseAddress, PinError, PveReply } from "./pinned.js";
 import { applyChannel, ChannelError, type ChannelIO } from "./update-channel.js";
 import { plainError } from "./plain-errors.js";
+import { hostName, urlHost } from "./config.js";
 import type { Saved } from "./settings.js";
 import { freeNets, checkNetworks, migrationNetwork, type NetCheck } from "./cluster-net.js";
 
@@ -372,7 +373,7 @@ export class Wizard {
     if (!ca) throw new WizardError(502, "BossMox couldn't read this cluster's certificate authority.");
     if (failed.length) throw new WizardError(502, `BossMox couldn't verify ${failed.join(", ")}, the address Proxmox gives for that node. If it's out of date, correct it in /etc/hosts on that node, then run pvecm updatecerts --force there.`);
     this.out.saveSettings({
-      PVE_URL: hosts.map((h) => `https://${h}:${first.port}`).join(","),
+      PVE_URL: hosts.map((h) => `https://${urlHost(h)}:${first.port}`).join(","),
       PVE_CA_FILE: this.out.saveCa(ca),
       ...(tlsName ? { PVE_TLS_NAME: tlsName } : {}),
       BOSSMOX_ALLOWED_HOSTS: publicHost,
@@ -391,6 +392,6 @@ export class Wizard {
  * other site's DNS pointing here, the DNS-rebinding trick (security review L1), so it's refused.
  */
 export function setupHostAllowed(host = ""): boolean {
-  const name = host.replace(/:\d+$/, "").replace(/^\[(.*)\]$/, "$1");
+  const name = hostName(host);
   return isIP(name) !== 0 || /^[A-Za-z0-9-]{1,63}$/.test(name);
 }

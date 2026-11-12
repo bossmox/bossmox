@@ -52,6 +52,7 @@ import {
   type Section,
   type ServerDetail,
 } from "./server-detail.js";
+import { hostName } from "./config.js";
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public");
 /** Written into a release. A copy run from the repo has none, and the page then shows nothing. */
@@ -1507,7 +1508,7 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
   }
 }
 
-const stripPort = (host: string) => host.replace(/:\d+$/, "").toLowerCase();
+const stripPort = hostName;
 const hostAllowed = (header = "") => config.allowedHosts.has(stripPort(header));
 
 /** Only this app's own pages can post here: browsers won't add this header across sites without permission. */

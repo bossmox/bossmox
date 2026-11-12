@@ -152,13 +152,25 @@ fi
 WORK=$(mktemp -d /var/tmp/bossmox.XXXXXX)
 MOUNT=""
 LOOP=""
+# Set from creating the VM until it starts. A step that fails in between leaves a VM with no disk, so it goes (#58).
+CREATED=""
 cleanup() {
   [ -z "$MOUNT" ] || umount "$MOUNT" 2>/dev/null || true
   [ -z "$LOOP" ] || losetup -d "$LOOP" 2>/dev/null || true
   rm -rf "$WORK"
   [ -z "$PKG" ] || rm -rf "$PKG"
+  if [ -n "$CREATED" ]; then
+    echo "Removing the unfinished VM $CREATED." >&2
+    qm destroy "$CREATED" --purge >/dev/null 2>&1 || echo "Couldn't remove VM $CREATED. Remove it in Proxmox." >&2
+  fi
 }
 trap cleanup EXIT
+# Runs one qm step quietly, and on failure stops with what Proxmox said instead of exiting without a word (#58).
+qm_step() {
+  local what=$1 out
+  shift
+  if ! out=$("$@" 2>&1 >/dev/null); then die "$what failed: ${out:-Proxmox gave no reason}"; fi
+}
 
 echo "Downloading Alpine Linux."
 IMG=$(curl -fsSL "$ALPINE/" | grep -oE 'generic_alpine-[0-9.]+-x86_64-bios-cloudinit-r[0-9]+\.qcow2' | sort -uV | tail -1)
@@ -219,14 +231,17 @@ rm -f "$WORK/img.raw"
 
 echo "Creating VM $VMID."
 NET="virtio,bridge=$BRIDGE${VLAN:+,tag=$VLAN}"
-qm create "$VMID" --name bossmox --cores 1 --cpuunits 50 --memory 256 --balloon 0 \
+qm_step "Creating VM $VMID" qm create "$VMID" --name bossmox --cores 1 --cpuunits 50 --memory 256 --balloon 0 \
   --net0 "$NET" --scsihw virtio-scsi-single --ostype l26 --onboot 1 --agent 1 \
-  --serial0 socket --tablet 0 --description "BossMox: management app for Proxmox Virtual Environment" >/dev/null
-qm set "$VMID" --scsi0 "$STORAGE:0,import-from=$WORK/img.qcow2,iothread=1" >/dev/null 2>&1
-qm set "$VMID" --ide2 "$STORAGE:cloudinit" --boot order=scsi0 >/dev/null 2>&1
-qm resize "$VMID" scsi0 1G >/dev/null 2>&1
-qm set "$VMID" --ciuser alpine --ipconfig0 "ip=${ADDRESS:-dhcp}${GATEWAY:+,gw=$GATEWAY}" >/dev/null
-qm start "$VMID" >/dev/null
+  --serial0 socket --tablet 0 --description "BossMox: management app for Proxmox Virtual Environment"
+CREATED=$VMID
+qm_step "Importing the disk onto $STORAGE" qm set "$VMID" --scsi0 "$STORAGE:0,import-from=$WORK/img.qcow2,iothread=1"
+qm_step "Adding the cloud-init drive" qm set "$VMID" --ide2 "$STORAGE:cloudinit" --boot order=scsi0
+qm_step "Growing the disk" qm resize "$VMID" scsi0 1G
+qm_step "Setting the network" qm set "$VMID" --ciuser alpine --ipconfig0 "ip=${ADDRESS:-dhcp}${GATEWAY:+,gw=$GATEWAY}"
+qm_step "Starting VM $VMID" qm start "$VMID"
+# From here the VM is kept: the first boot can be slow, and its console shows what it's doing.
+CREATED=""
 
 echo "Starting it. The first boot installs what BossMox needs, which takes a few minutes."
 # The agent doesn't answer until partway through the first boot, and that's not a failure.
