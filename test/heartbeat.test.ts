@@ -12,7 +12,7 @@ const root = { username: "root@pam", ticket: "T" } as Session;
 const sha = (t: string) => createHash("sha256").update(t, "utf8").digest("hex");
 
 /** The bmx8 lab: three nodes, heartbeat on vmbr0 over eth0, 10.0.31.0/24 on ens19. The console works on `file`. */
-function fake(opts: { linkWorks?: boolean; unreachable?: string; changeBeforeWrite?: boolean } = {}) {
+function fake(opts: { linkWorks?: boolean; unreachable?: string; changeBeforeWrite?: boolean; cutOff?: number } = {}) {
   const st = { file: lab, writes: 0, audits: [] as string[] };
   let clock = 0;
   const nodes = [1, 2, 3].map((n) => ({ name: `bmx8-node${n}`, nodeid: n, hb: `10.0.30.${243 + n}`, b: `10.0.31.${243 + n}` }));
@@ -43,7 +43,7 @@ function fake(opts: { linkWorks?: boolean; unreachable?: string; changeBeforeWri
     if (line.includes("__BMX_CFG__")) {
       const me = Number(node.slice(-1));
       const links = Object.keys(readConf(st.file).nodes[0]!.rings).map(Number);
-      const block = (l: number) => `LINK ID ${l} udp\n\tstatus:\n${[1, 2, 3].map((id) => `\t\tnodeid: ${id}:\t${id === me ? "localhost" : l === 0 || opts.linkWorks !== false ? "connected" : "disconnected"}`).join("\n")}`;
+      const block = (l: number) => `LINK ID ${l} udp\n\tstatus:\n${[1, 2, 3].map((id) => `\t\tnodeid: ${id}:\t${id === me ? "localhost" : l === 0 || (opts.linkWorks !== false && !(opts.cutOff && (me === opts.cutOff || id === opts.cutOff))) ? "connected" : "disconnected"}`).join("\n")}`;
       return { exitCode: 0, output: `\n__BMX_CFG__\nLocal node ID ${me}, transport knet\n${links.map(block).join("\n")}\n__BMX_END__\n` };
     }
     throw new Error(`unexpected console line ${line}`);
@@ -108,4 +108,13 @@ test("refused: not root@pam, the wrong name, another network, or one already run
   await hb.start(root, "10.0.31.0/24", "bmx8lab");
   await assert.rejects(hb.start(root, "10.0.31.0/24", "bmx8lab"), (e: { status: number }) => e.status === 409);
   await done();
+});
+
+test("when one node can't join the new link, the message names that node, not every node", async () => {
+  const { hb, done } = fake({ cutOff: 3 });
+  await hb.start(root, "10.0.31.0/24", "bmx8lab");
+  const j = await done();
+  assert.equal(j.result, "restored");
+  const failed = j.steps.find((s) => s.state === "failed");
+  assert.equal(failed?.text, "After a minute, bmx8-node3 couldn't connect to the other nodes over the backup link.");
 });

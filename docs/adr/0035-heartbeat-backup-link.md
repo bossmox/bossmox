@@ -79,6 +79,15 @@ A backup link on the network moves use means the heartbeat no longer has only on
   4. Health check before and after.
 - Snapshots of the three lab nodes before step 1.
 
+## Lab results (2026-11-12, bmx8, Proxmox 8.4)
+
+Snapshots `preheartbeat` of VMs 903-905 first.
+1. **Through the page:** Health check showed the best-practice row; Settings → Redundancy offered 10.0.31.0/24 (also the move network, so the shared line showed); a wrong typed name was refused; with `bmx8lab` every step went green. `corosync-cfgtool -s` on all three nodes: links 0 and 1 connected, quorate.
+2. **Failover:** corosync's ports blocked on node3's vmbr0 (link 0). Every node showed link 0 to node3 disconnected and link 1 connected; the cluster stayed quorate with 3 votes; node3 didn't restart (uptime kept counting). Link 0 came back when the block lifted.
+3. **Put back:** the lab returned to one link by hand. Corosync's ports blocked on node3's ens19, so ping passed but link 1 couldn't connect. BossMox wrote the link, saw it not connected after a minute, put the old file back (config_version 7) and confirmed every node on link 0, quorate. The message then named all three nodes; it now names only the node the others can't reach (unit-tested).
+
+Not tested: a Proxmox 9 corosync.conf (the bmxlab cluster was shut down); the parser is format-agnostic, but a 9.x fixture should be added when that lab is up.
+
 ## Not in this
 
 Changing link priorities; removing a link; IPv6; heartbeats given as names; two links at once.

@@ -127,12 +127,14 @@ export function createHeartbeat(deps: HeartbeatDeps) {
     const before = Buffer.from(raw.trim(), "base64").toString("utf8");
     let after: string;
     let ids: number[];
+    let idName = new Map<number, string>();
     try {
       const conf = readConf(before);
       if (linksIn(conf).length !== 1) return fail(s, "The heartbeat already has more than one link in its settings file.");
       if (conf.nodes.length !== nodes.length || conf.nodes.some((n) => !(n.name in v.addresses))) return fail(s, "The settings file's nodes don't match the cluster's. Nothing was changed.");
       after = addLink(before, v.link, v.addresses);
       ids = conf.nodes.map((n) => n.nodeid);
+      idName = new Map(conf.nodes.map((n) => [n.nodeid, n.name]));
     } catch (err) {
       return fail(s, err instanceof CorosyncError ? err.message : "BossMox couldn't read the heartbeat settings file.");
     }
@@ -162,15 +164,25 @@ export function createHeartbeat(deps: HeartbeatDeps) {
 
     // 4. Every node sees the new link connected to every other node.
     s = step("Waiting for every node to connect over the backup link");
+    // Which nodes don't see the link up, and how many others report each node as not connected.
+    let reported = new Map<number, number>();
     const upEverywhere = async (link: number) => {
       const down: string[] = [];
+      reported = new Map();
       for (const node of nodes) {
         const r = await deps.console(node, session, "printf '\\n__BMX_CFG__\\n'; corosync-cfgtool -s; printf '\\n__BMX_END__\\n'");
         const out = between(r.output, "__BMX_CFG__", "__BMX_END__");
-        if (out === null || !linkUp(linkStatus(out), link, ids)) down.push(node);
+        const st = out === null ? null : linkStatus(out);
+        if (!st || !linkUp(st, link, ids)) down.push(node);
+        for (const id of ids) {
+          const seen = st?.[link]?.[id];
+          if (seen && seen !== "connected" && seen !== "localhost") reported.set(id, (reported.get(id) ?? 0) + 1);
+        }
       }
       return down;
     };
+    /** The nodes every other node reports as not connected: the ones that couldn't join, rather than everyone. */
+    const culprits = () => ids.filter((id) => (reported.get(id) ?? 0) >= ids.length - 1).map((id) => idName.get(id) as string);
     let down: string[] = nodes;
     for (const until = deps.now() + SETTLE_MS; ; await deps.wait(5000)) {
       down = await upEverywhere(v.link);
@@ -181,7 +193,10 @@ export function createHeartbeat(deps: HeartbeatDeps) {
       j.result = "added";
       return;
     }
-    s.fail(`After a minute, ${down.join(", ")} ${down.length === 1 ? "isn't" : "aren't"} connected over the backup link.`);
+    const blamed = culprits();
+    s.fail(blamed.length && blamed.length < ids.length
+      ? `After a minute, ${blamed.join(", ")} couldn't connect to the other nodes over the backup link.`
+      : `After a minute, ${down.join(", ")} ${down.length === 1 ? "isn't" : "aren't"} connected over the backup link.`);
 
     // 5. Not up everywhere: the old file goes back, with a higher version so corosync loads it.
     s = step("Putting the old heartbeat settings back");
