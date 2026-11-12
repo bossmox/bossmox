@@ -48,6 +48,12 @@ export interface GuestRefs {
 const ITEM_KIND: Record<string, string> = { images: "disk", rootdir: "disk", iso: "disc", vztmpl: "template", backup: "backup", import: "import", snippets: "snippet" };
 
 /**
+ * Whether this volume is a backup in this storage's own listing. Delete backup only deletes what this says yes to,
+ * so a request naming a guest's disk is refused instead of reaching Proxmox (review S4).
+ */
+export const isListedBackup = (volumes: RawVolume[], volid: string) => volumes.some((v) => v.volid === volid && v.content === "backup");
+
+/**
  * What's on a pool, and whether each thing can be deleted from BossMox (ADR 0015). Proxmox itself deletes a disk
  * that a VM still uses without a word (measured in the lab), so this is the check, and the server runs it again
  * on every delete. A disk is only ever deletable when no guest in the cluster owns it or refers to it.

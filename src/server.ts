@@ -29,7 +29,7 @@ import { drive, readRun, runsPath, writeRun, type Choice, type Run, type RunDeps
 import { INSTALL_COMMAND, runOnNode } from "./node-shell.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
 import { buildUsage, RANGES, type Range, type RawPoint } from "./usage.js";
-import { buildStorageMap, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
+import { buildStorageMap, isListedBackup, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import {
   buildMovePlan,
   buildRebootPlan,
@@ -1412,12 +1412,14 @@ const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, 
     else Object.assign(form, { ostemplate: volid, restore: "1" });
     return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${type}`, who, form);
   },
-  "backup-delete": (name, who, body) => {
+  "backup-delete": async (name, who, body) => {
     const volid = text(body.volid, 256);
     const storage = text(body.storage, 64);
     if (!VOLUME.test(volid) || !STORAGE.test(storage)) throw new AuthError(400, "That request isn't valid.");
     if (body.confirm !== volid) throw new AuthError(400, "That wasn't confirmed.");
-    return pve.delete<string>(`/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}/content/${encodeURIComponent(volid)}`, who);
+    const base = `/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}`;
+    if (!isListedBackup(await pve.get<RawVolume[]>(`${base}/content?content=backup`, who.ticket), volid)) throw new AuthError(400, `That isn't a backup on ${storage}.`);
+    return pve.delete<string>(`${base}/content/${encodeURIComponent(volid)}`, who);
   },
   "schedule-add": async (_name, who, body) => {
     const schedule = text(body.schedule, 16);

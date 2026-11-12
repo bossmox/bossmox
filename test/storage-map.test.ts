@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildStorageMap, poolItems, poolRemoval, type NodeStorageInput } from "../src/storage-map.js";
+import { buildStorageMap, isListedBackup, poolItems, poolRemoval, type NodeStorageInput } from "../src/storage-map.js";
 
 /** Proxmox's real answers, captured from the Tiny (an ordinary LVM install plus a second drive) and two lab nodes. */
 function fixture(name: string): NodeStorageInput {
@@ -181,4 +181,14 @@ test("an account that can't see every guest is never told a disk is left over (s
   assert.equal(list.find((i) => i.volid === "fast:vm-958-disk-0")!.canDelete, false);
   assert.match(list.find((i) => i.volid === "fast:vm-958-disk-0")!.whyNot, /can't see every guest/);
   assert.equal(list.find((i) => i.volid === "local:iso/old.iso")!.canDelete, true, "a spare disc is still fine");
+});
+
+test("Delete backup only deletes a volume its storage lists as a backup (review S4)", () => {
+  const volumes = [
+    { volid: "nas:backup/vzdump-qemu-100-2026_11_12-01_00_00.vma.zst", content: "backup" },
+    { volid: "nas:100/vm-100-disk-0.qcow2", content: "images" },
+  ];
+  assert.equal(isListedBackup(volumes, "nas:backup/vzdump-qemu-100-2026_11_12-01_00_00.vma.zst"), true);
+  assert.equal(isListedBackup(volumes, "nas:100/vm-100-disk-0.qcow2"), false, "a guest's own disk on the same storage");
+  assert.equal(isListedBackup(volumes, "local-lvm:vm-100-disk-0"), false, "a volume that storage doesn't hold");
 });
