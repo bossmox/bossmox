@@ -22,10 +22,10 @@ import { buildHealth, type Leftover } from "./health.js";
 import { canChangeCluster, KEEP_FREE_CHOICES, preferencesPath, readPreferences, scheduleWarnings, writePreferences, type Preferences } from "./preferences.js";
 import { settingsPath } from "./settings.js";
 import { gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
-import { movesPath, readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps } from "./moves.js";
+import { jobFor, movesPath, readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps } from "./moves.js";
 import { checkNetworks, migrationNetwork, SAFE_BATCH, type NetCheck } from "./cluster-net.js";
 import { buildRecommended, optionsForm, props, RecommendedError } from "./recommended.js";
-import { drive, readRun, runsPath, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
+import { drive, readRun, runFor, runsPath, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
 import { INSTALL_COMMAND, runOnNode } from "./node-shell.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
 import { buildUsage, RANGES, type Range, type RawPoint } from "./usage.js";
@@ -914,6 +914,15 @@ async function storageMapFor(name: string, t: string, data: Overview) {
     seesAllGuests: seesAll,
   }, data.nodes.length > 1);
   return { map, diskList: readHardDisks(disks, passedThrough(name, data), eraseBlocker(guestRefs(data), seesAll)), config, directory };
+}
+
+/** What this person may see of a run or move job: all of it if they started it or can change the cluster (review S6). */
+async function viewerOf(session: Session, startedBy: string | undefined) {
+  const data = await overview(session);
+  const view = { nodes: new Set(data.nodes.map((n) => n.name)), guests: new Set(data.vms.map((v) => v.id)) };
+  if (startedBy === session.username) return { full: true, ...view };
+  const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", session.ticket).catch((): Record<string, Record<string, number>> => ({}));
+  return { full: canChangeCluster(perms), ...view };
 }
 
 /** Whether this account can see every guest. Without it, a guest it can't see looks like a deleted one. */
@@ -1884,7 +1893,7 @@ const handler: http.RequestListener = async (req, res) => {
           ]);
           return json(res, 200, { ...buildRebootPlan(active, storages, evacuate.problems), evacuate });
         }
-        if (route === "/api/run") return json(res, 200, { run: currentRun });
+        if (route === "/api/run") return json(res, 200, { run: runFor(currentRun, await viewerOf(session, currentRun?.by)) });
         if (route === "/api/run-plan") {
           const kind = params.get("kind") === "restart" ? "restart" : "update";
           const name = params.get("server") ?? "";
@@ -1898,7 +1907,7 @@ const handler: http.RequestListener = async (req, res) => {
           const away = Object.fromEntries(Object.entries(moveRecord.away)
             .map(([node, a]) => [node, { by: a.by, at: a.at, guests: stillAway(moveRecord, node, where) }] as const)
             .filter(([, a]) => a.guests.length > 0));
-          return json(res, 200, { away, job: moveRecord.job });
+          return json(res, 200, { away, job: jobFor(moveRecord.job, await viewerOf(session, moveRecord.job?.by)) });
         }
         if (route === "/api/server") {
           const name = params.get("name") ?? "";

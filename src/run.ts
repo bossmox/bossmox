@@ -44,6 +44,29 @@ export interface Run {
   nodes: RunNode[];
 }
 
+/** What one person may see of the cluster: everything, or only the nodes and guests Proxmox shows them. */
+export interface Viewer {
+  full: boolean;
+  nodes: Set<string>;
+  guests: Set<number>;
+}
+const HIDDEN = "Someone else";
+
+/**
+ * A run as this person may see it (review S6). Someone who can change the cluster, or who started it, sees all of
+ * it. Anyone else sees only the nodes and guests Proxmox already shows them, and no names they couldn't see: not
+ * who started it, and not the error or node notes, which can name hidden guests.
+ */
+export function runFor(run: Run | null, who: Viewer): Run | null {
+  if (!run || who.full) return run;
+  return {
+    ...run,
+    by: HIDDEN,
+    error: run.error ? "It stopped before finishing." : null,
+    nodes: run.nodes.filter((n) => who.nodes.has(n.name)).map((n) => ({ ...n, note: null, vms: n.vms.filter((v) => who.guests.has(v.id)) })),
+  };
+}
+
 export const runsPath = (settingsFile: string) => path.join(path.dirname(settingsFile), "runs.json");
 
 /** A run that was going when BossMox stopped isn't going any more, and doesn't pick itself back up. */

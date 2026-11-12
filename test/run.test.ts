@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { drive, readRun, writeRun, type Run, type RunDeps, type RunNode, type RunVm } from "../src/run.js";
+import { drive, readRun, runFor, writeRun, type Run, type RunDeps, type RunNode, type RunVm } from "../src/run.js";
 
 const vm = (id: number, name: string, choice: "move" | "shutdown" = "move"): RunVm => ({ id, name, type: "qemu", choice, state: "waiting" });
 const node = (name: string, vms: RunVm[], more: Partial<RunNode> = {}): RunNode => ({ name, install: true, restart: true, updates: 3, phase: "waiting", vms, note: null, keptConfig: [], ...more });
@@ -201,4 +201,23 @@ test("a failed install starts again what was shut down; a failed restart doesn't
   await drive(b, fb.deps);
   assert.deepEqual(fb.log, ["check n1", "shutdown app", "install n1"]);
   assert.equal(b.nodes[0]?.vms[0]?.state, "off");
+});
+
+test("someone who can't see the whole cluster sees only their own nodes and guests of a run (review S6)", () => {
+  const run: Run = {
+    id: "r1", kind: "update", by: "root@pam", startedAt: 1, finishedAt: null, running: true, stop: null, current: 0,
+    error: "secret-vm didn't move off n2, so it wasn't updated or restarted.",
+    nodes: [
+      { name: "n1", install: true, restart: true, updates: 3, phase: "emptying", note: "secret-vm arrived", keptConfig: [], vms: [{ id: 100, name: "mine", type: "qemu", choice: "move", state: "moving" }, { id: 200, name: "secret-vm", type: "qemu", choice: "move", state: "moving" }] },
+      { name: "n2", install: true, restart: true, updates: 1, phase: "waiting", note: null, keptConfig: [], vms: [] },
+    ],
+  };
+  const limited = { full: false, nodes: new Set(["n1"]), guests: new Set([100]) };
+  const seen = runFor(run, limited)!;
+  assert.deepEqual(seen.nodes.map((n) => n.name), ["n1"]);
+  assert.deepEqual(seen.nodes[0]!.vms.map((v) => v.name), ["mine"]);
+  assert.equal(JSON.stringify(seen).includes("secret-vm"), false, "no hidden guest's name anywhere");
+  assert.equal(JSON.stringify(seen).includes("root@pam"), false, "not who started it");
+  assert.equal(runFor(run, { ...limited, full: true }), run, "someone who can change the cluster sees all of it");
+  assert.equal(runFor(null, limited), null);
 });

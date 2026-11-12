@@ -37,6 +37,13 @@ export interface JobView {
   /** Why it stopped early, in plain words. */
   error: string | null;
 }
+/** A move job as someone who can't see the whole cluster may see it: their own guests only (review S6). */
+export function jobFor(job: JobView | null, who: { full: boolean; nodes: Set<string>; guests: Set<number> }): JobView | null {
+  if (!job || who.full) return job;
+  if (!who.nodes.has(job.node)) return null;
+  return { ...job, by: "Someone else", error: job.error ? "It stopped before finishing." : null, guests: job.guests.filter((g) => who.guests.has(g.id)) };
+}
+
 export interface MoveRecord {
   /** By home node. */
   away: Record<string, Away>;

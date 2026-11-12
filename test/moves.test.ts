@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { onlyBusy, readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps, type MoveRecord } from "../src/moves.js";
+import { jobFor, onlyBusy, readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps, type MoveRecord } from "../src/moves.js";
 import type { Move, MovePlan } from "../src/placement.js";
 
 /** A pretend cluster: guests sit on nodes, a move's task finishes on the next check and the guest arrives. */
@@ -208,4 +208,13 @@ test("a refusal is only 'busy' when processor is the whole reason", () => {
   assert.equal(onlyBusy(["d has nowhere to go: n1 would have 1 GB of memory left, under the 10% it keeps free."]), false);
   assert.equal(onlyBusy(["e has nowhere to go: n1 would have 2 GB left on local-lvm after copying 30 GB, under the 10% it keeps free"]), false);
   assert.equal(onlyBusy([]), false);
+});
+
+test("a move job shows only the viewer's own guests, and nothing on a node they can't see (review S6)", () => {
+  const job = { kind: "off" as const, node: "n1", by: "root@pam", startedAt: 1, finishedAt: null, running: true, error: "secret-vm failed", guests: [{ id: 100, name: "mine", target: "n2", state: "moving" as const }, { id: 200, name: "secret-vm", target: "n2", state: "failed" as const }] };
+  const seen = jobFor(job, { full: false, nodes: new Set(["n1"]), guests: new Set([100]) })!;
+  assert.deepEqual(seen.guests.map((g) => g.name), ["mine"]);
+  assert.equal(JSON.stringify(seen).includes("secret-vm") || JSON.stringify(seen).includes("root@pam"), false);
+  assert.equal(jobFor(job, { full: false, nodes: new Set(["n9"]), guests: new Set() }), null);
+  assert.equal(jobFor(job, { full: true, nodes: new Set(), guests: new Set() }), job);
 });
