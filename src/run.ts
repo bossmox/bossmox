@@ -220,7 +220,30 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
           });
         }
         if (node.restart) {
-          await step(run, deps, node, "restarting", () => deps.restart(node.name));
+          await step(run, deps, node, "restarting", async () => {
+            // Read again right before the restart: a guest may have arrived during the moves or the install (#49).
+            const late = (await deps.runningOn(node.name)).filter((g) => !node.vms.some((v) => v.id === g.id && v.state === "off"));
+            if (late.length) {
+              for (const g of late) if (!node.vms.some((v) => v.id === g.id)) node.vms.push({ ...g, choice: "move", state: "waiting", note: "arrived during the run" });
+              const lateVms = node.vms.filter((v) => late.some((g) => g.id === v.id));
+              for (const vm of lateVms) vm.state = "moving";
+              deps.save(run);
+              const result = await deps.moveOff(node.name, lateVms.map((v) => v.id));
+              for (const vm of lateVms) {
+                const on = result.went[vm.id];
+                if (on) {
+                  vm.state = "moved";
+                  vm.on = on;
+                } else {
+                  vm.state = "failed";
+                  vm.note = `still on ${node.name}`;
+                }
+              }
+              const left = lateVms.filter((v) => v.state === "failed");
+              if (left.length) throw new Error(`${left.map((v) => v.name).join(", ")} arrived on ${node.name} during the run and didn't move off, so it wasn't restarted.`);
+            }
+            await deps.restart(node.name);
+          });
           // Starting what was shut down finishes this node's restart, so Stop doesn't skip it (#44).
           await step(run, deps, node, "starting", async () => {
             for (const vm of node.vms.filter((v) => v.state === "off")) {
