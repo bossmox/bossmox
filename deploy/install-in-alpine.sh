@@ -58,20 +58,24 @@ fi
 chown root:bossmox /etc/bossmox/tls.key
 chmod 640 /etc/bossmox/tls.key
 
-cat > /etc/bossmox/env <<EOF
+# Written on a first install, or when the development script passes Proxmox details. An update passes none and keeps
+# the file as it is, so settings added by hand (allowed hosts, a proxy, the port) survive it (#47).
+if [ -n "$PVE_URL" ] || [ ! -f /etc/bossmox/env ]; then
+  cat > /etc/bossmox/env <<EOF
 export NODE_ENV=production
 export HOST=0.0.0.0
 export PORT=443
 export TLS_CERT_FILE=/etc/bossmox/tls.crt
 export TLS_KEY_FILE=/etc/bossmox/tls.key
 EOF
-if [ -n "$PVE_URL" ]; then
-  cat >> /etc/bossmox/env <<EOF
+  if [ -n "$PVE_URL" ]; then
+    cat >> /etc/bossmox/env <<EOF
 export PVE_URL='$PVE_URL'
 export PVE_CA_FILE=/etc/bossmox/pve-root-ca.pem
 export PVE_TLS_NAME='$PVE_TLS_NAME'
 export BOSSMOX_ALLOWED_HOSTS='$PUBLIC_ADDRESS'
 EOF
+  fi
 fi
 chmod 644 /etc/bossmox/env
 
