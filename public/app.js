@@ -205,7 +205,8 @@ new ResizeObserver(() => layoutIcons()).observe($("#desk"));
 
 const count = (n) => ["No things", "One thing", "Two things", "Three things"][n] ?? `${n} things`;
 function overallBars(c, nodeCount) {
-  const size = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} TB` : `${Math.round(n * 10) / 10} GB`);
+  // Whole numbers from 10 GB up, so the amount fits on one line under a gauge.
+  const size = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} TB` : n >= 10 ? `${Math.round(n)} GB` : `${Math.round(n * 10) / 10} GB`);
   // A half-circle gauge each. The arc turns the look's warning colour from 80% and its alert colour from 95%.
   const gauge = (label, value, pct) => {
     const p = Math.max(0, Math.min(Math.round(pct), 100));
