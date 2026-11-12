@@ -14,7 +14,7 @@ import { gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type Node
 import type { Preferences } from "./preferences.js";
 import { PveError, type PveClient } from "./pve.js";
 import { drive, readRun, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
-import { buildRebootPlan, buildRollingPlan, groupUpdates, section, type RawStatus, type RawTask, type RawTaskStatus, type RawUpdate, type RollingInput, type Section } from "./server-detail.js";
+import { buildRebootPlan, buildRollingPlan, groupUpdates, haQuorumBlock, section, tieBreakerVotes, type RawStatus, type RawTask, type RawTaskStatus, type RawUpdate, type RollingInput, type Section } from "./server-detail.js";
 import type { TermProxy } from "./terminal.js";
 
 /** What the jobs need from the server. Tests pass a fake Proxmox and files in a temporary folder. */
@@ -263,8 +263,17 @@ export function createJobs(ctx: JobsContext) {
       if (v.type === "lxc") blocked.push(`BossMox runs in the container ${v.name} on ${n.name}. A container can't move without stopping, and that would stop BossMox in the middle of the run. Restart ${n.name} from Proxmox instead, after moving its other guests.`);
       else if (!v.canMove) blocked.push(`BossMox runs in ${v.name} on ${n.name}, and it can't move: ${v.why} BossMox can't shut itself down, so this has to be fixed first.`);
     }
+    // Votes for both kinds of run, counted the same way (#43, #51).
+    const [members, qdevice, ha] = await Promise.all([
+      pve.get<unknown[]>("/cluster/config/nodes", ticket).catch(() => []),
+      pve.get<{ State?: string }>("/cluster/config/qdevice", ticket).catch(() => null),
+      pve.get<{ sid?: string }[]>("/cluster/ha/resources", ticket).catch(() => []),
+    ]);
+    const votes = rolling?.votes ?? members.length + (tieBreakerVotes(qdevice) ? 1 : 0);
+    const haBlock = out.some((n) => n.restart) ? haQuorumBlock(votes, members.length, ha.filter((r) => /^(vm|ct):/.test(r.sid ?? "")).length) : null;
+    if (haBlock) blocked.push(haBlock);
     const net = await readNetCheck(ticket);
-    return { kind, nodes: out, blocked, votes: rolling?.votes ?? null, keepsMajority: rolling?.keepsMajority ?? true, keepFreePct: ctx.preferences().keepFreePct, moveBatch: net.batch, moveShared: net.known && net.shared };
+    return { kind, nodes: out, blocked, votes, keepsMajority: votes >= 3, keepFreePct: ctx.preferences().keepFreePct, moveBatch: net.batch, moveShared: net.known && net.shared };
   }
 
   /**

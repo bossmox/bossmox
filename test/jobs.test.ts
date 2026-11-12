@@ -145,3 +145,33 @@ test("BossMox in a container recognises itself and won't run on its node; in a V
     v.done();
   }
 });
+
+test("on two votes a run won't restart a node while HA looks after guests; a connected tie-breaker lets it go (#43, #51)", async () => {
+  const two = (qdevice?: Record<string, unknown>) => cluster({ nodes: ["n1", "n2"], ha: ["vm:101"], ...(qdevice ? { qdevice } : {}) });
+  for (const [why, q] of [["no tie-breaker", undefined], ["a tie-breaker that isn't connected", { State: "Disconnected" }]] as const) {
+    const c = two(q);
+    try {
+      const plan = await c.jobs.runPlan("t", "restart", "n1");
+      assert.match(plan.blocked.join(" "), /only 2 votes, and HA looks after one guest/, why);
+      assert.equal(plan.keepsMajority, false, why);
+      await assert.rejects(c.jobs.startRun(person, "restart", "n1", true, {}), /only 2 votes/, why);
+      assert.equal(c.writes.length, 0, `nothing was touched (${why})`);
+    } finally {
+      c.done();
+    }
+  }
+  const ok = two({ State: "Connected" });
+  try {
+    const plan = await ok.jobs.runPlan("t", "restart", "n1");
+    assert.equal(plan.votes, 3);
+    assert.deepEqual(plan.blocked, []);
+  } finally {
+    ok.done();
+  }
+  const noHa = cluster({ nodes: ["n1", "n2"] });
+  try {
+    assert.deepEqual((await noHa.jobs.runPlan("t", "restart", "n1")).blocked, [], "without HA guests nothing fences, so two votes are allowed");
+  } finally {
+    noHa.done();
+  }
+});
