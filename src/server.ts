@@ -51,6 +51,7 @@ import { clusterActions } from "./actions/cluster.js";
 import { guestActions } from "./actions/guests.js";
 import { storageActions } from "./actions/storage.js";
 import { backupActions } from "./actions/backups.js";
+import { createHeartbeat, nodeConsole } from "./heartbeat.js";
 import { getRoutes, type GetRoute } from "./routes/get.js";
 import { HttpError } from "./http-error.js";
 
@@ -120,6 +121,15 @@ const cache = new WeakMap<Session, { at: number; value: Promise<Loaded>; epoch: 
 const PREFERENCES_FILE = preferencesPath(settingsPath(process.env));
 let preferences: Preferences = readPreferences(PREFERENCES_FILE);
 let preferencesEpoch = 0;
+
+/** The heartbeat's backup link (ADR 0035): changed in a node's root console, like installs. */
+const heartbeat = createHeartbeat({
+  pve,
+  console: nodeConsole(pve, () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName })),
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
+  wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+  now: () => Date.now(),
+});
 
 /** Moves and runs (ADR 0025, 0027), in their own module; the server hands them Proxmox and its settings. */
 const jobs = createJobs({
@@ -390,7 +400,7 @@ async function loadHealth(session: Session) {
   const data = await overview(session);
   const online = data.nodes.filter((n) => n.online).map((n) => n.name);
   const weekAgo = Date.now() / 1000 - 7 * 86400;
-  const [status, nodeConfig, qdevice, backupJobs, tasks, details, maps, network, options, haResources, leftover] = await Promise.all([
+  const [status, nodeConfig, qdevice, backupJobs, tasks, details, maps, network, options, haResources, leftover, heartbeatView] = await Promise.all([
     pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", t).catch(() => []),
     pve.get<{ node?: string; quorum_votes?: string | number }[]>("/cluster/config/nodes", t).catch(() => []),
     pve.get<Record<string, unknown>>("/cluster/config/qdevice", t).catch(() => ({})),
@@ -402,6 +412,7 @@ async function loadHealth(session: Session) {
     pve.get<Record<string, unknown>>("/cluster/options", t).catch((): Record<string, unknown> => ({})),
     pve.get<{ sid?: string }[]>("/cluster/ha/resources", t).catch(() => []),
     leftoverDisks(data.vms, t),
+    heartbeat.view(session).catch(() => null),
   ]);
   const cluster = status.find((x) => x.type === "cluster");
   const names = new Map(data.vms.map((v) => [String(v.id), v.name]));
@@ -414,6 +425,7 @@ async function loadHealth(session: Session) {
     network,
     ha: { policy: props(options.ha).shutdown_policy ?? "conditional", guests: haResources.filter((r) => /^(vm|ct):/.test(r.sid ?? "")).length },
     leftover,
+    heartbeat: heartbeatView,
     channels: details.flatMap((d) => (d?.channel ? [{ node: d.name, ...d.channel }] : [])),
     updates: details.flatMap((d) => (d?.updates ? [{ node: d.name, total: d.updates.total }] : [])),
     guests: data.vms,
@@ -538,6 +550,7 @@ async function keepsFiles(node: string, storage: string, ticket: string): Promis
 const actionContext = {
   pve,
   jobs,
+  heartbeat,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -769,7 +782,7 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
 
 
 /** What the GET routes get from the server (review #61). */
-const routeContext = { FULL_LOG, HEALTH_CACHE_MS, VERSION, cache, guestPath, healthCache, jobs, json, loadBackups, loadCreatePlan, loadHealth, loadNetwork, loadRecommended, loadRestorePlan, loadServerDetail, loadStorageMap, nodeDisks, overview, pve, snapshotFixFor, updateView, viewerOf, epoch: () => preferencesEpoch };
+const routeContext = { FULL_LOG, HEALTH_CACHE_MS, VERSION, cache, guestPath, healthCache, heartbeat, jobs, json, loadBackups, loadCreatePlan, loadHealth, loadNetwork, loadRecommended, loadRestorePlan, loadServerDetail, loadStorageMap, nodeDisks, overview, pve, snapshotFixFor, updateView, viewerOf, epoch: () => preferencesEpoch };
 export type RouteContext = typeof routeContext;
 const GET_ROUTES = getRoutes(routeContext);
 

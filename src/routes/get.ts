@@ -55,6 +55,11 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
     "/api/backups": async (_route, session, _params, _req, res) => {
         return json(res, 200, await loadBackups(session.ticket));
     },
+    "/api/heartbeat": async (_route, session, _params, _req, res) => {
+        const job = c.heartbeat.job();
+        // Who started it is a username; only that person sees it (review 2, S6).
+        return json(res, 200, { view: await c.heartbeat.view(session), job: job && { ...job, by: job.by === session.username ? job.by : "Someone else" } });
+    },
     "/api/recommended": async (_route, session, _params, _req, res) => {
         return json(res, 200, { settings: await loadRecommended(session) });
     },

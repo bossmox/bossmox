@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkNetworks, freeNets, inNetwork, networkOf, type NodeNets } from "../src/cluster-net.js";
+import { checkNetworks, FULL_BATCH, freeNets, inNetwork, networkOf, type NodeNets } from "../src/cluster-net.js";
 
 // Maverick as read 2026-11-11: heartbeat and management on 10.0.0.x (1 Gb), a 10 Gb network on 10.0.100.x, no Migration setting.
 const maverick: NodeNets[] = [56, 57, 58].map((n) => ({ name: `pve-node${n - 55}`, links: [`10.0.0.${n}`], addresses: [`10.0.0.${n}/24`, `10.0.100.${n}/24`] }));
@@ -56,4 +56,12 @@ test("can't judge: one node, a heartbeat given as a name, an address the node do
 
 test("free networks leave out any network the heartbeat uses, so setup never offers one for moves", () => {
   assert.deepEqual(freeNets({ known: true, shared: true, moveNet: "10.0.0.0/24", others: ["10.0.1.0/24", "10.0.100.0/24"], batch: 1, heartbeat: ["10.0.0.0/24", "10.0.1.0/24"] }), ["10.0.100.0/24"]);
+});
+
+test("a backup heartbeat link on the move network: moves no longer share the heartbeat's only network (ADR 0035)", () => {
+  const nodes = [1, 2, 3].map((n) => ({ name: `n${n}`, links: [`10.0.30.${n}`, `10.0.31.${n}`], addresses: [`10.0.30.${n}/24`, `10.0.31.${n}/24`] }));
+  const c = checkNetworks(nodes, "10.0.31.0/24");
+  assert.equal(c.known, true);
+  assert.equal(c.shared, false, "link 0 carries no moves, so the heartbeat keeps a network of its own");
+  assert.equal(c.batch, FULL_BATCH);
 });

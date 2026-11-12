@@ -154,3 +154,18 @@ test("a tie-breaker that's set up but not connected gives no vote, and says why 
   assert.match(down.detail, /2 votes.*port 5403/);
   assert.equal(by(buildHealth({ ...two, tieBreaker: true }), "votes")!.status, "ok");
 });
+
+test("the heartbeat: a best-practice tip with a way to Settings, a tip without one, or a pass (ADR 0035)", () => {
+  const cluster = (heartbeat: HealthInput["heartbeat"]) => buildHealth({ ...base(), nodes: [{ name: "a", online: true }, { name: "b", online: true }, { name: "c", online: true }], cluster: { quorate: true }, votes: [{ node: "a", votes: 1 }, { node: "b", votes: 1 }, { node: "c", votes: 1 }], heartbeat });
+  const offer = by(cluster({ state: "offer", network: "10.0.31.0/24", addresses: {}, sharesMoves: false, link: 1 }), "heartbeat");
+  assert.equal(offer?.status, "tip");
+  assert.match(offer?.title ?? "", /^Best practice/);
+  assert.equal(offer?.fix?.kind, "settings");
+  const noPort = by(cluster({ state: "no-port", nodes: ["c"] }), "heartbeat");
+  assert.equal(noPort?.status, "tip");
+  assert.match(noPort?.detail ?? "", /c doesn't have one/);
+  assert.equal(noPort?.fix, undefined, "nothing to set up without a second port");
+  assert.equal(by(cluster({ state: "backed-up", links: 2 }), "heartbeat")?.status, "ok");
+  assert.equal(by(cluster({ state: "unknown", why: "x" }), "heartbeat"), undefined, "nothing claimed when it can't be told");
+  assert.equal(by(buildHealth(base()), "heartbeat"), undefined, "a single node says nothing");
+});

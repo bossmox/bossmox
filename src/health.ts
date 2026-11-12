@@ -3,11 +3,15 @@
  * someone new can see what healthy looks like. Each problem carries the fix BossMox already has. Pure: server.ts
  * gathers Proxmox's answers and passes them in.
  */
+import type { HeartbeatState } from "./redundancy.js";
 import type { NetCheck } from "./cluster-net.js";
 import type { StorageMap } from "./storage-map.js";
 
-/** "off" is a check the person turned off: never counted as passed, and it says how to turn it back on. */
-export type Status = "ok" | "warn" | "bad" | "off";
+/**
+ * "off" is a check the person turned off: never counted as passed, and it says how to turn it back on. "tip" is best
+ * practice, not a fault (ADR 0035): never a warning colour, never counted as worth a look, and the page lets it be dismissed.
+ */
+export type Status = "ok" | "warn" | "bad" | "off" | "tip";
 export interface Fix {
   /** Which button the screen shows: each maps to something BossMox already does. */
   kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check" | "check-now" | "settings" | "move-network" | "ha-policy" | "leftover";
@@ -49,6 +53,8 @@ export interface HealthInput {
   network?: NetCheck;
   /** Proxmox's HA shutdown policy and how many guests HA manages (ADR 0031). */
   ha?: { policy: string; guests: number };
+  /** Whether the heartbeat has a backup link, or could (ADR 0035). */
+  heartbeat?: HeartbeatState | null;
   /** Disks detached from their guests but still on storage (ADR 0031). */
   leftover?: Leftover[];
   channels: { node: string; ok: boolean; headline: string; note: string; offer: string | null }[];
@@ -100,6 +106,12 @@ export function buildHealth(h: HealthInput): Check[] {
       if (ha.policy !== "migrate") add({ id: "ha-shutdown", group: "Nodes", status: "warn", title: "HA stops its guests when a node restarts outside BossMox", detail: `${n} managed by HA. When a node is restarted from Proxmox or by hand, Proxmox's default stops ${them} until that node is back. With Migrate, HA moves ${them} to another node first and back afterwards. BossMox's own restarts move guests first either way.`, fix: { kind: "ha-policy", label: "Fix this" } });
       else add({ id: "ha-shutdown", group: "Nodes", status: "ok", title: "HA moves its guests before a node restarts", detail: `${n} managed by HA. When a node restarts, HA moves ${them} to another node first.` });
     }
+    // Best practice, not a fault: a backup network for the heartbeat (ADR 0035). Set up in Settings.
+    const hb = h.heartbeat;
+    const why = "The nodes check on each other over one network. If it has trouble, they lose touch, and HA can restart a node to protect its guests. A second network on its own port keeps them in touch.";
+    if (hb?.state === "backed-up") add({ id: "heartbeat", group: "Nodes", status: "ok", title: "The heartbeat has a backup network", detail: `The nodes check on each other over ${hb.links} networks.` });
+    else if (hb?.state === "offer") add({ id: "heartbeat", group: "Nodes", status: "tip", title: "Best practice: give the heartbeat a backup network", detail: `${why} Every node has ${hb.network} on a second port, so it can be set up in Settings.`, fix: { kind: "settings", label: "Open Settings" } });
+    else if (hb?.state === "no-port") add({ id: "heartbeat", group: "Nodes", status: "tip", title: "Best practice: give the heartbeat a backup network", detail: `${why} That needs a second network port on every node, on a network of its own${hb.nodes.length ? `; ${list(hb.nodes)} ${hb.nodes.length === 1 ? "doesn't have one" : "don't have one"}` : ", shared by all of them"}.` });
   }
   const badChannels = h.channels.filter((c) => !c.ok);
   if (badChannels.length) for (const c of badChannels) add({ id: `channel-${c.node}`, group: "Nodes", status: "bad", title: `${c.headline} on ${c.node}`, detail: c.note, ...(c.offer ? { fix: { kind: "channel", label: c.offer === "free" ? "Use the free channel" : "Use the enterprise channel", node: c.node, channel: c.offer } } : {}) });

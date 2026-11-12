@@ -12,6 +12,10 @@ import { HttpError } from "../http-error.js";
 export function clusterActions(c: ActionContext): Record<string, Action> {
   const { audit, readOptions, pve, jobs, updates } = c;
   return {
+    "heartbeat-link-add": async (_name, who, body) => {
+      await c.heartbeat.start(who, text(body.network, 32), text(body.confirm, 64));
+      return null;
+    },
     "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
     "update-channel": async (name, who, body) => {
       const target = body.channel;
