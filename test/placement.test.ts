@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { compareVersions, guestNeed, parseSize, planMoves, type GuestNeed, type NodeRoom } from "../src/placement.js";
+import { asEjected, compareVersions, guestNeed, parseSize, planMoves, type GuestNeed, type NodeRoom } from "../src/placement.js";
 
 const GB = 1024 ** 3;
 const node = (name: string, memGb: number, usedGb: number, extra: Partial<NodeRoom> = {}): NodeRoom => ({
@@ -185,4 +185,34 @@ test("each guest that can't be placed is named, and the rest still get a place",
   assert.deepEqual(plan.moves, [], "all or nothing for a plain move");
   assert.deepEqual(plan.unplaced?.map((u) => u.id).sort(), [2, 3]);
   assert.deepEqual(plan.tentative?.map((m) => `${m.id}->${m.target}`), ["1->n2"]);
+});
+
+test("planning as if ejected empties disc drives, keeps cloud-init, and names the slots (#48)", () => {
+  const { config, slots } = asEjected({ ide2: "local:iso/setup.iso,media=cdrom", sata1: "cdrom,media=cdrom", ide0: "local-lvm:vm-1-cloudinit,media=cdrom", ide3: "none,media=cdrom", scsi0: "local-lvm:vm-1-disk-0" });
+  assert.deepEqual(slots, ["ide2", "sata1"]);
+  assert.equal(config.ide2, "none,media=cdrom");
+  assert.equal(config.ide0, "local-lvm:vm-1-cloudinit,media=cdrom");
+  assert.equal(config.scsi0, "local-lvm:vm-1-disk-0");
+});
+
+test("the planner marks a guest refused only for a busy processor, and not one short of memory (#64)", () => {
+  const room = (name: string, over: Partial<NodeRoom> = {}): NodeRoom => ({ name, version: "8.4.21", cpuModel: "x", cores: 4, cpuLoad: 0.2, memTotal: 32 * 1024 ** 3, memUsed: 4 * 1024 ** 3, storages: {}, ...over });
+  const g = guestNeed({ id: 1, name: "db", type: "qemu", mem: 2 * 1024 ** 3, cores: 2, cpuLoad: 1, config: {}, hasSnapshots: false, precondition: {}, sourceStorages: {} });
+  const busy = planMoves("n1", [g], [room("n1"), room("n2", { cpuLoad: 3.9 })], 10);
+  assert.equal(busy.unplaced?.[0]?.busyOnly, true);
+  assert.match(busy.problems[0] ?? "", /n2 would be \d+% busy, over 90%/);
+  const full = planMoves("n1", [g], [room("n1"), room("n2", { cpuLoad: 3.9 }), room("n3", { memUsed: 31 * 1024 ** 3 })], 10);
+  assert.equal(full.unplaced?.[0]?.busyOnly, undefined, "one node is short of memory, which won't pass by itself");
+});
+
+test("a container with a bind mount can't move, and a guest in a restricted HA group only goes to its group's nodes (#59)", () => {
+  const room = (name: string): NodeRoom => ({ name, version: "8.4.21", cpuModel: "x", cores: 8, cpuLoad: 0.2, memTotal: 32 * 1024 ** 3, memUsed: 4 * 1024 ** 3, storages: {} });
+  const facts = { id: 1, name: "files", type: "lxc" as const, mem: 1024 ** 3, cores: 1, cpuLoad: 0.1, hasSnapshots: false, precondition: {}, sourceStorages: {} };
+  const bound = guestNeed({ ...facts, config: { rootfs: "san:subvol-1-disk-0", mp0: "/mnt/media,mp=/media" } });
+  assert.match(bound.stuck ?? "", /uses a folder on its node \(mp0\)/);
+  const grouped = guestNeed({ ...facts, name: "db", type: "qemu", config: {}, haNodes: ["n1", "n3"] });
+  const plan = planMoves("n1", [grouped], [room("n1"), room("n2"), room("n3")], 10);
+  assert.deepEqual(plan.moves.map((m) => m.target), ["n3"], "never n2, which its group leaves out");
+  const nowhere = planMoves("n1", [guestNeed({ ...facts, name: "db", type: "qemu", config: {}, haNodes: ["n1"] })], [room("n1"), room("n2")], 10);
+  assert.match(nowhere.problems[0] ?? "", /n2 isn't in db's HA group \(n1\)/);
 });

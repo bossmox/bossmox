@@ -98,6 +98,9 @@ export class Wizard {
     const got = hashCode(code);
     if (want.length !== got.length || !timingSafeEqual(want, got)) throw new WizardError(401, "That code didn't match. Check the VM's console and try again.");
     this.triesBy.delete(from);
+    // A new code entry starts over: whoever entered it signs in for themselves, and never inherits the last
+    // person's root password (review S5).
+    this.dropSignIn();
     this.token = randomBytes(32).toString("base64url");
     this.tokenUntil = t + TOKEN_MS;
     return this.token;
@@ -160,9 +163,16 @@ export class Wizard {
   forgetIfExpired() {
     if (!this.token || this.out.now() <= this.tokenUntil) return;
     this.token = "";
+    this.dropSignIn();
+  }
+
+  /** Everything a sign-in leaves behind, the root password first. The one place it's all forgotten. */
+  private dropSignIn() {
     this.password = "";
     this.ticket = "";
     this.csrf = "";
+    this.user = "";
+    this.first = undefined;
   }
 
   private auth() {
@@ -379,9 +389,7 @@ export class Wizard {
       BOSSMOX_ALLOWED_HOSTS: publicHost,
     });
     this.finished = true;
-    this.password = "";
-    this.ticket = "";
-    this.csrf = "";
+    this.dropSignIn();
     rmSync(this.hashFile, { force: true });
     rmSync(this.hashFile.replace(/\.hash$/, ".code"), { force: true });
   }

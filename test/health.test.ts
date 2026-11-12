@@ -145,3 +145,12 @@ test("leftover disks are listed with their guest and size, and offered for remov
   assert.match(unknown.detail, /frees at least 32 GB/);
   assert.equal(by(buildHealth(base()), "leftover"), undefined);
 });
+
+test("a tie-breaker that's set up but not connected gives no vote, and says why (#51)", () => {
+  const two = { ...base(), cluster: { quorate: true }, votes: [{ node: "a", votes: 1 }, { node: "b", votes: 1 }] };
+  const down = by(buildHealth({ ...two, tieBreaker: false, tieBreakerDown: true }), "votes")!;
+  assert.equal(down.status, "warn");
+  assert.equal(down.title, "The tie-breaker isn't connected");
+  assert.match(down.detail, /2 votes.*port 5403/);
+  assert.equal(by(buildHealth({ ...two, tieBreaker: true }), "votes")!.status, "ok");
+});

@@ -1,5 +1,5 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import path from "node:path";
+import { existsSync, readFileSync, } from "node:fs";
+import { writeJsonAtomic } from "./json-file.js";
 
 export const settingsPath = (env: NodeJS.ProcessEnv) => env.BOSSMOX_SETTINGS ?? "/var/lib/bossmox/settings.json";
 
@@ -26,9 +26,5 @@ export function applySettings(env: NodeJS.ProcessEnv): boolean {
 /** Written to a temporary file first, so a power cut can't leave half a settings file. */
 export function saveSettings(env: NodeJS.ProcessEnv, values: Saved) {
   const file = settingsPath(env);
-  mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.new`;
-  writeFileSync(temp, `${JSON.stringify(values, null, 2)}\n`, { mode: 0o640 });
-  chmodSync(temp, 0o640);
-  renameSync(temp, file);
+  writeJsonAtomic(file, values);
 }

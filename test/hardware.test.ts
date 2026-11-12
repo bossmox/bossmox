@@ -123,3 +123,13 @@ test("a container's address: typos are refused with the reason", async () => {
   assert.equal(sameNetwork("10.0.31.5", 23, "10.0.30.1"), true, "a /23 spans two of the third numbers");
   assert.equal(sameNetwork("10.0.31.5", 24, "10.0.30.1"), false);
 });
+
+test("an older VM's boot disk is protected too: legacy bootdisk, or the first disk when nothing says (#59)", () => {
+  const legacy = { bootdisk: "virtio0", virtio0: "local-lvm:vm-1-disk-0,size=32G", virtio1: "local-lvm:vm-1-disk-1,size=8G", ide2: "none,media=cdrom" };
+  assert.equal(bootDisk("qemu", legacy), "virtio0");
+  assert.throws(() => removeDiskForm("qemu", legacy, "virtio0"), /starts from/);
+  assert.deepEqual(removeDiskForm("qemu", legacy, "virtio1"), { delete: "virtio1" });
+  const bare = { scsi1: "local-lvm:vm-2-disk-1,size=8G", scsi0: "local-lvm:vm-2-disk-0,size=32G", sata0: "local-lvm:vm-2-disk-2,size=8G" };
+  assert.equal(bootDisk("qemu", bare), "scsi0", "nothing says, so the first disk is the one it boots");
+  assert.equal(bootDisk("qemu", { boot: "order=net0", scsi0: "local-lvm:vm-3-disk-0" }), "", "a boot order without a disk means network boot");
+});

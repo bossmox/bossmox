@@ -41,7 +41,10 @@ export interface HealthInput {
   /** From /cluster/status: undefined on a single node that isn't in a cluster. */
   cluster?: { quorate: boolean };
   votes: { node: string; votes: number }[];
+  /** A tie-breaker that's connected and giving its vote. */
   tieBreaker: boolean;
+  /** A tie-breaker is set up but not connected, so it gives no vote (#51). */
+  tieBreakerDown?: boolean;
   /** Whether moves share the heartbeat's only network (ADR 0028). */
   network?: NetCheck;
   /** Proxmox's HA shutdown policy and how many guests HA manages (ADR 0031). */
@@ -79,7 +82,7 @@ export function buildHealth(h: HealthInput): Check[] {
   if (h.cluster) {
     const votes = h.votes.reduce((a, v) => a + v.votes, 0) + (h.tieBreaker ? 1 : 0);
     if (!h.cluster.quorate) add({ id: "votes", group: "Nodes", status: "bad", title: "The cluster has lost its majority", detail: "Too few nodes can see each other, so Proxmox has stopped starting, stopping or changing guests until enough of them are back." });
-    else if (votes <= 2) add({ id: "votes", group: "Nodes", status: "warn", title: "One node going down would lock the other", detail: `The cluster has ${plural(votes, "vote")}. Proxmox needs more than half of them, so if either node goes down, the other can't start, stop or change guests until it's back. A small third machine as a tie-breaker fixes this. Setting one up is coming in a later release.` });
+    else if (votes <= 2) add({ id: "votes", group: "Nodes", status: "warn", title: h.tieBreakerDown ? "The tie-breaker isn't connected" : "One node going down would lock the other", detail: `The cluster has ${plural(votes, "vote")}. Proxmox needs more than half of them, so if either node goes down, the other can't start, stop or change guests until it's back. ${h.tieBreakerDown ? "A tie-breaker is set up, but it isn't connected, so its vote doesn't count. Check that the machine running it is on and reachable on port 5403." : "A small third machine as a tie-breaker fixes this. Setting one up is coming in a later release."}` });
     else add({ id: "votes", group: "Nodes", status: "ok", title: "The cluster can lose a node and keep going", detail: `${plural(votes, "vote")}${h.tieBreaker ? ", including a tie-breaker" : ""}.` });
     const net = h.network;
     if (net?.known && net.shared) {

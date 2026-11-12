@@ -16,7 +16,7 @@ Problems in Proxmox VE itself belong with the Proxmox project.
 
 ## How BossMox is meant to be safe
 
-- Every Proxmox call runs with the signed-in person's own Proxmox ticket, so Proxmox's own permissions apply. There's no general pass-through: BossMox can only do the actions named in `src/server.ts`.
+- Every Proxmox call runs with the signed-in person's own Proxmox ticket, so Proxmox's own permissions apply. There's no general pass-through: BossMox can only do the actions listed in `src/actions/`, and answer the routes listed in `src/routes/get.ts`.
 - Anything that erases or changes something needs a confirmation naming it, and BossMox checks for itself rather than trusting Proxmox to refuse.
 - Setup is unlocked by a one-time code shown only on the VM's console, and the root password used during setup is never stored.
 - The install command and the VM's console show BossMox's certificate fingerprint, so you can check you've reached the right machine before the setup code and a password go through it.

@@ -54,6 +54,13 @@ const OS_NAMES: Record<string, string> = {
 const SLOW_CONTROLLERS = new Set(["pvscsi", "lsi", "lsi53c810", "megasas"]);
 const SLOW_NICS = new Set(["e1000", "e1000e", "vmxnet3", "rtl8139"]);
 
+/**
+ * Every volume a guest's settings name, as "storage:volume". Names can hold spaces and "=" ("local:iso/Windows 11.iso"),
+ * and missing one would make a mounted disc look unused (review S3). Extra matches only make BossMox more careful.
+ */
+export const volumeRefs = (config: RawConfig): string[] =>
+  Object.values(config).map((v) => String(v).split(",")[0] as string).filter((v) => /^[A-Za-z][\w.-]*:\S/.test(v));
+
 export function vmIssues(id: number, name: string, config: RawConfig = {}): Issue[] {
   const out: Issue[] = [];
   const disks = Object.entries(config).filter(
@@ -169,7 +176,7 @@ export function buildOverview(
         // Every volume its settings name (disks, disc drives, a linked clone's base), so nothing in use gets deleted.
         // Drives handed to it directly, which look unused from the node.
         devices: Object.entries(config ?? {}).filter(([k, v]) => /^(scsi|virtio|sata|ide|mp)\d+$|^rootfs$/.test(k) && String(v).startsWith("/dev/")).map(([, v]) => String(v).split(",")[0] as string),
-        refs: Object.values(config ?? {}).map((v) => String(v).split(",")[0] as string).filter((v) => /^[A-Za-z][\w.-]*:[^=\s]+$/.test(v)),
+        refs: volumeRefs(config ?? {}),
         tech: {
           "Machine type": config?.machine ?? "i440fx (default)",
           Firmware: config?.bios ?? "seabios (default)",

@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { isIPv6 } from "node:net";
 import { PveError, type LoginResult } from "./pve.js";
+import { HttpError } from "./http-error.js";
 
 const RENEW_MS = 60 * 60 * 1000; // Proxmox tickets last 2 hours, so renew well before that.
 const SESSION_MS = 12 * 60 * 60 * 1000;
@@ -28,6 +29,8 @@ export interface Session {
   expiresAt: number;
   /** Set while a renewal is waiting on Proxmox, so anything else asking waits for the same answer. */
   renewing?: Promise<void> | undefined;
+  /** Set once it has ended (signed out, expired, refused), so work still holding it stops at its next step. */
+  ended?: boolean;
 }
 interface Challenge {
   username: string;
@@ -41,11 +44,8 @@ interface Fails {
 }
 export type LoginOutcome = { kind: "ok"; id: string; username: string } | { kind: "code"; id: string };
 
-export class AuthError extends Error {
-  constructor(readonly status: number, message: string) {
-    super(message);
-  }
-}
+/** A sign-in refusal: wrong password, a lockout, no permission. Every other refusal is a plain HttpError. */
+export class AuthError extends HttpError {}
 
 /** A machine can hold a whole IPv6 /64, so that counts as one client. */
 export function clientGroup(address: string): string {
@@ -74,7 +74,10 @@ export class Sessions {
   private drop(id: string) {
     const s = this.sessions.get(id);
     this.sessions.delete(id);
-    if (s) this.onEnd(s);
+    if (s) {
+      s.ended = true;
+      this.onEnd(s);
+    }
   }
 
   private checkLimit(key: string, max: number) {
@@ -121,7 +124,7 @@ export class Sessions {
    * Every attempt counts before Proxmox answers, or a burst sent at once would all pass the check.
    * It's taken back on success, or if Proxmox didn't give an answer about the password.
    */
-  private async attempt(address: string, account: string, run: () => Promise<LoginResult>, wrong: string): Promise<LoginResult> {
+  private async attempt(address: string, account: string, run: () => Promise<LoginResult>, wrong: string, codeStep = false): Promise<LoginResult> {
     const group = clientGroup(address);
     const name = account.toLowerCase();
     const byAddress = `address:${group}`;
@@ -140,8 +143,9 @@ export class Sessions {
       if (!result.needsCode) this.remember(name, group);
       return result;
     } catch (err) {
-      if (err instanceof PveError && (err.status === 401 || err.status === 500)) {
-        // Proxmox answers a bad second factor with either status.
+      // Proxmox answers a bad second factor with 401 or 500. At the password step a 500 is Proxmox failing, not a wrong
+      // password, so it isn't counted against the person (#59).
+      if (err instanceof PveError && (err.status === 401 || (codeStep && err.status === 500))) {
         throw new AuthError(401, wrong);
       }
       const failure = err as NodeJS.ErrnoException & { unreached?: boolean };
@@ -168,7 +172,7 @@ export class Sessions {
       this.challenges.delete(challengeId);
       throw new AuthError(401, "That sign-in timed out. Start again.");
     }
-    const result = await this.attempt(address, c.username, () => this.client.login(c.username, `totp:${code}`, c.challenge), "That code didn't work. Try the next one.");
+    const result = await this.attempt(address, c.username, () => this.client.login(c.username, `totp:${code}`, c.challenge), "That code didn't work. Try the next one.", true);
     this.challenges.delete(challengeId);
     return this.start(result);
   }

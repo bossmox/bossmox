@@ -27,6 +27,18 @@ test("config files dpkg kept are listed once each", () => {
 test("the install keeps existing config files and prints its exit code", () => {
   assert.match(INSTALL_COMMAND, /--force-confold/);
   assert.match(INSTALL_COMMAND, /--force-confdef/);
-  assert.match(INSTALL_COMMAND, /dist-upgrade; echo __BOSSMOX_DONE__:\$\?\n$/);
+  // apt runs as its own systemd job with its output in the journal, so a closed console can't stop it or break its
+  // writes, and never twice at once (#59).
+  assert.match(INSTALL_COMMAND, /systemd-run --quiet --wait --collect --unit=bossmox-update /);
+  assert.doesNotMatch(INSTALL_COMMAND, /--pipe/);
+  assert.match(INSTALL_COMMAND, /^if systemctl is-active --quiet bossmox-update; then \(exit 75\); else /);
+  assert.match(INSTALL_COMMAND, /journalctl -q -o cat -u bossmox-update --since "@\$s"; \(exit \$c\); fi; echo __BOSSMOX_DONE__:\$\?\n$/);
   assert.equal(plainText("\x1b[1mbold\x1b[0m\r\n"), "bold\n");
+});
+
+test("the console's echo of the typed install command never reads as a finished install (#59, review 2)", () => {
+  // A long host name keeps the marker on one line; a short one can wrap it, which hid this in the first lab check.
+  const echoed = `root@a-long-node-name-01:~# ${INSTALL_COMMAND}`;
+  assert.equal(finished(echoed), null);
+  assert.equal(finished(`${echoed}...\r\n__BOSSMOX_DONE__:75\r\n`), 75, "the real result still reads");
 });

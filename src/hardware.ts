@@ -21,11 +21,19 @@ function sizeGb(value: string): number {
 }
 const part = (value: string, key: string) => value.split(",").find((p) => p.startsWith(`${key}=`))?.slice(key.length + 1) ?? "";
 
-/** The first disk in the boot order, which is the one that can't be taken away. */
+/**
+ * The disk it starts from, which can't be taken away: the first disk in the boot order. Older VMs name it with
+ * `bootdisk` instead, and with neither, the first disk is the one a VM boots (#59). Unknown never means none.
+ */
 export function bootDisk(type: "qemu" | "lxc", config: Config): string {
   if (type === "lxc") return "rootfs";
+  const isDisk = (d: string) => QEMU_DISK.test(d) && Object.hasOwn(config, d) && !String(config[d] ?? "").includes("media=cdrom");
   const order = String(config.boot ?? "").match(/order=([^,]+)/)?.[1]?.split(";") ?? [];
-  return order.find((d) => QEMU_DISK.test(d) && !String(config[d] ?? "").includes("media=cdrom")) ?? "";
+  const fromOrder = order.find(isDisk);
+  if (order.length) return fromOrder ?? "";
+  const legacy = String(config.bootdisk ?? "");
+  if (isDisk(legacy)) return legacy;
+  return ["scsi", "virtio", "sata", "ide"].flatMap((bus) => Object.keys(config).filter((k) => k.startsWith(bus) && isDisk(k)).sort((x, y) => Number(x.slice(bus.length)) - Number(y.slice(bus.length))))[0] ?? "";
 }
 
 export function readDisks(type: "qemu" | "lxc", config: Config) {

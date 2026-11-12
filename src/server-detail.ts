@@ -1,3 +1,4 @@
+import { PveError } from "./pve.js";
 /** Turns raw Proxmox node answers into the Servers app's plain-language view. */
 import { plainError } from "./plain-errors.js";
 
@@ -284,6 +285,21 @@ function olderFirst(a: RollingInput, b: RollingInput): number {
   return a.name.localeCompare(b.name);
 }
 /**
+ * Whether the tie-breaker gives the cluster a vote right now. Configured isn't enough: only a connected one counts
+ * (#51). Health check and both kinds of run ask this one question.
+ */
+export const tieBreakerVotes = (qdevice: { State?: string } | null | undefined) => qdevice?.State === "Connected";
+
+/**
+ * Before a run restarts a node: with HA guests and fewer than three votes, the node left running loses its
+ * majority while the other restarts, and HA resets it with every guest on it (#43). That's a refusal, not a warning.
+ */
+export function haQuorumBlock(votes: number, nodes: number, haGuests: number): string | null {
+  if (nodes < 2 || votes >= 3 || haGuests === 0) return null;
+  return `This cluster has only ${votes} votes, and HA looks after ${haGuests === 1 ? "one guest" : `${haGuests} guests`}. While one node restarts, the other loses its majority, and HA would reset it too, with every guest on it. Set up a tie-breaker first, or take the guests out of HA for the restart.`;
+}
+
+/**
  * What has to be true before updating a cluster one server at a time. Oldest goes first, because guests
  * should only ever move to the same or a newer version. A cluster that keeps fewer than three votes still
  * works, but can't make changes while a server is down, so that's a warning and not a refusal.
@@ -299,7 +315,7 @@ export function buildRollingPlan(servers: RollingInput[], quorate: Section<boole
   for (const s of servers) if (s.busy.length) blocked.push(`${s.name} is busy. Wait for this to finish: ${s.busy.join(", ")}.`);
   // Guests only have to move off a server that's going to restart.
   for (const s of servers) if (s.rebootNeeded && (s.updates ?? 0) > 0) blocked.push(...s.cantMove);
-  const tieVote = tieBreaker.available && tieBreaker.value.State === "Connected" ? 1 : 0;
+  const tieVote = tieBreaker.available && tieBreakerVotes(tieBreaker.value) ? 1 : 0;
   const votes = servers.length + tieVote;
   return {
     blocked,
@@ -355,3 +371,13 @@ export function buildServerDetail(
   };
 }
 export type ServerDetail = ReturnType<typeof buildServerDetail>;
+
+/** One part of a page: a part Proxmox wouldn't give is left out, but a lost sign-in still ends the request. */
+export async function section<T>(load: Promise<T>): Promise<Section<T>> {
+  try {
+    return { available: true, value: await load };
+  } catch (err) {
+    if (err instanceof PveError && err.status === 401) throw err;
+    return { available: false };
+  }
+}

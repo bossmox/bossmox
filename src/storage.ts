@@ -99,10 +99,22 @@ const healthBad = (h = "") => h !== "" && !["OK", "PASSED", "UNKNOWN"].includes(
 const HOLDS_DATA = /LVM|ZFS|Device Mapper|mounted|ceph|raid|crypt|LUKS|bcache/i;
 
 /**
+ * Whether BossMox can be sure no guest uses what it's about to erase. It can't when a guest's settings didn't load,
+ * or when this account can't see every guest: either way a disk handed to a VM looks unused (review S1). Every
+ * path that erases a disk, a pool or a pool's contents asks this one question.
+ */
+export function eraseBlocker(guests: readonly { known: boolean }[], seesAllGuests: boolean): string | null {
+  if (guests.some((g) => !g.known)) return "BossMox couldn't read every guest's settings, so it can't be sure nothing uses it.";
+  if (!seesAllGuests) return "Your Proxmox account can't see every guest, so BossMox can't be sure nothing uses it.";
+  return null;
+}
+
+/**
  * `passedThrough` names devices guests use directly (/dev/disk/by-id/... or /dev/sdX, from their settings) with the
  * guest's name. Such a drive looks unused on the node, but a VM is reading and writing it (security review M2).
+ * `blocked` is `eraseBlocker`'s answer: when set, no drive is free or wipeable, and each says why.
  */
-export function readHardDisks(raw: RawDisk[], passedThrough: { device: string; guest: string }[] = []) {
+export function readHardDisks(raw: RawDisk[], passedThrough: { device: string; guest: string }[] = [], blocked: string | null = null) {
   const parts = raw.filter((d) => d.parent);
   const ownerOf = (d: RawDisk) => {
     const names = [d.devpath, (d as RawDisk & { by_id_link?: string }).by_id_link, ...parts.filter((p) => p.parent === d.devpath).map((p) => p.devpath)].filter(Boolean);
@@ -114,7 +126,7 @@ export function readHardDisks(raw: RawDisk[], passedThrough: { device: string; g
       const children = parts.filter((p) => p.parent === d.devpath);
       const vm = ownerOf(d);
       const busy = Boolean(vm) || Boolean(d.mounted) || children.some((p) => Boolean(p.mounted) || HOLDS_DATA.test(p.used ?? "")) || HOLDS_DATA.test(d.used ?? "");
-      const free = !vm && !d.used && !children.length;
+      const free = !blocked && !vm && !d.used && !children.length;
       return {
         path: d.devpath as string,
         sizeGb: Math.round(((d.size ?? 0) / 1024 ** 3) * 10) / 10,
@@ -125,7 +137,8 @@ export function readHardDisks(raw: RawDisk[], passedThrough: { device: string; g
         failing: healthBad(d.health),
         wearLeft: typeof d.wearout === "number" ? d.wearout : null,
         free,
-        canWipe: !free && !busy,
+        canWipe: !blocked && !free && !busy,
+        blocked: blocked ?? "",
       };
     });
 }
@@ -134,6 +147,8 @@ export type HardDisk = ReturnType<typeof readHardDisks>[number];
 const needs = (ok: boolean, line: string) => {
   if (!ok) throw new StorageError(line);
 };
+/** Refuses a drive BossMox can't be sure is unused, before any other check can call it free. */
+const notBlocked = (d: HardDisk | undefined) => needs(!d?.blocked, `${d?.path ?? "That disk"}: ${d?.blocked}`);
 
 export function diskStorageForm(kind: string, disks: HardDisk[], v: { name: string; devices: string[]; raid: string; filesystem: string }): Record<string, string> {
   if (!["zfs", "lvmthin", "directory"].includes(kind)) throw new StorageError("Pick a type of storage.");
@@ -143,6 +158,7 @@ export function diskStorageForm(kind: string, disks: HardDisk[], v: { name: stri
   for (const d of v.devices) {
     const found = disks.find((x) => x.path === d);
     needs(found !== undefined, "One of those disks isn't on this node.");
+    notBlocked(found);
     needs(found?.free === true, `${d} is already in use. Wipe it first.`);
   }
   if (kind !== "zfs") {
@@ -169,6 +185,7 @@ export function diskStorageForm(kind: string, disks: HardDisk[], v: { name: stri
 export function assertCanWipe(disks: HardDisk[], path: string) {
   const d = disks.find((x) => x.path === path);
   needs(d !== undefined, "That disk isn't on this node.");
+  notBlocked(d);
   needs(d?.free === false, `${path} is already empty.`);
   needs(d?.canWipe === true, `${path} is in use, so BossMox won't wipe it. Anything mounted, or holding LVM or ZFS, has to be cleared in Proxmox first.`);
 }
@@ -188,6 +205,7 @@ export function setupPlan(disks: HardDisk[], devices: string[], purpose: string,
   const picked = devices.map((d) => {
     const found = disks.find((x) => x.path === d);
     needs(found !== undefined, "One of those drives isn't on this node.");
+    notBlocked(found);
     needs(found!.free || found!.canWipe, `${d} is in use by something BossMox won't erase. Check it in Proxmox first.`);
     return found!;
   });

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { buildStorageMap, poolItems, poolRemoval, type NodeStorageInput } from "../src/storage-map.js";
+import { buildStorageMap, isListedBackup, poolItems, poolRemoval, type NodeStorageInput } from "../src/storage-map.js";
 
 /** Proxmox's real answers, captured from the Tiny (an ordinary LVM install plus a second drive) and two lab nodes. */
 function fixture(name: string): NodeStorageInput {
@@ -152,6 +152,11 @@ test("deleting a ZFS mirror erases the whole pool, never rpool or part of one", 
   const tank = input.config.find((c) => c.storage === "tank")!;
   assert.deepEqual(poolRemoval(m, "tank", tank, [], []).disks, ["/dev/sdb", "/dev/sdc"]);
   assert.throws(() => poolRemoval(m, "tank", { ...tank, pool: "tank/data" }, [], []), /part of a bigger ZFS pool/);
+  // Another storage kept inside the pool, nearly empty so the space check alone lets the delete through (review S2).
+  const others = [tank, { storage: "tank-files", type: "zfspool", pool: "tank/files" }, { storage: "tank-dir", type: "dir", path: "/tank/iso" }];
+  assert.throws(() => poolRemoval(m, "tank", tank, [], [], others), /tank-files, tank-dir are kept inside tank/);
+  assert.throws(() => poolRemoval(m, "tank", tank, [], [], [tank, { storage: "tank-files", type: "zfspool", pool: "tank/files" }]), /tank-files is kept inside tank/);
+  assert.deepEqual(poolRemoval(m, "tank", tank, [], [], [tank, { storage: "other", type: "zfspool", pool: "tanker" }]).disks, ["/dev/sdb", "/dev/sdc"], "a pool merely named alike isn't inside");
 });
 
 test("Delete pool won't erase what BossMox can't see (security review M1)", () => {
@@ -180,5 +185,17 @@ test("an account that can't see every guest is never told a disk is left over (s
   const list = poolItems(vols, guests, true, false);
   assert.equal(list.find((i) => i.volid === "fast:vm-958-disk-0")!.canDelete, false);
   assert.match(list.find((i) => i.volid === "fast:vm-958-disk-0")!.whyNot, /can't see every guest/);
-  assert.equal(list.find((i) => i.volid === "local:iso/old.iso")!.canDelete, true, "a spare disc is still fine");
+  // A disc in a VM this account can't see looks spare too, so discs ask the same question (review 2).
+  assert.equal(list.find((i) => i.volid === "local:iso/old.iso")!.canDelete, false);
+  assert.equal(poolItems(vols, guests, true, true).find((i) => i.volid === "local:iso/old.iso")!.canDelete, true, "for an account that sees every guest, a spare disc is fine");
+});
+
+test("Delete backup only deletes a volume its storage lists as a backup (review S4)", () => {
+  const volumes = [
+    { volid: "nas:backup/vzdump-qemu-100-2026_11_12-01_00_00.vma.zst", content: "backup" },
+    { volid: "nas:100/vm-100-disk-0.qcow2", content: "images" },
+  ];
+  assert.equal(isListedBackup(volumes, "nas:backup/vzdump-qemu-100-2026_11_12-01_00_00.vma.zst"), true);
+  assert.equal(isListedBackup(volumes, "nas:100/vm-100-disk-0.qcow2"), false, "a guest's own disk on the same storage");
+  assert.equal(isListedBackup(volumes, "local-lvm:vm-100-disk-0"), false, "a volume that storage doesn't hold");
 });

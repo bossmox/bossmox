@@ -2,8 +2,9 @@
  * An update or restart run, driven by the BossMox server (ADR 0027). Kept in runs.json beside the settings, so any
  * browser can follow it and closing the page changes nothing. One node at a time; every step is saved as it ends.
  */
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, } from "node:fs";
 import path from "node:path";
+import { writeJsonAtomic } from "./json-file.js";
 
 export type Choice = "move" | "shutdown";
 export type VmState = "waiting" | "moving" | "moved" | "stopping" | "off" | "starting" | "started" | "home" | "stayed" | "failed";
@@ -44,6 +45,29 @@ export interface Run {
   nodes: RunNode[];
 }
 
+/** What one person may see of the cluster: everything, or only the nodes and guests Proxmox shows them. */
+export interface Viewer {
+  full: boolean;
+  nodes: Set<string>;
+  guests: Set<number>;
+}
+const HIDDEN = "Someone else";
+
+/**
+ * A run as this person may see it (review S6). Someone who can change the cluster, or who started it, sees all of
+ * it. Anyone else sees only the nodes and guests Proxmox already shows them, and no names they couldn't see: not
+ * who started it, and not the error or node notes, which can name hidden guests.
+ */
+export function runFor(run: Run | null, who: Viewer): Run | null {
+  if (!run || who.full) return run;
+  return {
+    ...run,
+    by: HIDDEN,
+    error: run.error ? "It stopped before finishing." : null,
+    nodes: run.nodes.filter((n) => who.nodes.has(n.name)).map((n) => ({ ...n, note: null, vms: n.vms.filter((v) => who.guests.has(v.id)) })),
+  };
+}
+
 export const runsPath = (settingsFile: string) => path.join(path.dirname(settingsFile), "runs.json");
 
 /** A run that was going when BossMox stopped isn't going any more, and doesn't pick itself back up. */
@@ -65,11 +89,7 @@ export function readRun(file: string): Run | null {
 }
 
 export function writeRun(file: string, run: Run) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.new`;
-  writeFileSync(temp, `${JSON.stringify(run, null, 2)}\n`, { mode: 0o640 });
-  chmodSync(temp, 0o640);
-  renameSync(temp, file);
+  writeJsonAtomic(file, run);
 }
 
 export interface InstallResult {
@@ -108,9 +128,10 @@ export interface RunDeps {
 const READY_WAIT_MS = 3 * 60 * 1000;
 const plain = (err: unknown) => (err instanceof Error && err.message ? err.message : "BossMox lost contact with Proxmox.");
 
-async function step(run: Run, deps: RunDeps, node: RunNode, phase: Phase, work: () => Promise<void>) {
+/** One phase of a node. It begins only if nobody pressed Stop, unless it finishes something already under way. */
+async function step(run: Run, deps: RunDeps, node: RunNode, phase: Phase, work: () => Promise<void>, finishes = false) {
   const stop = deps.stopped();
-  if (stop) throw new StopError(stop);
+  if (stop && !finishes) throw new StopError(stop);
   node.phase = phase;
   deps.save(run);
   await work();
@@ -125,6 +146,8 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
   try {
     for (; run.current < run.nodes.length; run.current++) {
       const node = run.nodes[run.current] as RunNode;
+      // Set the moment the reboot is asked for. Before that, ending the node starts again what was shut down (review 2).
+      let rebootAsked = false;
       try {
         await step(run, deps, node, "checking", async () => {
           // A node that just came back can look busy or absent for a moment.
@@ -196,7 +219,32 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
           });
         }
         if (node.restart) {
-          await step(run, deps, node, "restarting", () => deps.restart(node.name));
+          await step(run, deps, node, "restarting", async () => {
+            // Read again right before the restart: a guest may have arrived during the moves or the install (#49).
+            const late = (await deps.runningOn(node.name)).filter((g) => !node.vms.some((v) => v.id === g.id && v.state === "off"));
+            if (late.length) {
+              for (const g of late) if (!node.vms.some((v) => v.id === g.id)) node.vms.push({ ...g, choice: "move", state: "waiting", note: "arrived during the run" });
+              const lateVms = node.vms.filter((v) => late.some((g) => g.id === v.id));
+              for (const vm of lateVms) vm.state = "moving";
+              deps.save(run);
+              const result = await deps.moveOff(node.name, lateVms.map((v) => v.id));
+              for (const vm of lateVms) {
+                const on = result.went[vm.id];
+                if (on) {
+                  vm.state = "moved";
+                  vm.on = on;
+                } else {
+                  vm.state = "failed";
+                  vm.note = `still on ${node.name}`;
+                }
+              }
+              const left = lateVms.filter((v) => v.state === "failed");
+              if (left.length) throw new Error(`${left.map((v) => v.name).join(", ")} arrived on ${node.name} during the run and didn't move off, so it wasn't restarted.`);
+            }
+            rebootAsked = true;
+            await deps.restart(node.name);
+          });
+          // Starting what was shut down finishes this node's restart, so Stop doesn't skip it (#44).
           await step(run, deps, node, "starting", async () => {
             for (const vm of node.vms.filter((v) => v.state === "off")) {
               vm.state = "starting";
@@ -210,7 +258,7 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
               }
               deps.save(run);
             }
-          });
+          }, true);
           if (node.vms.some((v) => v.state === "moved")) {
             await step(run, deps, node, "returning", async () => {
               const moved = node.vms.filter((v) => v.state === "moved");
@@ -235,7 +283,7 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
       } catch (err) {
         // Ended before the restart: start again what was shut down for it, so nothing stays off for a restart
         // that never came. (Live 2026-11-11, Stop during emptying left a container off.)
-        if (node.phase === "emptying" || node.phase === "installing") {
+        if (node.phase === "emptying" || node.phase === "installing" || (node.phase === "restarting" && !rebootAsked)) {
           for (const vm of node.vms.filter((v) => v.state === "off")) {
             try {
               await deps.start(node.name, vm);

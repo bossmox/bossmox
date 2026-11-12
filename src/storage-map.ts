@@ -3,7 +3,7 @@
  * space, and what it can do, in the words someone from Windows, Hyper-V or ESXi would use. Pure: server.ts
  * gathers Proxmox's answers for one node and passes them in.
  */
-import type { RawDisk, RawStorageConfig } from "./storage.js";
+import { eraseBlocker, type RawDisk, type RawStorageConfig } from "./storage.js";
 
 export interface RawLvm {
   children?: { name: string; children?: { name: string }[] }[];
@@ -48,6 +48,12 @@ export interface GuestRefs {
 const ITEM_KIND: Record<string, string> = { images: "disk", rootdir: "disk", iso: "disc", vztmpl: "template", backup: "backup", import: "import", snippets: "snippet" };
 
 /**
+ * Whether this volume is a backup in this storage's own listing. Delete backup only deletes what this says yes to,
+ * so a request naming a guest's disk is refused instead of reaching Proxmox (review S4).
+ */
+export const isListedBackup = (volumes: RawVolume[], volid: string) => volumes.some((v) => v.volid === volid && v.content === "backup");
+
+/**
  * What's on a pool, and whether each thing can be deleted from BossMox (ADR 0015). Proxmox itself deletes a disk
  * that a VM still uses without a word (measured in the lab), so this is the check, and the server runs it again
  * on every delete. A disk is only ever deletable when no guest in the cluster owns it or refers to it.
@@ -72,10 +78,11 @@ export function poolItems(volumes: RawVolume[], guests: GuestRefs[], allNodesOnl
       else if (kind === "snippet" || kind === "other") whyNot = "BossMox doesn't manage these yet.";
       else if (usedBy.length) whyNot = kind === "disc" ? `It's in ${usedBy.join(", ")}'s disc drive.` : `${usedBy.join(", ")} still uses it.`;
       else if (!allNodesOnline) whyNot = "A node is offline, so BossMox can't be sure nothing there uses it.";
-      else if (!allKnown) whyNot = "BossMox couldn't read every guest's settings, so it can't be sure nothing uses it.";
+      else if (!allKnown) whyNot = eraseBlocker(guests, true) ?? "";
       // A guest this account can't see looks like no guest at all (security review L4), so a disk is only called
       // left over for an account that can see every guest.
-      else if (kind === "disk" && !owner && !seesAllGuests) whyNot = "Your Proxmox account can't see every guest, so BossMox can't be sure nothing uses this disk.";
+      // A disc in a hidden VM's drive looks unused the same way (review 2), so discs and templates ask it too.
+      else if ((kind === "disk" && !owner) || kind === "disc" || kind === "template") whyNot = eraseBlocker(guests, seesAllGuests) ?? "";
       return {
         volid,
         kind,
@@ -228,7 +235,7 @@ export interface Disk {
  * Whether a pool on a local disk can be deleted, and the Proxmox call that does it (ADR 0015). Strict on purpose:
  * never the system disk, never a pool with anything on it or anything using it, never one BossMox can't place.
  */
-export function poolRemoval(map: StorageMap, id: string, config: RawStorageConfig | undefined, mounts: (RawMount & { unitfile?: string })[], usedBy: string[]) {
+export function poolRemoval(map: StorageMap, id: string, config: RawStorageConfig | undefined, mounts: (RawMount & { unitfile?: string })[], usedBy: string[], allConfigs: RawStorageConfig[] = []) {
   const pools = map.groups.flatMap((g) => g.pools.map((p) => ({ p, g })));
   const found = pools.find((x) => x.p.id === id);
   if (map.network.some((p) => p.id === id)) throw new Error("That's network storage. Remove unhooks it instead, and nothing on it is erased.");
@@ -254,6 +261,10 @@ export function poolRemoval(map: StorageMap, id: string, config: RawStorageConfi
   if (config.type === "zfspool") {
     const pool = config.pool ?? "";
     if (!pool || pool.includes("/") || pool === "rpool") throw new Error(`${id} is part of a bigger ZFS pool, so BossMox won't erase it. Use Proxmox's own screen for this one.`);
+    // Destroying the pool destroys every dataset in it. Another storage kept inside it, even a nearly empty one the
+    // space check lets through, would go too (review S2).
+    const inside = allConfigs.filter((c) => c.storage !== id && ((c.pool ?? "").startsWith(`${pool}/`) || c.path === `/${pool}` || (c.path ?? "").startsWith(`/${pool}/`)));
+    if (inside.length) throw new Error(`${inside.map((c) => c.storage).join(", ")} ${inside.length === 1 ? "is" : "are"} kept inside ${pool}, so deleting ${id} would erase ${inside.length === 1 ? "it" : "them"} too. Remove ${inside.length === 1 ? "it" : "them"} first.`);
     return { path: `disks/zfs/${encodeURIComponent(pool)}?${cleanup}`, disks: g.disks.map((d) => d.path) };
   }
   if (config.type === "lvmthin") {

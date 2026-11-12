@@ -40,6 +40,8 @@ export interface GuestNeed {
   stuck: string | null;
   /** Drives holding a disc from its node's own storage. When that's the only reason it's stuck, ejecting frees it. */
   discSlots: string[];
+  /** The only nodes it may run on, when a restricted HA group says so (Proxmox 8). */
+  onlyNodes?: string[];
   /** Nodes Proxmox itself refuses for this guest, with the reason. */
   refused: Record<string, string>;
 }
@@ -48,9 +50,12 @@ export interface Move {
   name: string;
   type: "qemu" | "lxc";
   target: string;
-  /** Its set memory, so a batch can count what it promises a node. */
+  /** Its set memory and its processor load, so a batch can count what it promises a node. */
   mem?: number;
+  cpu?: number;
 }
+/** Room already promised to a node by moves in the same batch, counted as used. */
+export type Pending = Record<string, { mem: number; cpu: number }>;
 export interface Ejectable {
   id: number;
   name: string;
@@ -61,7 +66,7 @@ export interface MovePlan {
   /** Guests stuck only because of a disc from the node's own storage: ejecting it lets them move. */
   ejectable?: Ejectable[];
   /** Each guest that couldn't be placed, with its reason, so a person can choose to shut it down instead. */
-  unplaced?: { id: number; why: string }[];
+  unplaced?: { id: number; why: string; busyOnly?: boolean }[];
   /** Where every guest that could be placed would go, even when others couldn't. */
   tentative?: Move[];
   /** One plain sentence per guest that can't be placed. Any at all means nothing moves. */
@@ -109,6 +114,19 @@ export interface GuestFacts {
   precondition: RawPrecondition;
   /** The storages on the node it's on now, to tell its own from shared ones. */
   sourceStorages: Record<string, StorageRoom>;
+  /** The nodes its restricted HA group allows, if it's in one. */
+  haNodes?: string[];
+}
+
+/**
+ * A guest's settings with its disc drives emptied (cloud-init drives stay), and the slots that empties. A run plans
+ * with this for the discs a person chose to eject, so every check passes before any disc comes out (#48).
+ */
+export function asEjected(config: Record<string, unknown>): { config: Record<string, unknown>; slots: string[] } {
+  const slots = Object.entries(config)
+    .filter(([k, v]) => /^(ide|sata|scsi)\d+$/.test(k) && /media=cdrom|^cdrom/.test(String(v)) && !String(v).includes("cloudinit") && !String(v).startsWith("none"))
+    .map(([k]) => k);
+  return { config: { ...config, ...Object.fromEntries(slots.map((s) => [s, "none,media=cdrom"])) }, slots };
 }
 
 const DISK_SLOT = /^(scsi|virtio|sata|ide|efidisk|tpmstate|unused|mp)\d+$|^rootfs$/;
@@ -123,8 +141,11 @@ export function guestNeed(f: GuestFacts): GuestNeed {
   const discs = volumes.filter((v) => v.value.includes("media=cdrom") && !v.value.includes("cloudinit"));
   const physical = Object.entries(f.config).filter(([k, v]) => /^(ide|sata|scsi)\d+$/.test(k) && String(v).startsWith("cdrom")).map(([k]) => k);
   const discSlots = [...physical, ...discs.filter((d) => isLocal(d.storage)).map((d) => d.slot)];
+  // A container's bind mount is a folder on its node (mp0: /mnt/data,...). It isn't a volume, so it's easy to miss (#59).
+  const bindMounts = Object.entries(f.config).filter(([k, v]) => /^mp\d+$/.test(k) && String(v).startsWith("/")).map(([k]) => k);
   let stuck: string | null = null;
   if ((f.precondition.local_resources ?? []).length > 0) stuck = `${f.name} uses hardware attached to its node, so it can't move.`;
+  else if (bindMounts.length) stuck = `${f.name} uses a folder on its node (${bindMounts.join(", ")}), so it can't move. Shut it down for the restart instead.`;
   else if (physical.length) stuck = `${f.name} uses its node's own disc drive, so it can't move. Eject it first.`;
   else if (discs.some((d) => isLocal(d.storage))) stuck = `${f.name} has a disc image from its node's own storage in its drive, so it can't move. Eject the disc first.`;
   const copied = volumes.filter((v) => !v.value.includes("media=cdrom") && isLocal(v.storage));
@@ -143,17 +164,25 @@ export function guestNeed(f: GuestFacts): GuestNeed {
   const hostCpu = /^(cputype=)?host(,|$)/.test(cpu);
   // Ejecting only helps when the disc is the whole story: not with passed-through hardware or a snapshot too.
   const discOnly = discSlots.length > 0 && stuck !== null && /disc image|own disc drive/.test(stuck);
-  return { id: f.id, name: f.name, type: f.type, mem: f.mem, cores: f.cores, cpuLoad: f.cpuLoad, storages, localDisks, hostCpu, stuck, refused, discSlots: discOnly ? discSlots : [] };
+  return { id: f.id, name: f.name, type: f.type, mem: f.mem, cores: f.cores, cpuLoad: f.cpuLoad, storages, localDisks, hostCpu, stuck, refused, discSlots: discOnly ? discSlots : [], ...(f.haNodes ? { onlyNodes: f.haNodes } : {}) };
 }
 
 interface Projected extends NodeRoom {
   storages: Record<string, StorageRoom>;
 }
 
-/** Why this node can't take this guest, or null if it can. */
-function whyNot(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number): string | null {
+const BUSY = Symbol("busy");
+/** Why this node can't take this guest, or null if it can. `busy` marks a refusal for processor load alone. */
+function whyNot(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number): { why: string; busy?: true } | null {
+  const why = roomCheck(g, n, from, keepPct);
+  if (why === BUSY) return { why: `would be ${Math.round(((n.cpuLoad + g.cpuLoad) / Math.max(1, n.cores)) * 100)}% busy, over ${room(keepPct).cpuMaxPct}%`, busy: true };
+  return why ? { why } : null;
+}
+function roomCheck(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number): string | typeof BUSY | null {
   const ROOM = room(keepPct);
   if (g.refused[n.name]) return g.refused[n.name] as string;
+  // Proxmox 8's HA groups aren't in its migrate check, so a restricted group is read and kept here (#59).
+  if (g.onlyNodes && !g.onlyNodes.includes(n.name)) return `isn't in ${g.name}'s HA group (${g.onlyNodes.join(", ")})`;
   const missing = g.storages.filter((s) => !n.storages[s]);
   if (missing.length) return `doesn't have the storage ${missing.join(", ")}`;
   if (compareVersions(n.version, from.version) < 0) return `runs an older Proxmox (${n.version ?? "unknown"}) than ${from.name} (${from.version ?? "unknown"})`;
@@ -163,7 +192,7 @@ function whyNot(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number): st
   const left = n.memTotal - n.memUsed - g.mem;
   if (left < keep) return `would have ${gbText(Math.max(0, left))} of memory left, under the ${ROOM.memFreePct}% it keeps free (${gbText(keep)})`;
   const load = n.cpuLoad + g.cpuLoad;
-  if (load > (n.cores * ROOM.cpuMaxPct) / 100) return `would be ${Math.round((load / Math.max(1, n.cores)) * 100)}% busy, over ${ROOM.cpuMaxPct}%`;
+  if (load > (n.cores * ROOM.cpuMaxPct) / 100) return BUSY;
   const need = new Map<string, number>();
   for (const d of g.localDisks) need.set(d.storage, (need.get(d.storage) ?? 0) + d.bytes);
   for (const [storage, bytes] of need) {
@@ -187,7 +216,7 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
   if (!others.length && guests.length) return { moves: [], problems: ["There's no other online node to move anything to."] };
   const moves: Move[] = [];
   const problems: string[] = [];
-  const unplaced: { id: number; why: string }[] = [];
+  const unplaced: { id: number; why: string; busyOnly?: boolean }[] = [];
   const ejectable = guests.filter((g) => g.stuck && g.discSlots.length).map((g) => ({ id: g.id, name: g.name, slots: g.discSlots }));
   const order = [...guests].sort((a, b) => b.mem - a.mem || a.name.localeCompare(b.name));
   for (const g of order) {
@@ -197,12 +226,14 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
       continue;
     }
     const reasons: string[] = [];
+    let busyOnly = true;
     let best: Projected | null = null;
     let bestLeft = -Infinity;
     for (const n of others) {
-      const why = whyNot(g, n, source, keepPct);
-      if (why) {
-        reasons.push(`${n.name} ${why}`);
+      const no = whyNot(g, n, source, keepPct);
+      if (no) {
+        reasons.push(`${n.name} ${no.why}`);
+        if (!no.busy) busyOnly = false;
         continue;
       }
       const left = n.memTotal - n.memUsed - g.mem;
@@ -213,7 +244,8 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
     }
     if (!best) {
       problems.push(`${g.name} (${gbText(g.mem)} memory) has nowhere to go: ${reasons.join("; ")}.`);
-      unplaced.push({ id: g.id, why: problems[problems.length - 1] as string });
+      // Only a busy processor in the way: that passes by itself, so a caller may wait and ask again.
+      unplaced.push({ id: g.id, why: problems[problems.length - 1] as string, ...(busyOnly && reasons.length ? { busyOnly: true } : {}) });
       continue;
     }
     best.memUsed += g.mem;
@@ -222,7 +254,7 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
       const s = best.storages[d.storage];
       if (s && !s.shared) s.free -= d.bytes;
     }
-    moves.push({ id: g.id, name: g.name, type: g.type, target: best.name, mem: g.mem });
+    moves.push({ id: g.id, name: g.name, type: g.type, target: best.name, mem: g.mem, cpu: g.cpuLoad });
   }
   return problems.length ? { moves: [], problems, ejectable, unplaced, tentative: moves } : { moves, problems, ejectable, unplaced, tentative: moves };
 }

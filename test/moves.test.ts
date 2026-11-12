@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps, type MoveRecord } from "../src/moves.js";
+import { jobFor, onlyBusy, readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps, type MoveRecord } from "../src/moves.js";
 import type { Move, MovePlan } from "../src/placement.js";
 
 /** A pretend cluster: guests sit on nodes, a move's task finishes on the next check and the guest arrives. */
@@ -163,14 +163,96 @@ test("moves run three at a time, each batch planned together, and a failure lets
   assert.match(record.job?.error ?? "", /couldn't move b/);
 });
 
-test("coming home in batches counts the batch's memory against home", async () => {
-  const seen: Record<string, number>[] = [];
-  const c = cluster({ 1: "n2", 2: "n2", 3: "n3" }, { plan: (_from, ids, only) => ({ moves: [{ id: ids[0] as number, name: String(ids[0]), type: "qemu", target: only ?? "n1", mem: 4 }], problems: [] }) });
+test("coming home in batches counts the batch's memory and processor against home (#59)", async () => {
+  const seen: Record<string, { mem: number; cpu: number }>[] = [];
+  const c = cluster({ 1: "n2", 2: "n2", 3: "n3" }, { plan: (_from, ids, only) => ({ moves: [{ id: ids[0] as number, name: String(ids[0]), type: "qemu", target: only ?? "n1", mem: 4, cpu: 0.5 }], problems: [] }) });
   const plan = c.deps.plan;
   c.deps.plan = async (from, ids, only, pending) => { seen.push({ ...(pending ?? {}) }); return plan(from, ids, only, pending); };
   const record: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests: [{ id: 1, name: "a", type: "qemu", to: "n2" }, { id: 2, name: "b", type: "qemu", to: "n2" }, { id: 3, name: "c", type: "qemu", to: "n3" }] } }, job: null };
   await runMoveHome(record, c.deps, "n1", "root@pam");
-  assert.deepEqual(seen, [{}, { n1: 4 }, { n1: 8 }], "each guest is planned with the batch so far counted on home");
+  assert.deepEqual(seen, [{}, { n1: { mem: 4, cpu: 0.5 } }, { n1: { mem: 8, cpu: 1 } }], "each guest is planned with the batch so far counted on home");
   assert.equal(record.away.n1, undefined);
   assert.deepEqual(record.job?.guests.map((g) => g.state), ["done", "done", "done"]);
+});
+
+test("a guest turned away only because home is busy is tried again, and comes home once there's room", async () => {
+  // As on the lab 2026-11-12: a and b come home first, the just-booted node gets busier, and c is refused for
+  // processor alone. Retried later, it fits. A memory refusal isn't retried.
+  let cTries = 0;
+  const busy = "c (0.5 GB memory) has nowhere to go: n1 would be 92% busy, over 90%.";
+  const c = cluster({ 1: "n2", 2: "n2", 3: "n3", 4: "n3" }, {
+    plan: (_from, ids, only) => {
+      const id = ids[0];
+      if (id === 3 && ++cTries === 1) return { moves: [], problems: [busy], unplaced: [{ id: 3, why: busy, busyOnly: true }] };
+      if (id === 4) return { moves: [], problems: ["d (8 GB memory) has nowhere to go: n1 would have 1 GB of memory left."], unplaced: [{ id: 4, why: "d has nowhere to go" }] };
+      return { moves: [{ id: id as number, name: "x", type: "qemu", target: only ?? "n1" }], problems: [] };
+    },
+  });
+  const guests = [[1, "a", "n2"], [2, "b", "n2"], [3, "c", "n3"], [4, "d", "n3"]].map(([id, name, to]) => ({ id: id as number, name: name as string, type: "qemu" as const, to: to as string }));
+  const record: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests } }, job: null };
+  await runMoveHome(record, c.deps, "n1", "root@pam", 3, 60_000);
+  assert.equal(cTries, 2, "c was asked again");
+  assert.deepEqual(record.job?.guests.map((g) => `${g.name}:${g.state}`), ["a:done", "b:done", "c:done", "d:stayed"]);
+  assert.deepEqual(record.away.n1?.guests.map((g) => g.name), ["d"]);
+  // Without patience (Move everything back, pressed by a person), a busy refusal stays put at once.
+  cTries = 0;
+  const again: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests: [guests[2]!] } }, job: null };
+  c.where.set(3, "n3");
+  await runMoveHome(again, c.deps, "n1", "root@pam");
+  assert.equal(cTries, 1);
+  assert.equal(again.job?.guests[0]?.state, "stayed");
+});
+
+test("a refusal is only 'busy' when the planner marks processor as the whole reason", () => {
+  assert.equal(onlyBusy({ moves: [], problems: ["x"], unplaced: [{ id: 1, why: "x", busyOnly: true }] }), true);
+  assert.equal(onlyBusy({ moves: [], problems: ["x", "y"], unplaced: [{ id: 1, why: "x", busyOnly: true }, { id: 2, why: "y" }] }), false);
+  assert.equal(onlyBusy({ moves: [], problems: [] }), false);
+});
+
+test("a move job shows only the viewer's own guests, and nothing on a node they can't see (review S6)", () => {
+  const job = { kind: "off" as const, node: "n1", by: "root@pam", startedAt: 1, finishedAt: null, running: true, error: "secret-vm failed", guests: [{ id: 100, name: "mine", target: "n2", state: "moving" as const }, { id: 200, name: "secret-vm", target: "n2", state: "failed" as const }] };
+  const seen = jobFor(job, { full: false, nodes: new Set(["n1"]), guests: new Set([100]) })!;
+  assert.deepEqual(seen.guests.map((g) => g.name), ["mine"]);
+  assert.equal(JSON.stringify(seen).includes("secret-vm") || JSON.stringify(seen).includes("root@pam"), false);
+  assert.equal(jobFor(job, { full: false, nodes: new Set(["n9"]), guests: new Set() }), null);
+  assert.equal(jobFor(job, { full: true, nodes: new Set(), guests: new Set() }), job);
+});
+
+test("a move BossMox lost sight of but Proxmox finished is recorded where it went, so it can come home (#50)", async () => {
+  const c = cluster({ 1: "n1", 2: "n1" });
+  // Proxmox started a's move, then the answer was lost: BossMox sees an error, but a ends up on n2.
+  c.deps.migrate = async (move) => {
+    if (move.id === 1) {
+      c.where.set(1, move.target);
+      throw new Error("socket hang up");
+    }
+    c.where.set(move.id, move.target);
+    return `UPID:n1:${move.id}`;
+  };
+  c.deps.task = async () => ({ finished: true, ok: true, error: "" });
+  const record: MoveRecord = { away: {}, job: null };
+  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n3"]), 1);
+  assert.equal(record.job?.error, null, "nothing actually failed");
+  assert.deepEqual(record.job?.guests.map((g) => g.state), ["done", "done"]);
+  assert.match(record.job?.guests[0]?.note ?? "", /lost sight of the move, but it finished on n2/);
+  assert.deepEqual(record.away.n1?.guests.map((g) => `${g.name}->${g.to}`), ["a->n2", "b->n3"], "both can be sent home");
+});
+
+test("a move that errored and left the guest where it was is still a failure (#50)", async () => {
+  const c = cluster({ 1: "n1" });
+  c.deps.migrate = async () => { throw new Error("migration refused"); };
+  const record: MoveRecord = { away: {}, job: null };
+  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"]));
+  assert.equal(record.job?.guests[0]?.state, "failed");
+  assert.match(record.job?.error ?? "", /migration refused/);
+  assert.equal(record.away.n1, undefined);
+});
+
+test("moving a guest back onto its own home clears it from the away record (#50)", async () => {
+  // a lives on n1 and is away on n2. n2 is now being emptied, and a goes back to n1.
+  const c = cluster({ 1: "n2" }, { plan: (_from, ids) => ({ moves: ids.map((id) => ({ id, name: "a", type: "qemu", target: "n1" })), problems: [] }) });
+  const record: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests: [{ id: 1, name: "a", type: "qemu", to: "n2" }] } }, job: null };
+  await runMoveOff(record, c.deps, "n2", "root@pam", moves([1, "a", "n1"]));
+  assert.equal(record.away.n1, undefined, "home again, so not away");
+  assert.equal(record.away.n2, undefined, "and not recorded as away from n2 either");
 });

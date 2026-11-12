@@ -31,11 +31,21 @@ export function keptConfigFiles(output: string): string[] {
   return [...out];
 }
 
-/** Installs a node's updates with nobody answering: existing config files stay, and the exit code is printed. */
+/** The exit code the install command gives when an earlier BossMox install is still running on the node. */
+export const STILL_RUNNING = 75;
+
+/**
+ * Installs a node's updates with nobody answering: existing config files stay, and the exit code is printed. apt runs
+ * as its own systemd job, so it finishes even if the console closes (a timeout, a network blip, BossMox restarting):
+ * a closed console used to take apt down with it, mid-upgrade (#59). Its output goes to the journal, not the console,
+ * so a closed console can't make its writes fail either, and it's printed once the job ends. One already running is
+ * never started twice. The typed line only ever holds `$?`, so the console's echo of it can't read as a result.
+ */
 export const INSTALL_COMMAND =
-  "export DEBIAN_FRONTEND=noninteractive; apt-get update -q >/dev/null 2>&1; " +
-  "apt-get -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade; " +
-  "echo __BOSSMOX_DONE__:$?\n";
+  `if systemctl is-active --quiet bossmox-update; then (exit ${STILL_RUNNING}); else s=$(date +%s); ` +
+  "systemd-run --quiet --wait --collect --unit=bossmox-update --setenv=DEBIAN_FRONTEND=noninteractive " +
+  "bash -c 'apt-get update -q >/dev/null 2>&1; apt-get -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade'; " +
+  'c=$?; journalctl -q -o cat -u bossmox-update --since "@$s"; (exit $c); fi; echo __BOSSMOX_DONE__:$?\n';
 
 export interface ShellConfig {
   readonly pveUrl: URL;
@@ -74,14 +84,15 @@ export function runOnNode(config: ShellConfig, node: string, ticket: string, pro
       settled = true;
       clearTimeout(timer);
       clearTimeout(typeAfter);
+      // Only a finished command gets "exit": while the install still runs, what's typed would go to it.
       try {
-        if (ws.readyState === WebSocket.OPEN) send("exit\n");
+        if (!err && ws.readyState === WebSocket.OPEN) send("exit\n");
       } catch { /* closing anyway */ }
       ws.close();
       if (err) reject(err);
       else resolve(result as ShellResult);
     };
-    const timer = setTimeout(() => end(new Error(`The install on ${node} didn't finish within ${Math.round(timeoutMs / 60000)} minutes. It may still be running there.`)), timeoutMs);
+    const timer = setTimeout(() => end(new Error(`The install on ${node} didn't finish within ${Math.round(timeoutMs / 60000)} minutes. It carries on there by itself; check the node before restarting it.`)), timeoutMs);
     // The shell needs a moment after the login line; a login prompt in that time means no root shell.
     let typeAfter: NodeJS.Timeout | undefined;
     const typeCommand = () => {

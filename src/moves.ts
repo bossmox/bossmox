@@ -2,9 +2,10 @@
  * Guests moved off a node, and the job that moves them (ADR 0025). The record lives on the BossMox server beside
  * its settings, so any browser and any person can see what's away and send it home.
  */
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, } from "node:fs";
 import path from "node:path";
-import type { Move, MovePlan } from "./placement.js";
+import type { Move, MovePlan, Pending } from "./placement.js";
+import { writeJsonAtomic } from "./json-file.js";
 
 export interface AwayGuest {
   id: number;
@@ -37,6 +38,13 @@ export interface JobView {
   /** Why it stopped early, in plain words. */
   error: string | null;
 }
+/** A move job as someone who can't see the whole cluster may see it: their own guests only (review S6). */
+export function jobFor(job: JobView | null, who: { full: boolean; nodes: Set<string>; guests: Set<number> }): JobView | null {
+  if (!job || who.full) return job;
+  if (!who.nodes.has(job.node)) return null;
+  return { ...job, by: "Someone else", error: job.error ? "It stopped before finishing." : null, guests: job.guests.filter((g) => who.guests.has(g.id)) };
+}
+
 export interface MoveRecord {
   /** By home node. */
   away: Record<string, Away>;
@@ -65,11 +73,7 @@ export function readMoves(file: string): MoveRecord {
 
 /** Written to a temporary file first, so a power cut can't leave half a file. */
 export function writeMoves(file: string, record: MoveRecord) {
-  mkdirSync(path.dirname(file), { recursive: true });
-  const temp = `${file}.new`;
-  writeFileSync(temp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o640 });
-  chmodSync(temp, 0o640);
-  renameSync(temp, file);
+  writeJsonAtomic(file, record);
 }
 
 export interface TaskEnd {
@@ -83,7 +87,7 @@ export interface MoveDeps {
    * A fresh plan for these guests of `from`. With `only`, that node is the one target allowed. `pending` is memory
    * already promised to nodes by moves in the same batch, counted as used.
    */
-  plan(from: string, ids: number[], only?: string, pending?: Record<string, number>): Promise<MovePlan>;
+  plan(from: string, ids: number[], only?: string, pending?: Pending): Promise<MovePlan>;
   /** Starts one move and returns the Proxmox task. */
   migrate(move: Move, from: string): Promise<string>;
   task(node: string, upid: string): Promise<TaskEnd>;
@@ -133,7 +137,7 @@ async function moveOne(deps: MoveDeps, move: Move, from: string): Promise<void> 
 const plainError = (err: unknown) => (err instanceof Error && err.message ? err.message : "BossMox lost contact with Proxmox.");
 
 /**
- * Moves the given guests off `node`, one at a time. Each move is planned again with fresh numbers first, so a node
+ * Moves the given guests off `node`, a batch at a time. Each move is planned again with fresh numbers first, so a node
  * that filled up meanwhile isn't used. Every finished move is written to the record at once.
  */
 export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: string, by: string, first: Move[], batch = BATCH): Promise<void> {
@@ -159,24 +163,27 @@ export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: strin
       }
       deps.save(record);
       const results = await Promise.allSettled(take.map((m) => moveOne(deps, m, node)));
+      // A move that errored may still have happened: BossMox lost sight of it, Proxmox carried on. Where each one
+      // is now decides, not the error (#50). If even that can't be read, it stays a failure.
+      const now = results.some((r) => r.status === "rejected") ? await deps.where().catch(() => null) : null;
       let failure: unknown = null;
       take.forEach((m, i) => {
         const g = job.guests.find((x) => x.id === m.id) as JobGuest;
         const r = results[i] as PromiseSettledResult<void>;
+        let to = m.target;
         if (r.status === "rejected") {
-          g.state = "failed";
-          failure ??= r.reason;
-          return;
+          const at = now?.get(g.id);
+          if (!at || at === node) {
+            g.state = "failed";
+            failure ??= r.reason;
+            return;
+          }
+          to = at;
+          g.target = at;
+          g.note = `BossMox lost sight of the move, but it finished on ${at}.`;
         }
         g.state = "done";
-        // A guest already away from another node keeps that node as its home; only where it is now changes.
-        const elsewhere = Object.values(record.away).flatMap((a) => a.guests).find((a) => a.id === g.id);
-        if (elsewhere) elsewhere.to = m.target;
-        else {
-          // biome-ignore lint/suspicious/noAssignInExpressions: creates the node's entry on first use and returns it.
-          const away = (record.away[node] ??= { by, at: Date.now(), guests: [] });
-          away.guests.push({ id: g.id, name: g.name, type: m.type, to: m.target });
-        }
+        recordAway(record, node, by, { id: g.id, name: g.name, type: m.type }, to);
       });
       deps.save(record);
       if (failure) throw failure;
@@ -189,16 +196,42 @@ export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: strin
   deps.save(record);
 }
 
+/**
+ * Writes down where a guest moved off `node` went. A guest already away from another node keeps that node as its
+ * home, and only where it is now changes. One that has just arrived back on its own home isn't away any more.
+ */
+function recordAway(record: MoveRecord, node: string, by: string, g: { id: number; name: string; type: "qemu" | "lxc" }, to: string) {
+  const home = Object.entries(record.away).find(([, a]) => a.guests.some((x) => x.id === g.id));
+  if (home) {
+    const [homeNode, entry] = home;
+    if (homeNode === to) {
+      entry.guests = entry.guests.filter((x) => x.id !== g.id);
+      if (!entry.guests.length) delete record.away[homeNode];
+    } else (entry.guests.find((x) => x.id === g.id) as AwayGuest).to = to;
+    return;
+  }
+  // biome-ignore lint/suspicious/noAssignInExpressions: creates the node's entry on first use and returns it.
+  const away = (record.away[node] ??= { by, at: Date.now(), guests: [] });
+  away.guests.push({ id: g.id, name: g.name, type: g.type, to });
+}
+
 /** The guests still where BossMox left them. Anything moved elsewhere since is someone else's choice. */
 export function stillAway(record: MoveRecord, node: string, where: Map<number, string>): AwayGuest[] {
   return (record.away[node]?.guests ?? []).filter((g) => where.get(g.id) === g.to);
 }
 
+/** How long a guest turned away only because its home was too busy waits before it's tried again. */
+export const BUSY_RETRY_MS = 15_000;
+/** A refusal only because the node's processor is too busy. That passes by itself; memory and storage don't. */
+export const onlyBusy = (plan: MovePlan) => (plan.unplaced ?? []).length > 0 && (plan.unplaced ?? []).every((u) => u.busyOnly === true);
+
 /**
  * Sends a node's guests home, up to `batch` at a time. Each is checked for room with the rest of its batch already
- * counted on the node. One that doesn't fit stays where it is, still recorded as away.
+ * counted on the node. One that doesn't fit stays where it is, still recorded as away. With `patienceMs`, one turned
+ * away only because the node is busy (a node just back from a restart, busier with each guest that returns) is
+ * tried again every 15 seconds until that time runs out.
  */
-export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: string, by: string, batch = BATCH): Promise<void> {
+export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: string, by: string, batch = BATCH, patienceMs = 0): Promise<void> {
   // The job is on the record before anything waits, so whoever started it can follow it at once.
   const job: JobView = { kind: "home", node, by, startedAt: Date.now(), finishedAt: null, running: true, error: null, guests: (record.away[node]?.guests ?? []).map((g) => ({ id: g.id, name: g.name, target: node, state: "waiting" })) };
   record.job = job;
@@ -211,11 +244,21 @@ export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: stri
     if (away) away.guests = back;
     deps.save(record);
     const queue = [...back];
-    while (queue.length) {
+    const later: AwayGuest[] = [];
+    let retries = Math.floor(patienceMs / BUSY_RETRY_MS);
+    while (queue.length || (later.length && retries > 0)) {
+      if (!queue.length) {
+        // Everything that could come home has. Give the node a moment, then try the busy ones again.
+        retries -= 1;
+        await deps.wait(BUSY_RETRY_MS);
+        queue.push(...later.splice(0));
+        for (const g of queue) (job.guests.find((x) => x.id === g.id) as JobGuest).state = "waiting";
+        deps.save(record);
+      }
       const stop = deps.stopped();
       if (stop) throw new Error(`BossMox stopped before the next move: ${stop}`);
       const take: { g: AwayGuest; move: Move }[] = [];
-      const pending: Record<string, number> = {};
+      const pending: Pending = {};
       while (queue.length && take.length < batch) {
         const g = queue.shift() as AwayGuest;
         const jg = job.guests.find((x) => x.id === g.id) as JobGuest;
@@ -223,11 +266,14 @@ export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: stri
         const move = fresh.moves[0];
         // No room at home isn't a failure: it stays where it is, still recorded as away, and the rest carry on.
         if (fresh.problems.length || !move) {
+          if (retries > 0 && onlyBusy(fresh)) later.push(g);
           jg.state = "stayed";
           jg.note = fresh.problems[0] ?? `${g.name} is no longer on ${g.to}.`;
           continue;
         }
-        pending[node] = (pending[node] ?? 0) + (move.mem ?? 0);
+        // Memory and processor both: a batch coming home to a just-restarted node mustn't overload it (#59).
+        const was = pending[node] ?? { mem: 0, cpu: 0 };
+        pending[node] = { mem: was.mem + (move.mem ?? 0), cpu: was.cpu + (move.cpu ?? 0) };
         jg.state = "moving";
         take.push({ g, move });
       }

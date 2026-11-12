@@ -429,3 +429,17 @@ test("an insecure move type someone chose stays insecure when the network is set
   await l.wizard.setMoveNetwork("10.0.100.0/24");
   assert.equal(l.options.migration, "type=insecure,network=10.0.100.0/24");
 });
+
+test("entering the code again signs the last person out and drops their root password (review S5)", async () => {
+  for (const after of ["code again", "an hour later"]) {
+    const l = lab();
+    await signedIn(l);
+    await l.wizard.createCluster("lab");
+    if (after === "an hour later") l.tick(61 * 60 * 1000);
+    l.wizard.enterCode(CODE);
+    // Whoever has the code now can't use the root sign-in that was there before, so nothing carries the password.
+    await assert.rejects(l.wizard.addNode("10.0.0.66", FP(6), "anything"), status(403), after);
+    assert.equal(l.calls.some((c) => c.includes("/cluster/config/join")), false, `no join was sent (${after})`);
+    await assert.rejects(l.wizard.finish("10.0.0.9"), /Sign in first/, after);
+  }
+});
