@@ -25,11 +25,15 @@ put_back() {
   finish "$1"
 }
 
-# The port it listens on, which may have been changed by hand in the settings file.
-PORT=$( (. /etc/bossmox/env 2>/dev/null; echo "${PORT:-443}") )
+# How it listens, which may have been changed by hand in the settings file: the port, the address, and HTTPS only
+# when it has its own certificate. Plain HTTP behind a proxy is checked over plain HTTP (#72).
+LISTEN=$( (. /etc/bossmox/env 2>/dev/null; echo "${PORT:-443} ${HOST:-127.0.0.1} $([ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ] && echo https || echo http)") )
 answers() {
-  PORT=$PORT node -e '
-    require("https").get({ host: "127.0.0.1", port: Number(process.env.PORT), path: "/", rejectUnauthorized: false, timeout: 4000 }, (r) => process.exit(r.statusCode === 200 ? 0 : 1))
+  LISTEN=$LISTEN node -e '
+    const [port, host, scheme] = process.env.LISTEN.split(" ");
+    // Listening on every address means the loopback one answers too.
+    const to = ["0.0.0.0", "::", "[::]"].includes(host) ? "127.0.0.1" : host.replace(/^\[|\]$/g, "");
+    require(scheme).get({ host: to, port: Number(port), path: "/", headers: { Host: "localhost" }, rejectUnauthorized: false, timeout: 4000 }, (r) => process.exit(r.statusCode === 200 ? 0 : 1))
       .on("error", () => process.exit(1)).on("timeout", () => process.exit(1));
   '
 }
