@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps, type MoveRecord } from "../src/moves.js";
+import { onlyBusy, readMoves, runMoveHome, runMoveOff, stillAway, writeMoves, type MoveDeps, type MoveRecord } from "../src/moves.js";
 import type { Move, MovePlan } from "../src/placement.js";
 
 /** A pretend cluster: guests sit on nodes, a move's task finishes on the next check and the guest arrives. */
@@ -173,4 +173,39 @@ test("coming home in batches counts the batch's memory against home", async () =
   assert.deepEqual(seen, [{}, { n1: 4 }, { n1: 8 }], "each guest is planned with the batch so far counted on home");
   assert.equal(record.away.n1, undefined);
   assert.deepEqual(record.job?.guests.map((g) => g.state), ["done", "done", "done"]);
+});
+
+test("a guest turned away only because home is busy is tried again, and comes home once there's room", async () => {
+  // As on the lab 2026-11-12: a and b come home first, the just-booted node gets busier, and c is refused for
+  // processor alone. Retried later, it fits. A memory refusal isn't retried.
+  let cTries = 0;
+  const busy = "c (0.5 GB memory) has nowhere to go: n1 would be 92% busy, over 90%.";
+  const c = cluster({ 1: "n2", 2: "n2", 3: "n3", 4: "n3" }, {
+    plan: (_from, ids, only) => {
+      const id = ids[0];
+      if (id === 3 && ++cTries === 1) return { moves: [], problems: [busy] };
+      if (id === 4) return { moves: [], problems: ["d (8 GB memory) has nowhere to go: n1 would have 1 GB of memory left, under the 10% it keeps free (0.3 GB)."] };
+      return { moves: [{ id: id as number, name: "x", type: "qemu", target: only ?? "n1" }], problems: [] };
+    },
+  });
+  const guests = [[1, "a", "n2"], [2, "b", "n2"], [3, "c", "n3"], [4, "d", "n3"]].map(([id, name, to]) => ({ id: id as number, name: name as string, type: "qemu" as const, to: to as string }));
+  const record: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests } }, job: null };
+  await runMoveHome(record, c.deps, "n1", "root@pam", 3, 60_000);
+  assert.equal(cTries, 2, "c was asked again");
+  assert.deepEqual(record.job?.guests.map((g) => `${g.name}:${g.state}`), ["a:done", "b:done", "c:done", "d:stayed"]);
+  assert.deepEqual(record.away.n1?.guests.map((g) => g.name), ["d"]);
+  // Without patience (Move everything back, pressed by a person), a busy refusal stays put at once.
+  cTries = 0;
+  const again: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests: [guests[2]!] } }, job: null };
+  c.where.set(3, "n3");
+  await runMoveHome(again, c.deps, "n1", "root@pam");
+  assert.equal(cTries, 1);
+  assert.equal(again.job?.guests[0]?.state, "stayed");
+});
+
+test("a refusal is only 'busy' when processor is the whole reason", () => {
+  assert.equal(onlyBusy(["db (0.5 GB memory) has nowhere to go: n1 would be 92% busy, over 90%."]), true);
+  assert.equal(onlyBusy(["d has nowhere to go: n1 would have 1 GB of memory left, under the 10% it keeps free."]), false);
+  assert.equal(onlyBusy(["e has nowhere to go: n1 would have 2 GB left on local-lvm after copying 30 GB, under the 10% it keeps free"]), false);
+  assert.equal(onlyBusy([]), false);
 });

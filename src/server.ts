@@ -627,11 +627,13 @@ function runDeps(session: Session, run: Run): RunDeps {
       if (moveRecord.away[node]?.guests.length) {
         // A node just back from a restart is busy for a while. Give it up to 5 minutes to drop under the processor cap.
         const cap = 100 - preferences.keepFreePct;
-        for (const until = Date.now() + RETURN_SETTLE_MS; Date.now() < until; await new Promise((r) => setTimeout(r, 10_000))) {
+        const until = Date.now() + RETURN_SETTLE_MS;
+        for (; Date.now() < until; await new Promise((r) => setTimeout(r, 10_000))) {
           const s = await pve.get<RawStatus>(`/nodes/${enc(node)}/status`, t()).catch(() => null);
           if (s && (s.cpu ?? 0) * 100 <= cap) break;
         }
-        await runMoveHome(moveRecord, moves, node, session.username, await batchFor(t()));
+        // Each guest that comes home makes the node busier, so one turned away for that alone gets the rest of the window.
+        await runMoveHome(moveRecord, moves, node, session.username, await batchFor(t()), Math.max(0, until - Date.now()));
         const job = moveRecord.job;
         if (job?.error) throw new Error(job.error);
         for (const g of job?.guests ?? []) if (g.state === "stayed") notes.set(g.id, g.note ?? "its home had no room");

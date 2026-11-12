@@ -194,11 +194,18 @@ export function stillAway(record: MoveRecord, node: string, where: Map<number, s
   return (record.away[node]?.guests ?? []).filter((g) => where.get(g.id) === g.to);
 }
 
+/** How long a guest turned away only because its home was too busy waits before it's tried again. */
+export const BUSY_RETRY_MS = 15_000;
+/** A refusal that only says the node's processor is too busy. That passes by itself; memory and storage don't. */
+export const onlyBusy = (problems: string[]) => problems.length > 0 && problems.every((p) => /% busy, over \d+%/.test(p) && !/of memory left|left on /.test(p));
+
 /**
  * Sends a node's guests home, up to `batch` at a time. Each is checked for room with the rest of its batch already
- * counted on the node. One that doesn't fit stays where it is, still recorded as away.
+ * counted on the node. One that doesn't fit stays where it is, still recorded as away. With `patienceMs`, one turned
+ * away only because the node is busy (a node just back from a restart, busier with each guest that returns) is
+ * tried again every 15 seconds until that time runs out.
  */
-export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: string, by: string, batch = BATCH): Promise<void> {
+export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: string, by: string, batch = BATCH, patienceMs = 0): Promise<void> {
   // The job is on the record before anything waits, so whoever started it can follow it at once.
   const job: JobView = { kind: "home", node, by, startedAt: Date.now(), finishedAt: null, running: true, error: null, guests: (record.away[node]?.guests ?? []).map((g) => ({ id: g.id, name: g.name, target: node, state: "waiting" })) };
   record.job = job;
@@ -211,7 +218,17 @@ export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: stri
     if (away) away.guests = back;
     deps.save(record);
     const queue = [...back];
-    while (queue.length) {
+    const later: AwayGuest[] = [];
+    let retries = Math.floor(patienceMs / BUSY_RETRY_MS);
+    while (queue.length || (later.length && retries > 0)) {
+      if (!queue.length) {
+        // Everything that could come home has. Give the node a moment, then try the busy ones again.
+        retries -= 1;
+        await deps.wait(BUSY_RETRY_MS);
+        queue.push(...later.splice(0));
+        for (const g of queue) (job.guests.find((x) => x.id === g.id) as JobGuest).state = "waiting";
+        deps.save(record);
+      }
       const stop = deps.stopped();
       if (stop) throw new Error(`BossMox stopped before the next move: ${stop}`);
       const take: { g: AwayGuest; move: Move }[] = [];
@@ -223,6 +240,7 @@ export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: stri
         const move = fresh.moves[0];
         // No room at home isn't a failure: it stays where it is, still recorded as away, and the rest carry on.
         if (fresh.problems.length || !move) {
+          if (retries > 0 && onlyBusy(fresh.problems)) later.push(g);
           jg.state = "stayed";
           jg.note = fresh.problems[0] ?? `${g.name} is no longer on ${g.to}.`;
           continue;
