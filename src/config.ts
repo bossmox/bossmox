@@ -42,6 +42,15 @@ export function sameOrigin(origin: string, host: string | undefined, https: bool
   }
 }
 
+/** A request's path, or null when its target can't be read as one: "//" alone, for instance, throws in `new URL` (#52). */
+export function requestPath(target = "/"): string | null {
+  try {
+    return new URL(target, "http://local").pathname;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Who's really connecting. Behind a trusted proxy that's the nearest address in X-Forwarded-For that isn't
  * another trusted proxy. Reading from the right matters: a client can write anything into the left of that header.

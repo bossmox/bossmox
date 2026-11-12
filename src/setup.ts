@@ -5,7 +5,7 @@ import https from "node:https";
 import path from "node:path";
 import tls from "node:tls";
 import { fileURLToPath } from "node:url";
-import { sameOrigin } from "./config.js";
+import { requestPath, sameOrigin } from "./config.js";
 import { call, probe } from "./pinned.js";
 import { saveSettings, settingsPath } from "./settings.js";
 import { setupHostAllowed, Wizard, WizardError } from "./wizard.js";
@@ -145,8 +145,10 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
 }
 
 const handler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
-  const route = new URL(req.url ?? "/", "http://local").pathname;
+  const route = requestPath(req.url);
   try {
+    // Unreadable targets used to throw before this try and stop the setup server, losing the wizard's progress (#52).
+    if (route === null) return json(res, 400, { error: "That address isn't valid." });
     if (route === "/healthz") return json(res, 200, { ok: true, setup: true });
     if (req.method === "POST" && !wizard.finished) return await handlePost(req, res, route);
     if (req.method !== "GET") return json(res, 405, { error: "Not allowed." });
