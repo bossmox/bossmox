@@ -10,37 +10,30 @@ import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
 import { FILE_STORAGE, installerLabel, } from "./create.js";
-import { waitingChanges } from "./guest-settings.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
-import { buildStorageList, eraseBlocker, setupPlan, deviceIsValid, hostIsValid, readHardDisks, StorageError, type RawDisk, type RawStorageConfig } from "./storage.js";
-import { snapshotFix, HardwareError, pickAddresses, } from "./hardware.js";
+import { eraseBlocker, hostIsValid, readHardDisks, StorageError, type RawDisk, type RawStorageConfig } from "./storage.js";
+import { snapshotFix, HardwareError, } from "./hardware.js";
 import { networkInterfaces } from "node:os";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { plainError } from "./plain-errors.js";
 import { buildHealth, type Leftover } from "./health.js";
 import { canChangeCluster, preferencesPath, readPreferences, scheduleWarnings, type Preferences } from "./preferences.js";
 import { settingsPath } from "./settings.js";
-import { jobFor, movesPath, stillAway } from "./moves.js";
+import { movesPath, } from "./moves.js";
 import { createJobs } from "./jobs.js";
 import { migrationNetwork, } from "./cluster-net.js";
 import { buildRecommended, props, } from "./recommended.js";
-import { runFor, runsPath, } from "./run.js";
+import { runsPath, } from "./run.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
-import { buildUsage, RANGES, type Range, type RawPoint } from "./usage.js";
 import { buildStorageMap, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import { auditLine } from "./audit.js";
 import { sharedLoad } from "./shared-load.js";
 import { readJsonBody } from "./body.js";
 import {
-  buildMovePlan,
-  buildRebootPlan,
-  buildTaskFeed, buildTaskLog,
+  buildTaskFeed, 
   buildServerDetail,
   section,
   tieBreakerVotes,
-  taskView,
-  type RawBackupStorage,
-  type RawMovePrecondition,
   type RawRepositories,
   type RawService,
   type RawStatus,
@@ -52,12 +45,13 @@ import {
   type ServerDetail,
 } from "./server-detail.js";
 import { hostName, requestPath } from "./config.js";
-import { NODE_NAME, UPID, STORAGE, SNAPSHOT_NAME, text } from "./checks.js";
+import { NODE_NAME, STORAGE, SNAPSHOT_NAME, text } from "./checks.js";
 import type { Action } from "./actions/action.js";
 import { clusterActions } from "./actions/cluster.js";
 import { guestActions } from "./actions/guests.js";
 import { storageActions } from "./actions/storage.js";
 import { backupActions } from "./actions/backups.js";
+import { getRoutes, type GetRoute } from "./routes/get.js";
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public");
 /** Written into a release. A copy run from the repo has none, and the page then shows nothing. */
@@ -194,7 +188,7 @@ async function loadServerDetail(name: string, ticket: string): Promise<ServerDet
   return buildServerDetail(name, status, updates, repos, subscription, services, tasks, clusterStatus);
 }
 
-interface RawStorage {
+export interface RawStorage {
   storage: string;
   active?: number;
   enabled?: number;
@@ -771,6 +765,12 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
   return json(res, 404, { error: "Not found." });
 }
 
+
+/** What the GET routes get from the server (review #61). */
+const routeContext = { FULL_LOG, HEALTH_CACHE_MS, VERSION, cache, guestPath, healthCache, jobs, json, loadBackups, loadCreatePlan, loadHealth, loadNetwork, loadRecommended, loadRestorePlan, loadServerDetail, loadStorageMap, nodeDisks, overview, pve, snapshotFixFor, updateView, viewerOf, epoch: () => preferencesEpoch };
+export type RouteContext = typeof routeContext;
+const GET_ROUTES = getRoutes(routeContext);
+
 const handler: http.RequestListener = async (req, res) => {
   try {
     if (!hostAllowed(req.headers.host)) {
@@ -785,211 +785,13 @@ const handler: http.RequestListener = async (req, res) => {
     if (route === "/api/login-info") {
       return json(res, 200, { realms: await realms() });
     }
-    if (route === "/api/usage" || route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/moves" || route === "/api/run" || route === "/api/run-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/health" || route === "/api/setup-plan" || route === "/api/guest-waiting" || route === "/api/cpu-types" || route === "/api/recommended") {
+    if (Object.hasOwn(GET_ROUTES, route)) {
       const id = cookieId(req);
       const session = await sessions.get(id);
       if (!session) return json(res, 401, { error: "Sign in to continue." });
       try {
         const params = new URL(req.url ?? "/", "http://local").searchParams;
-        if (route === "/api/task") {
-          const name = params.get("server") ?? "";
-          const upid = params.get("task") ?? "";
-          if (!NODE_NAME.test(name) || !UPID.test(upid)) return json(res, 400, { error: "That task isn't valid." });
-          const base = `/nodes/${encodeURIComponent(name)}/tasks/${encodeURIComponent(upid)}`;
-          // The whole log is only for someone reading it. Following a running task needs just the end.
-          const lines = params.get("full") === "1" ? FULL_LOG : 1000;
-          const [status, log] = await Promise.all([
-            pve.get<RawTaskStatus>(`${base}/status`, session.ticket),
-            pve.get<{ n?: number; t?: string }[]>(`${base}/log?limit=${lines}`, session.ticket),
-          ]);
-          const view = taskView(status, log, lines === FULL_LOG ? FULL_LOG : 200);
-          // What the task changed should show right away, not after the cache runs out.
-          if (view.finished) cache.delete(session);
-          return json(res, 200, view);
-        }
-        if (route === "/api/move-plan") {
-          const name = params.get("server") ?? "";
-          const id = params.get("guest") ?? "";
-          const type = params.get("type");
-          if (!NODE_NAME.test(name) || !/^\d+$/.test(id) || (type !== "qemu" && type !== "lxc")) return json(res, 400, { error: "That move request isn't valid." });
-          const data = await overview(session);
-          const nodes = data.nodes.filter((n) => n.online).map((n) => n.name);
-          const raw = type === "qemu"
-            ? await pve.get<RawMovePrecondition>(`/nodes/${encodeURIComponent(name)}/qemu/${id}/migrate`, session.ticket)
-            : {};
-          const running = data.vms.find((v) => v.id === Number(id))?.running ?? false;
-          return json(res, 200, buildMovePlan(type, name, nodes, raw, running));
-        }
-        if (route === "/api/rolling-plan") return json(res, 200, await jobs.loadRollingPlan(session.ticket));
-        if (route === "/api/backups") return json(res, 200, await loadBackups(session.ticket));
-        if (route === "/api/recommended") return json(res, 200, { settings: await loadRecommended(session) });
-        if (route === "/api/cpu-types") {
-          const name = params.get("server") ?? "";
-          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          const list = await pve.get<{ name?: string }[]>(`/nodes/${encodeURIComponent(name)}/capabilities/qemu/cpu`, session.ticket);
-          return json(res, 200, { types: list.flatMap((c) => (c.name ? [c.name] : [])).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })) });
-        }
-        if (route === "/api/guest-waiting") {
-          const name = params.get("server") ?? "";
-          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          const type = params.get("type") === "lxc" ? "lxc" : "qemu";
-          const { path } = guestPath(name, { guest: params.get("guest"), type });
-          return json(res, 200, { waiting: waitingChanges(await pve.get<Parameters<typeof waitingChanges>[0]>(`${path}/pending`, session.ticket)) });
-        }
-        if (route === "/api/storage-list") {
-          const [config, data] = await Promise.all([pve.get<RawStorageConfig[]>("/storage", session.ticket), overview(session)]);
-          // Asked of each node directly: the cluster summary takes a while to notice a storage that was just added.
-          const online = data.nodes.filter((n) => n.online).map((n) => n.name);
-          const lists = await Promise.allSettled(online.map((n) => pve.get<(RawStorage & { total?: number })[]>(`/nodes/${encodeURIComponent(n)}/storage`, session.ticket)));
-          const usage = online.flatMap((node, i) => {
-            const r = lists[i];
-            return r?.status === "fulfilled" ? r.value.filter((s) => s.enabled !== 0).map((s) => ({ name: s.storage, node, freeGb: (s.avail ?? 0) / 1024 ** 3, totalGb: (s.total ?? 0) / 1024 ** 3, online: s.active === 1 })) : [];
-          });
-          return json(res, 200, { list: buildStorageList(config, usage) });
-        }
-        if (route === "/api/health") {
-          const hit = healthCache.get(session);
-          const fresh = params.get("again") !== "1" && hit && hit.epoch === preferencesEpoch && Date.now() - hit.at <= HEALTH_CACHE_MS;
-          if (!fresh && !(hit?.running && hit.epoch === preferencesEpoch)) {
-            const value = loadHealth(session);
-            healthCache.set(session, { at: Date.now(), value, running: true, epoch: preferencesEpoch });
-            value.finally(() => {
-              const now = healthCache.get(session);
-              if (now?.value === value) now.running = false;
-            }).catch(() => healthCache.delete(session));
-          }
-          return json(res, 200, { checks: await healthCache.get(session)!.value });
-        }
-        if (route === "/api/setup-plan") {
-          const name = params.get("server") ?? "";
-          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          const disks = await nodeDisks(name, session.ticket, await overview(session));
-          try {
-            const devices = (params.get("devices") ?? "").split(",").filter((d) => deviceIsValid(d));
-            return json(res, 200, setupPlan(disks, devices, params.get("purpose") ?? "", params.get("name") ?? ""));
-          } catch (err) {
-            if (err instanceof StorageError) return json(res, 400, { error: err.message });
-            throw err;
-          }
-        }
-        if (route === "/api/usage") {
-          // Proxmox's own usage history, with the person's own rights: Sys.Audit for a node, VM.Audit for a guest.
-          const name = params.get("server") ?? "";
-          const range = params.get("range") ?? "";
-          const vmid = params.get("vmid");
-          const type = params.get("type");
-          if (!NODE_NAME.test(name) || !(RANGES as readonly string[]).includes(range)) return json(res, 400, { error: "That usage request isn't valid." });
-          if (vmid !== null && (!/^\d{1,9}$/.test(vmid) || (type !== "qemu" && type !== "lxc"))) return json(res, 400, { error: "That usage request isn't valid." });
-          const base = `/nodes/${encodeURIComponent(name)}${vmid === null ? "" : `/${type}/${vmid}`}`;
-          const raw = await pve.get<RawPoint[]>(`${base}/rrddata?timeframe=${range}&cf=AVERAGE`, session.ticket);
-          return json(res, 200, buildUsage(Array.isArray(raw) ? raw : [], vmid === null ? "node" : "guest", range as Range));
-        }
-        if (route === "/api/storage-map") {
-          const name = params.get("server") ?? "";
-          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          return json(res, 200, await loadStorageMap(name, session));
-        }
-        if (route === "/api/disks" || route === "/api/disk-smart") {
-          const name = params.get("server") ?? "";
-          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          if (route === "/api/disks") return json(res, 200, { disks: await nodeDisks(name, session.ticket, await overview(session)) });
-          const disk = params.get("disk") ?? "";
-          if (!deviceIsValid(disk)) return json(res, 400, { error: "That disk isn't valid." });
-          return json(res, 200, await pve.get<unknown>(`/nodes/${encodeURIComponent(name)}/disks/smart?disk=${encodeURIComponent(disk)}`, session.ticket));
-        }
-        if (route === "/api/tasks") {
-          const asked = Number(params.get("limit"));
-          const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, 2000) : 200;
-          const data = await overview(session);
-          const online = data.nodes.filter((n) => n.online).map((n) => n.name);
-          const lists = await Promise.allSettled(online.map((n) => pve.get<RawTask[]>(`/nodes/${encodeURIComponent(n)}/tasks?source=all&limit=${limit}`, session.ticket)));
-          const perNode = online.flatMap((node, i) => {
-            const r = lists[i];
-            return r?.status === "fulfilled" ? [{ node, tasks: r.value }] : [];
-          });
-          const unreachable = online.filter((_, i) => lists[i]?.status !== "fulfilled").concat(data.nodes.filter((n) => !n.online).map((n) => n.name));
-          return json(res, 200, buildTaskLog(perNode, unreachable, data.vms, limit));
-        }
-        if (route === "/api/templates") {
-          const name = params.get("server") ?? "";
-          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          const list = await pve.get<{ template?: string; headline?: string; section?: string; package?: string }[]>(`/nodes/${encodeURIComponent(name)}/aplinfo`, session.ticket);
-          return json(res, 200, { templates: list.filter((t) => t.section === "system" && t.template).map((t) => ({ template: t.template, title: t.headline || t.package || t.template })) });
-        }
-        if (route === "/api/guest-addresses") {
-          const name = params.get("server") ?? "";
-          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          const type = params.get("type") === "lxc" ? "lxc" : "qemu";
-          const { path } = guestPath(name, { guest: params.get("guest"), type });
-          try {
-            const raw = await pve.get<unknown>(type === "lxc" ? `${path}/interfaces` : `${path}/agent/network-get-interfaces`, session.ticket);
-            return json(res, 200, { addresses: pickAddresses(type, raw), known: true });
-          } catch (err) {
-            if (err instanceof PveError && err.status !== 401) return json(res, 200, { addresses: [], known: false });
-            throw err;
-          }
-        }
-        if (route === "/api/network") {
-          const name = params.get("server") ?? "";
-          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          return json(res, 200, await loadNetwork(name, session.ticket));
-        }
-        if (route === "/api/create-plan") {
-          const name = params.get("server") ?? "";
-          const kind = params.get("kind");
-          if (!NODE_NAME.test(name) || (kind !== "qemu" && kind !== "lxc")) return json(res, 400, { error: "That request isn't valid." });
-          return json(res, 200, await loadCreatePlan(name, kind, session.ticket));
-        }
-        if (route === "/api/restore-plan") {
-          const name = params.get("server") ?? "";
-          const type = params.get("type");
-          if (!NODE_NAME.test(name) || (type !== "qemu" && type !== "lxc")) return json(res, 400, { error: "That request isn't valid." });
-          return json(res, 200, await loadRestorePlan(name, type, session.ticket));
-        }
-        if (route === "/api/snapshot-support") {
-          const name = params.get("server") ?? "";
-          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          const { path } = guestPath(name, { guest: params.get("guest"), type: params.get("type") });
-          const feature = await pve.get<{ hasFeature?: number }>(`${path}/feature?feature=snapshot`, session.ticket);
-          if (feature.hasFeature === 1 || params.get("type") !== "qemu") return json(res, 200, { supported: feature.hasFeature === 1, fix: [] });
-          return json(res, 200, { supported: false, fix: await snapshotFixFor(name, path, session.ticket) });
-        }
-        if (route === "/api/reboot-plan") {
-          const name = params.get("server") ?? "";
-          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          const base = `/nodes/${encodeURIComponent(name)}`;
-          const [active, storages, evacuate] = await Promise.all([
-            section(pve.get<RawTask[]>(`${base}/tasks?source=active`, session.ticket)),
-            section(pve.get<RawBackupStorage[]>(`${base}/storage?content=backup`, session.ticket)),
-            jobs.planEvacuation(session.ticket, name),
-          ]);
-          return json(res, 200, { ...buildRebootPlan(active, storages, evacuate.problems), evacuate });
-        }
-        if (route === "/api/run") return json(res, 200, { run: runFor(jobs.currentRun, await viewerOf(session, jobs.currentRun?.by)) });
-        if (route === "/api/run-plan") {
-          const kind = params.get("kind") === "restart" ? "restart" : "update";
-          const name = params.get("server") ?? "";
-          if (kind === "restart" && !NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          return json(res, 200, await jobs.runPlan(session.ticket, kind, name));
-        }
-        if (route === "/api/moves") {
-          // Only what's still where BossMox left it can go home; the rest was moved by someone since.
-          const data = await overview(session);
-          const where = new Map(data.vms.map((v) => [v.id, v.node]));
-          const away = Object.fromEntries(Object.entries(jobs.moveRecord.away)
-            .map(([node, a]) => [node, { by: a.by, at: a.at, guests: stillAway(jobs.moveRecord, node, where) }] as const)
-            .filter(([, a]) => a.guests.length > 0));
-          return json(res, 200, { away, job: jobFor(jobs.moveRecord.job, await viewerOf(session, jobs.moveRecord.job?.by)) });
-        }
-        if (route === "/api/server") {
-          const name = params.get("name") ?? "";
-          if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-          const detail = await loadServerDetail(name, session.ticket);
-          const known = detail.summary || detail.updates || detail.services || detail.tasks;
-          return known ? json(res, 200, detail) : json(res, 404, { error: "BossMox can't find that node, or your account can't see it." });
-        }
-        // Only after sign-in: the exact version tells an attacker what to try.
-        return json(res, 200, { ...(await overview(session)), username: session.username, version: VERSION, update: updateView() });
+        return await (GET_ROUTES[route] as GetRoute)(route, session, params, req, res);
       } catch (err) {
         if (err instanceof PveError && err.status === 401) {
           sessions.end(id);
