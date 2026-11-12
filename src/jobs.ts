@@ -10,7 +10,7 @@ import { checkNetworks, migrationNetwork, SAFE_BATCH, type NetCheck } from "./cl
 import type { Overview, RawConfig, RawResource, RawSnapshot } from "./model.js";
 import { readMoves, runMoveHome, runMoveOff, writeMoves, type MoveDeps } from "./moves.js";
 import { INSTALL_COMMAND, runOnNode, STILL_RUNNING, type ShellConfig } from "./node-shell.js";
-import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
+import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type Pending, type RawPrecondition } from "./placement.js";
 import type { Preferences } from "./preferences.js";
 import { PveError, type PveClient } from "./pve.js";
 import { drive, readRun, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
@@ -47,7 +47,7 @@ export function createJobs(ctx: JobsContext) {
    * Fresh numbers from Proxmox, and where each guest of `from` would go (ADR 0025). Without `ids` it plans every
    * running guest. With `only`, that node is the one target allowed (sending guests home).
    */
-  async function planEvacuation(ticket: string, from: string, ids?: number[], only?: string, pending: Record<string, number> = {}, assumeEjected: number[] = []) {
+  async function planEvacuation(ticket: string, from: string, ids?: number[], only?: string, pending: Pending = {}, assumeEjected: number[] = []) {
     const resources = await pve.get<RawResource[]>("/cluster/resources", ticket);
     const online = resources.filter((r) => r.type === "node" && r.status === "online" && (!only || r.node === from || r.node === only));
     const statuses = await Promise.all(online.map((n) => pve.get<RawStatus>(`/nodes/${enc(n.node ?? "")}/status`, ticket).catch(() => null)));
@@ -71,7 +71,10 @@ export function createJobs(ctx: JobsContext) {
       const n = nodes.find((x) => x.name === r.node);
       if (n && (r.type === "qemu" || r.type === "lxc") && r.status === "running" && arrived.has(Number(r.vmid))) n.memUsed += Math.max(0, (r.maxmem ?? 0) - (r.mem ?? 0));
     }
-    for (const n of nodes) n.memUsed += pending[n.name] ?? 0;
+    for (const n of nodes) {
+      n.memUsed += pending[n.name]?.mem ?? 0;
+      n.cpuLoad += pending[n.name]?.cpu ?? 0;
+    }
     const guests = resources.filter((r) => (r.type === "qemu" || r.type === "lxc") && r.node === from && r.template !== 1 && (ids ? ids.includes(Number(r.vmid)) : r.status === "running" || r.status === "paused"));
     const needs = await Promise.all(guests.map(async (g) => {
       const type = g.type === "lxc" ? "lxc" : "qemu";

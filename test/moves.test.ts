@@ -163,14 +163,14 @@ test("moves run three at a time, each batch planned together, and a failure lets
   assert.match(record.job?.error ?? "", /couldn't move b/);
 });
 
-test("coming home in batches counts the batch's memory against home", async () => {
-  const seen: Record<string, number>[] = [];
-  const c = cluster({ 1: "n2", 2: "n2", 3: "n3" }, { plan: (_from, ids, only) => ({ moves: [{ id: ids[0] as number, name: String(ids[0]), type: "qemu", target: only ?? "n1", mem: 4 }], problems: [] }) });
+test("coming home in batches counts the batch's memory and processor against home (#59)", async () => {
+  const seen: Record<string, { mem: number; cpu: number }>[] = [];
+  const c = cluster({ 1: "n2", 2: "n2", 3: "n3" }, { plan: (_from, ids, only) => ({ moves: [{ id: ids[0] as number, name: String(ids[0]), type: "qemu", target: only ?? "n1", mem: 4, cpu: 0.5 }], problems: [] }) });
   const plan = c.deps.plan;
   c.deps.plan = async (from, ids, only, pending) => { seen.push({ ...(pending ?? {}) }); return plan(from, ids, only, pending); };
   const record: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests: [{ id: 1, name: "a", type: "qemu", to: "n2" }, { id: 2, name: "b", type: "qemu", to: "n2" }, { id: 3, name: "c", type: "qemu", to: "n3" }] } }, job: null };
   await runMoveHome(record, c.deps, "n1", "root@pam");
-  assert.deepEqual(seen, [{}, { n1: 4 }, { n1: 8 }], "each guest is planned with the batch so far counted on home");
+  assert.deepEqual(seen, [{}, { n1: { mem: 4, cpu: 0.5 } }, { n1: { mem: 8, cpu: 1 } }], "each guest is planned with the batch so far counted on home");
   assert.equal(record.away.n1, undefined);
   assert.deepEqual(record.job?.guests.map((g) => g.state), ["done", "done", "done"]);
 });

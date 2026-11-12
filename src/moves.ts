@@ -4,7 +4,7 @@
  */
 import { readFileSync, } from "node:fs";
 import path from "node:path";
-import type { Move, MovePlan } from "./placement.js";
+import type { Move, MovePlan, Pending } from "./placement.js";
 import { writeJsonAtomic } from "./json-file.js";
 
 export interface AwayGuest {
@@ -87,7 +87,7 @@ export interface MoveDeps {
    * A fresh plan for these guests of `from`. With `only`, that node is the one target allowed. `pending` is memory
    * already promised to nodes by moves in the same batch, counted as used.
    */
-  plan(from: string, ids: number[], only?: string, pending?: Record<string, number>): Promise<MovePlan>;
+  plan(from: string, ids: number[], only?: string, pending?: Pending): Promise<MovePlan>;
   /** Starts one move and returns the Proxmox task. */
   migrate(move: Move, from: string): Promise<string>;
   task(node: string, upid: string): Promise<TaskEnd>;
@@ -258,7 +258,7 @@ export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: stri
       const stop = deps.stopped();
       if (stop) throw new Error(`BossMox stopped before the next move: ${stop}`);
       const take: { g: AwayGuest; move: Move }[] = [];
-      const pending: Record<string, number> = {};
+      const pending: Pending = {};
       while (queue.length && take.length < batch) {
         const g = queue.shift() as AwayGuest;
         const jg = job.guests.find((x) => x.id === g.id) as JobGuest;
@@ -271,7 +271,9 @@ export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: stri
           jg.note = fresh.problems[0] ?? `${g.name} is no longer on ${g.to}.`;
           continue;
         }
-        pending[node] = (pending[node] ?? 0) + (move.mem ?? 0);
+        // Memory and processor both: a batch coming home to a just-restarted node mustn't overload it (#59).
+        const was = pending[node] ?? { mem: 0, cpu: 0 };
+        pending[node] = { mem: was.mem + (move.mem ?? 0), cpu: was.cpu + (move.cpu ?? 0) };
         jg.state = "moving";
         take.push({ g, move });
       }

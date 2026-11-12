@@ -48,9 +48,12 @@ export interface Move {
   name: string;
   type: "qemu" | "lxc";
   target: string;
-  /** Its set memory, so a batch can count what it promises a node. */
+  /** Its set memory and its processor load, so a batch can count what it promises a node. */
   mem?: number;
+  cpu?: number;
 }
+/** Room already promised to a node by moves in the same batch, counted as used. */
+export type Pending = Record<string, { mem: number; cpu: number }>;
 export interface Ejectable {
   id: number;
   name: string;
@@ -242,7 +245,7 @@ export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], 
       const s = best.storages[d.storage];
       if (s && !s.shared) s.free -= d.bytes;
     }
-    moves.push({ id: g.id, name: g.name, type: g.type, target: best.name, mem: g.mem });
+    moves.push({ id: g.id, name: g.name, type: g.type, target: best.name, mem: g.mem, cpu: g.cpuLoad });
   }
   return problems.length ? { moves: [], problems, ejectable, unplaced, tentative: moves } : { moves, problems, ejectable, unplaced, tentative: moves };
 }
