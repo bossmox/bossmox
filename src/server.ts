@@ -31,6 +31,7 @@ import { buildUsage, RANGES, type Range, type RawPoint } from "./usage.js";
 import { buildStorageMap, isListedBackup, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import { auditLine } from "./audit.js";
 import { sharedLoad } from "./shared-load.js";
+import { readJsonBody } from "./body.js";
 import {
   buildMovePlan,
   buildRebootPlan,
@@ -318,6 +319,7 @@ const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w
 const POWER = new Set(["start", "shutdown", "reboot", "stop"]);
 const MAX_UPLOAD = 200 * 1024 ** 3;
 const FULL_LOG = 20000;
+const BODY_WAIT_MS = 30_000;
 const UEFI_WINDOW_MS = 8000;
 const UEFI_GAP_MS = 1200;
 const BIOS_SETTLE_MS = 8000;
@@ -1156,27 +1158,8 @@ function setCookie(id: string, maxAge: number): Record<string, string> {
   return { "Set-Cookie": `${COOKIE}=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secureCookie ? "; Secure" : ""}` };
 }
 
-function readJson(req: http.IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on("data", (c: Buffer) => {
-      size += c.length;
-      if (size > MAX_BODY) {
-        reject(new AuthError(413, "That request was too large."));
-        req.destroy();
-      } else chunks.push(c);
-    });
-    req.on("error", reject);
-    req.on("end", () => {
-      try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>);
-      } catch {
-        reject(new AuthError(400, "That request couldn't be read."));
-      }
-    });
-  });
-}
+const readJson = (req: http.IncomingMessage) => readJsonBody(req, { maxBytes: MAX_BODY, waitMs: BODY_WAIT_MS });
+
 const text = (v: unknown, max: number) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : "");
 
 /** Who did what, for anyone looking into an incident. Names and addresses only, never tickets, passwords or request bodies. */
@@ -1542,7 +1525,7 @@ const server = config.tls ? https.createServer(config.tls, handler) : http.creat
 config.tls?.key.fill(0);
 delete config.tls;
 
-// Node's default would cut off a big ISO upload after 5 minutes.
+// Node's default would cut off a big ISO upload after 5 minutes. Other requests' bodies have their own limit (readJson).
 server.requestTimeout = 6 * 60 * 60 * 1000;
 
 server.on("upgrade", async (req, socket, head) => {
