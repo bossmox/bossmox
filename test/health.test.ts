@@ -41,6 +41,23 @@ test("two nodes without a tie-breaker are warned, three are fine, a lost majorit
   assert.equal(by(buildHealth({ ...two, cluster: { quorate: false } }), "votes")!.status, "bad");
 });
 
+test("moves sharing the heartbeat's only network are warned, with the network to use; their own network passes", () => {
+  const three = { ...base(), cluster: { quorate: true }, votes: ["a", "b", "c"].map((node) => ({ node, votes: 1 })) };
+  const shared = by(buildHealth({ ...three, network: { known: true, shared: true, moveNet: "10.0.0.0/24", others: ["10.0.100.0/24"], batch: 1 } }), "move-network")!;
+  assert.equal(shared.status, "warn");
+  assert.match(shared.detail, /Moves run on 10\.0\.0\.0\/24/);
+  assert.match(shared.detail, /Every node is also on 10\.0\.100\.0\/24\. Settings can give moves that network/);
+  assert.match(shared.detail, /one VM at a time/);
+  assert.equal(shared.fix!.kind, "settings");
+  const lonely = by(buildHealth({ ...three, network: { known: true, shared: true, moveNet: "10.0.30.0/24", others: [], batch: 1 } }), "move-network")!;
+  assert.match(lonely.detail, /second network card/);
+  const own = by(buildHealth({ ...three, network: { known: true, shared: false, moveNet: "10.0.100.0/24", others: [], batch: 3 } }), "move-network")!;
+  assert.equal(own.status, "ok");
+  assert.match(own.detail, /up to 3 VMs/);
+  assert.equal(by(buildHealth({ ...three, network: { known: false, shared: false, moveNet: null, others: [], batch: 1 } }), "move-network"), undefined, "can't tell: says nothing");
+  assert.equal(by(buildHealth(base()), "move-network"), undefined, "a single node isn't told");
+});
+
 test("each problem comes with the fix BossMox already has", () => {
   const input = base();
   input.channels = [{ node: "rockylab", ok: false, headline: "Updates can't download", note: "This channel needs a subscription.", offer: "free" }];

@@ -6,6 +6,7 @@ import { parseAddress, PinError, PveReply } from "./pinned.js";
 import { applyChannel, ChannelError, type ChannelIO } from "./update-channel.js";
 import { plainError } from "./plain-errors.js";
 import type { Saved } from "./settings.js";
+import { checkNetworks, migrationNetwork, type NetCheck } from "./cluster-net.js";
 
 const MAX_CODE_TRIES = 10;
 const MAX_CODE_TRIES_ALL = 200;
@@ -262,6 +263,40 @@ export class Wizard {
     }
     await this.settle((s) => s.nodes.some((n) => n.name === node && n.online));
     return this.state();
+  }
+
+  /**
+   * The networks the cluster's nodes share, and whether moves run on the heartbeat's only one (ADR 0028). The
+   * screen asks which network moves should use only when there's a real choice.
+   */
+  async networks(): Promise<NetCheck & { current: string | null }> {
+    await this.refresh();
+    const to = this.need();
+    const none = { ...checkNetworks([], null), current: null };
+    if (!this.clusterName || this.nodes.length < 2) return none;
+    const get = <T>(p: string) => this.out.call<T>(to, "GET", p, this.auth());
+    const [config, options] = await Promise.all([get<Record<string, unknown>[]>("/cluster/config/nodes"), get<{ migration?: string | { network?: string } }>("/cluster/options")]);
+    const nodes = await Promise.all(config.map(async (c) => {
+      const name = String(c.node ?? c.name ?? "");
+      const links = Object.keys(c).filter((k) => /^ring\d+_addr$/.test(k)).sort().map((k) => String(c[k]));
+      const ifaces = await get<{ cidr?: string }[]>(`/nodes/${encodeURIComponent(name)}/network`);
+      return { name, links, addresses: ifaces.flatMap((i) => (i.cidr ? [i.cidr] : [])) };
+    }));
+    const current = migrationNetwork(options.migration);
+    return { ...checkNetworks(nodes, current), current };
+  }
+
+  /** Points VM moves at one of the networks every node shares. Keeps the encrypted (secure) move type as it was. */
+  async setMoveNetwork(net: string) {
+    this.requireRoot();
+    const check = await this.networks();
+    if (!check.known || !check.others.includes(net)) throw new WizardError(400, "Pick one of the networks shown.");
+    const to = this.need();
+    const options = await this.out.call<{ migration?: string | { type?: string } }>(to, "GET", "/cluster/options", this.auth());
+    const m = options.migration;
+    const type = (typeof m === "string" ? /(?:^|,)(?:type=)?(secure|insecure)(?:,|$)/.exec(m)?.[1] : m?.type) ?? "secure";
+    await this.out.call<null>(to, "PUT", "/cluster/options", { ...this.auth(), form: { migration: `type=${type},network=${net}` } });
+    return this.networks();
   }
 
   /**

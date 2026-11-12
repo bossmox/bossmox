@@ -128,6 +128,12 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
     return json(res, 200, out);
   }
   if (route === "/setup/channel") return json(res, 200, await wizard.setChannel(text(body.channel, 16)));
+  if (route === "/setup/networks") return json(res, 200, await wizard.networks());
+  if (route === "/setup/movenet") {
+    const out = await wizard.setMoveNetwork(text(body.network, 43));
+    log(`VM moves now use ${out.current}`);
+    return json(res, 200, out);
+  }
   if (route === "/setup/finish") {
     await wizard.finish((req.headers.host ?? "").replace(/:\d+$/, "").toLowerCase());
     log("finished, restarting as normal BossMox");

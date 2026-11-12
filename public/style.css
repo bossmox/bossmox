@@ -287,6 +287,20 @@ summary{cursor:pointer;font-weight:650}
 .hcrow.off .hctext b{font-weight:500;color:var(--muted)}
 .bkelse{margin:0 0 12px}
 .updcmd{white-space:pre-wrap;word-break:break-all;user-select:all}
+.setrow{display:flex;gap:16px;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--line)}
+.setrow:last-child{border-bottom:0}
+.setrow .hctext{flex:1;min-width:0}
+.setrow .setwhy{margin-top:4px;color:var(--ink)}
+.setpick{display:block;margin-top:9px;max-width:100%}
+.rec{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600;background:var(--warn-bg);vertical-align:1px}
+.rec.ok{background:var(--surface2);color:var(--muted)}
+.sw{flex:none;width:46px;height:26px;margin-top:2px;border-radius:13px;border:0;background:var(--line);position:relative;cursor:pointer;padding:0;transition:background .15s}
+.sw i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"] i{left:23px}
+.sw:disabled{opacity:.45;cursor:default}
+.sw:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion:reduce){.sw,.sw i{transition:none}}
 @media (max-width:760px){.hcrow{flex-wrap:wrap}.hcrow .actions{width:100%;padding-left:20px}}
 .warnline:empty{display:none}
 dd.agenthelp{grid-column:1/-1;margin:-4px 0 6px}

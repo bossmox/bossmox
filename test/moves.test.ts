@@ -39,7 +39,7 @@ const moves = (...m: [number, string, string][]): Move[] => m.map(([id, name, ta
 test("moving off records each guest's home and where it went, one at a time", async () => {
   const c = cluster({ 1: "n1", 2: "n1" });
   const record: MoveRecord = { away: {}, job: null };
-  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n3"]));
+  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n3"]), 1);
   assert.deepEqual(c.started, ["a->n2", "b->n3"]);
   assert.deepEqual(record.away.n1?.guests, [{ id: 1, name: "a", type: "qemu", to: "n2" }, { id: 2, name: "b", type: "qemu", to: "n3" }]);
   assert.equal(record.job?.running, false);
@@ -51,7 +51,7 @@ test("moving off records each guest's home and where it went, one at a time", as
 test("a failed move stops the job, keeps what already moved, and says why", async () => {
   const c = cluster({ 1: "n1", 2: "n1", 3: "n1" }, { failId: 2 });
   const record: MoveRecord = { away: {}, job: null };
-  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n3"], [3, "c", "n2"]));
+  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n3"], [3, "c", "n2"]), 1);
   assert.deepEqual(c.started, ["a->n2", "b->n3"], "c never started");
   assert.deepEqual(record.away.n1?.guests.map((g) => g.name), ["a"]);
   assert.match(record.job?.error ?? "", /couldn't move b: migration aborted/);
@@ -64,7 +64,7 @@ test("each move is planned again first, and a node that filled up stops the job"
     plan: (_from, ids) => (++calls === 2 ? { moves: [], problems: ["b has nowhere to go: n2 would have 1 GB of memory left."] } : { moves: ids.map((id) => ({ id, name: "a", type: "qemu", target: "n2" })), problems: [] }),
   });
   const record: MoveRecord = { away: {}, job: null };
-  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n2"]));
+  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n2"]), 1);
   assert.deepEqual(c.started, ["a->n2"]);
   assert.match(record.job?.error ?? "", /room changed while moving: b has nowhere to go/);
 });
@@ -86,7 +86,7 @@ test("a short blip while watching a move is waited out", async () => {
 test("signing out stops the job before the next move", async () => {
   const c = cluster({ 1: "n1", 2: "n1" }, { aliveFor: 1 });
   const record: MoveRecord = { away: {}, job: null };
-  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n3"]));
+  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n3"]), 1);
   assert.deepEqual(c.started, ["a->n2"]);
   assert.match(record.job?.error ?? "", /stopped before the next move: root@pam signed out/);
 });
@@ -140,4 +140,37 @@ test("the record survives on disk, and a job cut off by a BossMox restart reads 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("moves run three at a time, each batch planned together, and a failure lets the batch finish before stopping", async () => {
+  const order: string[] = [];
+  const c = cluster({ 1: "n1", 2: "n1", 3: "n1", 4: "n1", 5: "n1" }, { failId: 2 });
+  const migrate = c.deps.migrate;
+  let inFlight = 0, most = 0;
+  c.deps.migrate = async (m, from) => { inFlight++; most = Math.max(most, inFlight); order.push(`start ${m.id}`); return migrate(m, from); };
+  const task = c.deps.task;
+  c.deps.task = async (n, u) => { const r = await task(n, u); inFlight--; return r; };
+  let plans = 0;
+  const plan = c.deps.plan;
+  c.deps.plan = async (...a) => { plans++; return plan(...a); };
+  const record: MoveRecord = { away: {}, job: null };
+  await runMoveOff(record, c.deps, "n1", "root@pam", moves([1, "a", "n2"], [2, "b", "n3"], [3, "c", "n2"], [4, "d", "n3"], [5, "e", "n2"]));
+  assert.equal(most, 3, "three at once, never more");
+  assert.equal(plans, 1, "the first batch failed, so no second plan");
+  assert.deepEqual(order, ["start 1", "start 2", "start 3"]);
+  assert.deepEqual(record.job?.guests.map((g) => g.state), ["done", "failed", "done", "waiting", "waiting"], "the rest of the batch still finished");
+  assert.deepEqual(record.away.n1?.guests.map((g) => g.id), [1, 3]);
+  assert.match(record.job?.error ?? "", /couldn't move b/);
+});
+
+test("coming home in batches counts the batch's memory against home", async () => {
+  const seen: Record<string, number>[] = [];
+  const c = cluster({ 1: "n2", 2: "n2", 3: "n3" }, { plan: (_from, ids, only) => ({ moves: [{ id: ids[0] as number, name: String(ids[0]), type: "qemu", target: only ?? "n1", mem: 4 }], problems: [] }) });
+  const plan = c.deps.plan;
+  c.deps.plan = async (from, ids, only, pending) => { seen.push({ ...(pending ?? {}) }); return plan(from, ids, only, pending); };
+  const record: MoveRecord = { away: { n1: { by: "root@pam", at: 1, guests: [{ id: 1, name: "a", type: "qemu", to: "n2" }, { id: 2, name: "b", type: "qemu", to: "n2" }, { id: 3, name: "c", type: "qemu", to: "n3" }] } }, job: null };
+  await runMoveHome(record, c.deps, "n1", "root@pam");
+  assert.deepEqual(seen, [{}, { n1: 4 }, { n1: 8 }], "each guest is planned with the batch so far counted on home");
+  assert.equal(record.away.n1, undefined);
+  assert.deepEqual(record.job?.guests.map((g) => g.state), ["done", "done", "done"]);
 });

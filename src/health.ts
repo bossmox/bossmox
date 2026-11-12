@@ -3,13 +3,14 @@
  * someone new can see what healthy looks like. Each problem carries the fix BossMox already has. Pure: server.ts
  * gathers Proxmox's answers and passes them in.
  */
+import type { NetCheck } from "./cluster-net.js";
 import type { StorageMap } from "./storage-map.js";
 
 /** "off" is a check the person turned off: never counted as passed, and it says how to turn it back on. */
 export type Status = "ok" | "warn" | "bad" | "off";
 export interface Fix {
   /** Which button the screen shows: each maps to something BossMox already does. */
-  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check" | "check-now";
+  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check" | "check-now" | "settings";
   label: string;
   node?: string;
   channel?: string;
@@ -30,6 +31,8 @@ export interface HealthInput {
   cluster?: { quorate: boolean };
   votes: { node: string; votes: number }[];
   tieBreaker: boolean;
+  /** Whether moves share the heartbeat's only network (ADR 0028). */
+  network?: NetCheck;
   channels: { node: string; ok: boolean; headline: string; note: string; offer: string | null }[];
   updates: { node: string; total: number }[];
   guests: { id: number; name: string; node: string; running: boolean; template: boolean; startsAtBoot: boolean; issues: { kind: string; title: string }[] }[];
@@ -63,6 +66,15 @@ export function buildHealth(h: HealthInput): Check[] {
     if (!h.cluster.quorate) add({ id: "votes", group: "Nodes", status: "bad", title: "The cluster has lost its majority", detail: "Too few nodes can see each other, so Proxmox has stopped starting, stopping or changing guests until enough of them are back." });
     else if (votes <= 2) add({ id: "votes", group: "Nodes", status: "warn", title: "One node going down would lock the other", detail: `The cluster has ${plural(votes, "vote")}. Proxmox needs more than half of them, so if either node goes down, the other can't start, stop or change guests until it's back. A small third machine as a tie-breaker fixes this. Setting one up is coming in a later release.` });
     else add({ id: "votes", group: "Nodes", status: "ok", title: "The cluster can lose a node and keep going", detail: `${plural(votes, "vote")}${h.tieBreaker ? ", including a tie-breaker" : ""}.` });
+    const net = h.network;
+    if (net?.known && net.shared) {
+      const fix = net.others.length
+        ? ` Every node is also on ${net.others[0]}. Settings can give moves that network with one switch.`
+        : " Giving moves a network of their own takes a second network card on each node. Until then, Settings can limit how fast moves run.";
+      add({ id: "move-network", group: "Nodes", status: "warn", title: "VM moves and the cluster heartbeat share one network", detail: `Moves run on ${net.moveNet}, which is also the only network the nodes use to check on each other. A few big moves at once can fill it, the nodes lose touch, and HA restarts a node to protect its VMs. Until moves have their own network, BossMox moves one VM at a time.${fix}`, fix: { kind: "settings", label: "Open Settings" } });
+    } else if (net?.known) {
+      add({ id: "move-network", group: "Nodes", status: "ok", title: "VM moves have a network of their own", detail: `Moves run on ${net.moveNet}, apart from the cluster heartbeat, so BossMox moves up to ${net.batch} VMs at a time.` });
+    }
   }
   const badChannels = h.channels.filter((c) => !c.ok);
   if (badChannels.length) for (const c of badChannels) add({ id: `channel-${c.node}`, group: "Nodes", status: "bad", title: `${c.headline} on ${c.node}`, detail: c.note, ...(c.offer ? { fix: { kind: "channel", label: c.offer === "free" ? "Use the free channel" : "Use the enterprise channel", node: c.node, channel: c.offer } } : {}) });

@@ -12,6 +12,8 @@ export interface RawStatus {
   rootfs?: { used?: number; total?: number };
   loadavg?: string[];
   "current-kernel"?: { release?: string };
+  /** Processor use right now, 0 to 1. */
+  cpu?: number;
 }
 export interface RawUpdate {
   Package: string;

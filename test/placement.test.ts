@@ -119,7 +119,7 @@ test("a stuck guest stops the plan with its own reason", () => {
 
 test("no other node, no moves", () => {
   assert.match(planMoves("n1", [guest(1, "a", 2)], [node("n1", 64, 1)]).problems[0] as string, /no other online node/);
-  assert.deepEqual(planMoves("n1", [], [node("n1", 64, 1)]), { moves: [], problems: [], ejectable: [] });
+  assert.deepEqual(planMoves("n1", [], [node("n1", 64, 1)]), { moves: [], problems: [], ejectable: [], unplaced: [], tentative: [] });
 });
 
 const sourceStorages = { "local-lvm": { free: 0, total: 0, shared: false }, local: { free: 0, total: 0, shared: false }, nfs: { free: 0, total: 0, shared: true } };
@@ -178,4 +178,11 @@ test("a VM stuck only by a disc from local storage can be freed by ejecting it, 
   assert.deepEqual(guestNeed({ ...base, config: { ide0: "local:iso/virtio.iso,media=cdrom" }, precondition: { local_resources: ["hostpci0"] } }).discSlots, []);
   assert.deepEqual(guestNeed({ ...base, config: { ide2: "local:7/vm-7-cloudinit.qcow2,media=cdrom" } }).discSlots, [], "the cloud-init drive moves with the VM");
   assert.deepEqual(guestNeed({ ...base, config: { ide2: "cdrom,media=cdrom" } }).discSlots, ["ide2"], "the node's own drive can be ejected too");
+});
+
+test("each guest that can't be placed is named, and the rest still get a place", () => {
+  const plan = planMoves("n1", [guest(1, "small", 2), guest(2, "huge", 60), guest(3, "stuck", 1, { stuck: "stuck uses hardware attached to its node, so it can't move." })], [node("n1", 64, 1), node("n2", 64, 30)]);
+  assert.deepEqual(plan.moves, [], "all or nothing for a plain move");
+  assert.deepEqual(plan.unplaced?.map((u) => u.id).sort(), [2, 3]);
+  assert.deepEqual(plan.tentative?.map((m) => `${m.id}->${m.target}`), ["1->n2"]);
 });
