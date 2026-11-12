@@ -1459,6 +1459,24 @@ async function openConsole(res: http.ServerResponse, body: Record<string, unknow
   return json(res, 200, { screen: terminals.prepare(name, session, proxy, { path, raw: true }), password: proxy.ticket });
 }
 
+/**
+ * Answers a Proxmox refusal the same way for every write: no permission, signed out (which ends the BossMox session
+ * too), or Proxmox's reason in plain words. Returns false for anything else, which the caller rethrows.
+ */
+function answerPveError(res: http.ServerResponse, sessionId: string | undefined, err: unknown) {
+  if (!(err instanceof PveError)) return false;
+  if (err.status === 403) return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
+  if (err.status === 401) {
+    sessions.end(sessionId);
+    return json(res, 401, { error: "Sign in to continue." });
+  }
+  if (err.reason) {
+    const plain = plainError(err.reason);
+    return json(res, 400, { error: plain === err.reason.trim() ? `Proxmox refused: ${plain}` : plain });
+  }
+  return false;
+}
+
 async function runAction(req: http.IncomingMessage, res: http.ServerResponse, action: string) {
   // The body comes first. A slow upload shouldn't leave a checked session in hand while it's signed out.
   const body = await readJson(req);
@@ -1485,17 +1503,7 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
     audit(action, session.username, addressOf(req), `node=${name}${text(body.guest, 12) ? ` guest=${text(body.guest, 12)}` : ""}`);
     return json(res, 200, { task });
   } catch (err) {
-    if (!(err instanceof PveError)) throw err;
-    if (err.status === 403) return json(res, 403, { error: "Your Proxmox account doesn't have permission to do that." });
-    if (err.status === 401) {
-      sessions.end(id);
-      return json(res, 401, { error: "Sign in to continue." });
-    }
-    if (err.reason) {
-      const plain = plainError(err.reason);
-      return json(res, 400, { error: plain === err.reason.trim() ? `Proxmox refused: ${plain}` : plain });
-    }
-    throw err;
+    if (answerPveError(res, id, err) === false) throw err;
   }
 }
 
@@ -1577,7 +1585,8 @@ function finishLogin(res: http.ServerResponse, out: LoginOutcome, address: strin
  */
 async function scanShares(req: http.IncomingMessage, res: http.ServerResponse) {
   const body = await readJson(req);
-  const session = await sessions.get(cookieId(req));
+  const id = cookieId(req);
+  const session = await sessions.get(id);
   if (!session) return json(res, 401, { error: "Sign in to continue." });
   const name = text(body.server, 64);
   const host = text(body.host, 253);
@@ -1596,14 +1605,17 @@ async function scanShares(req: http.IncomingMessage, res: http.ServerResponse) {
     const found = await pve.get<{ share: string }[]>(`${base}/cifs?${query}`, session.ticket);
     return json(res, 200, { shares: found.map((f) => f.share).filter((s) => !s.endsWith("$")) });
   } catch (err) {
-    if (err instanceof PveError && err.status !== 401) return json(res, 200, { shares: null });
+    // Signed out is answered like any other action (#53). Any other refusal means nothing was found there.
+    if (err instanceof PveError && err.status === 401) return answerPveError(res, id, err);
+    if (err instanceof PveError) return json(res, 200, { shares: null });
     throw err;
   }
 }
 
 /** The one POST that isn't JSON: a file, passed straight through to Proxmox as it arrives. */
 async function upload(req: http.IncomingMessage, res: http.ServerResponse) {
-  const session = await sessions.get(cookieId(req));
+  const id = cookieId(req);
+  const session = await sessions.get(id);
   if (!session) return json(res, 401, { error: "Sign in to continue." });
   const params = new URL(req.url ?? "/", "http://local").searchParams;
   const name = params.get("server") ?? "";
@@ -1614,8 +1626,13 @@ async function upload(req: http.IncomingMessage, res: http.ServerResponse) {
   if (!UPLOAD_NAME.test(filename)) return json(res, 400, { error: "That has to be an .iso or .img file, with a plain file name." });
   if (!Number.isInteger(size) || size < 1 || size > MAX_UPLOAD) return json(res, 400, { error: "That file is too large." });
   audit("upload", session.username, addressOf(req), `node=${name} storage=${storage} file=${filename} bytes=${size}`);
-  const task = await pve.upload(`/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}/upload`, session, { content: "iso" }, { name: filename, size, stream: req });
-  return json(res, 200, { task });
+  try {
+    const task = await pve.upload(`/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}/upload`, session, { content: "iso" }, { name: filename, size, stream: req });
+    return json(res, 200, { task });
+  } catch (err) {
+    // An expired sign-in ends the session here too, instead of a 502 that leaves it looking alive (#53).
+    if (answerPveError(res, id, err) === false) throw err;
+  }
 }
 
 async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, route: string) {

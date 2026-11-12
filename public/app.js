@@ -564,6 +564,8 @@ async function applyMoveFix() {
  */
 function drawLeftover() {
   const disks = S.healthChecks?.find((c) => c.id === "leftover")?.fix?.disks ?? [];
+  // Removal works from this list, not the health check's latest: a disk found after the window opened is never removed unseen (#59).
+  S.leftoverShown = [...disks];
   const keep = S.leftoverKeep ?? new Set();
   const picked = disks.filter((d) => !keep.has(d.volume));
   dialog(`<h3>Remove leftover disks?</h3><p>These disks are detached from their guests and nothing uses them. Removing one deletes its file from storage for good. The guests themselves aren't touched.</p>
@@ -571,7 +573,7 @@ function drawLeftover() {
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" data-logo="1" ${picked.length ? "" : "disabled"}>Remove ${picked.length === 1 ? "1 disk" : `${picked.length} disks`}</button></div>`);
 }
 async function removeLeftover() {
-  const disks = (S.healthChecks?.find((c) => c.id === "leftover")?.fix?.disks ?? []).filter((d) => !(S.leftoverKeep ?? new Set()).has(d.volume));
+  const disks = (S.leftoverShown ?? []).filter((d) => !(S.leftoverKeep ?? new Set()).has(d.volume));
   const done = [];
   dialog(`<h3>Removing</h3><p>Removing ${disks.length === 1 ? "1 disk" : `${disks.length} disks`}.</p>`);
   let problem = "";
@@ -1105,10 +1107,13 @@ const guestName = (vmid) => S.data?.vms.find((v) => v.id === vmid)?.name ?? `Gue
 const sizeWords = (n) => (n >= 1000 ? `${Math.round(n / 100) / 10} TB` : n > 0 && n < 0.1 ? "under 0.1 GB" : `${n >= 10 ? Math.round(n) : n} GB`);
 function diskLine(d) {
   const facts = [d.kind, sizeWords(d.sizeGb)];
-  const wipe = S.diskData?.[S.storeNode]?.find((x) => x.path === d.path)?.canWipe;
+  const known = S.diskData?.[S.storeNode]?.find((x) => x.path === d.path);
+  const wipe = known?.canWipe;
+  // The server's reason, when it gives one, for not offering a drive.
+  const blocked = d.blocked || known?.blocked || "";
   return `<div class="stdisk"><div><b>${esc(d.model || d.path)}</b>${d.system ? `<span class="sttag">System disk</span>` : ""}
       <small>${esc(facts.join(", "))}${d.model ? `, ${esc(d.path)}` : ""}${d.wearLeft === null ? "" : `, ${d.wearLeft}% life left`}</small>
-      ${d.givenTo ? `<small>Given to ${esc(d.givenTo)} directly. That VM reads and writes this drive itself, so BossMox won't touch it.</small>` : d.otherUses.length ? `<small>Also has ${esc(d.otherUses.join(", "))}, which isn't Proxmox storage.</small>` : ""}</div>
+      ${d.givenTo ? `<small>Given to ${esc(d.givenTo)} directly. That VM reads and writes this drive itself, so BossMox won't touch it.</small>` : blocked ? `<small>${esc(blocked)}</small>` : d.otherUses.length ? `<small>Also has ${esc(d.otherUses.join(", "))}, which isn't Proxmox storage.</small>` : ""}</div>
     <div class="actions"><button class="linkbtn healthbtn ${d.failing ? "bad" : ""}" data-diskhealth="${esc(d.path)}"><span class="dot ${d.failing ? "warn" : d.health === "UNKNOWN" ? "" : "running"}"></span>${d.failing ? "Failing" : d.health === "UNKNOWN" ? "Health unknown" : "Healthy"}</button>${wipe ? `<button class="btn" data-diskwipe="${esc(d.path)}">Wipe</button>` : ""}</div></div>`;
 }
 function poolBlock(p, onSystem = false) {
@@ -1166,9 +1171,10 @@ function drawSetup(problem = "") {
   const st = S.setup;
   const node = S.storeNode;
   const drives = (S.diskData?.[node] ?? []).filter((d) => d.free || d.canWipe);
+  const blocked = (S.diskData?.[node] ?? []).find((d) => d.blocked)?.blocked ?? "";
   const choice = (key, value, title, line, on, disabled = false) => `<button class="choice ${on ? "on" : ""}" role="radio" aria-checked="${on}" data-setup="${key}" data-setupval="${value}" ${disabled ? "disabled" : ""}><b>${esc(title)}</b><small>${esc(line)}</small></button>`;
   const where = `<p class="stq">Where is it?</p><div class="choices" role="radiogroup" aria-label="Where is it">
-    ${choice("where", "drive", "A drive in this computer", drives.length ? `${drives.length} on ${node} can be used.` : `${node} has no drive that can be used. Every drive already holds something.`, st.where === "drive", !drives.length)}
+    ${choice("where", "drive", "A drive in this computer", drives.length ? `${drives.length} on ${node} can be used.` : blocked || `${node} has no drive that can be used. Every drive already holds something.`, st.where === "drive", !drives.length)}
     ${choice("where", "nas", "A NAS or file server", "Storage over the network. Every node can use it.", st.where === "nas")}</div>`;
   // iSCSI is on the way (Rocky, 2026-11-09): shown so people know, greyed out until it's built and tested.
   const nasPart = st.where !== "nas" ? "" : `<p class="stq">How does it share?</p><div class="choices" role="radiogroup" aria-label="How it shares" style="grid-template-columns:1fr">
@@ -1490,18 +1496,22 @@ async function runAction(action, server, title, extra = {}, after = null, help =
       return drawTask(title, { finished: true, result: "ok", lines: [] });
     }
     const url = `api/task?server=${encodeURIComponent(server)}&task=${encodeURIComponent(body.task)}`;
+    let view;
     for (;;) {
       await new Promise((r) => setTimeout(r, 1000));
-      const view = await signal(url);
+      view = await signal(url);
       if (me !== S.taskToken) return;
       drawTask(title, view);
       if (view.finished) break;
     }
     S.taskRunning = false;
+    // What runs after success (clearing a deleted guest, re-checking a fix) mustn't run when Close ends a failure (#59).
+    if (view.result === "failed") S.afterTask = null;
     loadServer();
   } catch (err) {
     if (me !== S.taskToken) return;
     S.taskRunning = false;
+    S.afterTask = null;
     drawTask(title, null, err.message || "BossMox lost contact with Proxmox.");
   }
 }
@@ -1556,6 +1566,7 @@ function jobRows(job, home) {
 }
 /** Follows a move job started from a node's Overview until it ends. */
 async function followMoves(id, title) {
+  let shown = false;
   for (;;) {
     let job = null;
     try {
@@ -1563,9 +1574,12 @@ async function followMoves(id, title) {
     } catch {
       return;
     }
+    // Closed, or another window opened over it: stop following. The moves carry on without it (#57).
+    if (shown && !($("#scrim").classList.contains("on") && $("#dialog [data-moveswin]"))) return;
     if (job) {
+      shown = true;
       const words = job.error ? `<p class="loginerr">${esc(job.error)}</p>` : `<p>${job.running ? "One at a time, each checked for room first. You can close this: the moves carry on." : stayedWords(job) ? esc(stayedWords(job)) : "All of them are home."}</p>`;
-      dialog(`<h3>${esc(title)}</h3>${words}<div class="restartlist">${jobRows(job, job.kind === "home")}</div><div class="row-end">${job.running ? `<button class="btn" data-movestop="${esc(job.node)}">Stop after this one</button>` : ""}<button class="btn" data-dlg="cancel">Close</button></div>`);
+      dialog(`<h3 data-moveswin="1">${esc(title)}</h3>${words}<div class="restartlist">${jobRows(job, job.kind === "home")}</div><div class="row-end">${job.running ? `<button class="btn" data-movestop="${esc(job.node)}">Stop after this one</button>` : ""}<button class="btn" data-dlg="cancel">Close</button></div>`);
       if (!job.running) {
         await refresh();
         renderServerDetail();
@@ -1623,7 +1637,9 @@ async function openRunStart(kind, server = "") {
         const res = await post("api/action/check-updates", { server: n });
         const body = await res.json();
         if (!res.ok) throw new Error(body.error);
-        await followTask(n, body.task);
+        // A failed check leaves the node's update list stale, and the plan would call it up to date (#55).
+        const view = await followTask(n, body.task);
+        if (view.result === "failed") throw new Error(`The update check failed on ${n}: ${view.message || "Proxmox didn't say why"}. Nothing was planned.`);
       }));
     } else dialog(`<h3>Planning the restart of ${esc(server)}</h3><p>Reading what runs there and where it can go.</p>`);
     const [plan, reboot] = await Promise.all([
@@ -1639,7 +1655,7 @@ async function openRunStart(kind, server = "") {
   }
 }
 function drawRunStart(kind, server, plan, reboot) {
-  S.runStart = { kind, server };
+  S.runStart = { kind, server, plan, reboot };
   const again = `run:${kind}:${server}`;
   const busy = reboot?.busy?.length ? [`Wait for this to finish first: ${reboot.busy.join(", ")}.`] : [];
   const blocked = [...plan.blocked, ...busy];
@@ -2039,8 +2055,19 @@ function startUpload() {
     try {
       body = JSON.parse(xhr.responseText);
     } catch { /* the status still says what happened */ }
-    if (xhr.status === 200) done("Uploaded", `${file.name} is ready on ${server}.`, false);
-    else done("The upload failed", body.error || "BossMox couldn't finish that.", true);
+    if (xhr.status === 401) {
+      S.taskRunning = false;
+      closeDialog();
+      return showLogin("You've been signed out. Sign in again to continue.");
+    }
+    if (xhr.status !== 200) return done("The upload failed", body.error || "BossMox couldn't finish that.", true);
+    // The file has arrived, but Proxmox still has to save it: it's ready only when that task ends well (#53).
+    if (!body.task) return done("Uploaded", `${file.name} is ready on ${server}.`, false);
+    show("Sent. Proxmox is saving it.");
+    followTask(server, body.task).then(
+      (view) => (view.result === "failed" ? done("The upload failed", `Proxmox couldn't save ${file.name}: ${view.message || "it didn't say why"}.`, true) : done("Uploaded", `${file.name} is ready on ${server}.`, false)),
+      (err) => (err.message === "signed out" ? done("Signed out", "You were signed out while Proxmox was saving the file. Sign in again and check Storage to see if it's there.", true) : done("Not sure it saved", `${file.name} arrived, but BossMox lost sight of Proxmox saving it. Check Storage to see if it's there.`, true)),
+    );
   };
   xhr.onerror = () => done("The upload failed", "The connection dropped. Nothing was saved.", true);
   xhr.open("POST", `api/upload?server=${encodeURIComponent(server)}&storage=${encodeURIComponent(storage)}&filename=${encodeURIComponent(file.name)}`);
@@ -2704,6 +2731,9 @@ const setPick = (id, label, choices, now) => `<label class="field"><span>${label
 function settingsPane(v) {
   const s = v.settings;
   if (!s) return `<p class="meta">Proxmox didn't return this guest's settings.</p>`;
+  // What the form shows. Refreshes update v.settings but don't redraw the form, so changes are counted against this copy:
+  // otherwise a field nobody touched here would be saved back over a change made elsewhere meanwhile (#56).
+  S.setBase = { id: v.id, settings: { ...s } };
   const cpu = [...CPU_COMMON, ...(S.cpuTypes ?? []).filter((c) => !CPU_COMMON.some(([k]) => k === c)).map((c) => [c, c])];
   const common = `<h3 class="sethead">General</h3>
     ${setText("name", "Name", s.name, 'maxlength="63"')}
@@ -2744,9 +2774,10 @@ function settingsPane(v) {
 }
 function settingsChanges(v) {
   const out = {};
+  const shown = S.setBase?.id === v.id ? S.setBase.settings : v.settings;
   document.querySelectorAll("#setform [data-set]").forEach((el) => {
     const key = el.dataset.set;
-    const now = v.settings[key];
+    const now = shown[key];
     let value = el.value;
     if (el.type === "checkbox") value = el.checked;
     else if (el.dataset.gb) value = el.value === "" ? null : Math.round(Number(el.value) * 1024);
@@ -3390,15 +3421,21 @@ document.addEventListener("change", (e) => {
   if (e.target.dataset?.keepagain) {
     const again = e.target.dataset.keepagain;
     const keepFreePct = Number(e.target.value);
-    e.target.disabled = true;
-    // Saved for the whole cluster, then the plan is drawn again with it, in place.
-    return (async () => {
-      const res = await post("api/action/preferences-set", { server: onlineNodes()[0], keepFreePct });
-      if (!res.ok) return dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc((await res.json()).error)}</p>${closeRow}`);
-      await refresh();
-      const [, kind, server] = again.split(":");
-      openRunStart(kind, server);
-    })().catch((err) => dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`));
+    const [, kind, server] = again.split(":");
+    // Saved for the whole cluster, so it asks first (#55). Cancel goes back to the same plan, unchanged.
+    const shown = S.runStart;
+    S.afterTask = () => drawRunStart(shown.kind, shown.server, shown.plan, shown.reboot);
+    return confirmAction(
+      `Keep ${keepFreePct}% free on every node?`,
+      `This is a cluster-wide setting, not just for this ${kind === "update" ? "update" : "restart"}. From now on BossMox keeps ${keepFreePct}% of each node's memory, storage and processor free when it moves guests, here and in Move off and Move back.`,
+      "Save for every node",
+      () => (async () => {
+        const res = await post("api/action/preferences-set", { server: onlineNodes()[0], keepFreePct });
+        if (!res.ok) return dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc((await res.json()).error)}</p>${closeRow}`);
+        await refresh();
+        openRunStart(kind, server);
+      })().catch((err) => dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`)),
+    );
   }
   if (e.target.dataset?.bkwarn) {
     const line = e.target.closest("#dialog")?.querySelector(".warnline");
@@ -3584,9 +3621,16 @@ $("#signout").addEventListener("click", async () => {
 /* Live data */
 async function refresh() {
   let error = "";
+  // Sign-out bumps loadRun, and each refresh bumps refreshSeq. An answer that arrives after either is dropped, so a slow
+  // refresh can't bring the desktop back after Sign out, or an older answer replace a newer one (#59).
+  const gen = S.loadRun;
+  S.refreshSeq = (S.refreshSeq ?? 0) + 1;
+  const seq = S.refreshSeq;
+  const late = () => gen !== S.loadRun || seq !== S.refreshSeq;
   try {
     const res = await fetch("api/overview");
     const body = await res.json();
+    if (late()) return;
     if (res.status === 401) {
       showLogin(S.data ? "You've been signed out. Sign in again to continue." : "");
       return;
@@ -3604,12 +3648,16 @@ async function refresh() {
     polling ??= setInterval(refresh, 10000);
     // A run going on the server shows on the desktop, in this browser or any other.
     const wasRunning = S.run?.running;
-    S.run = (await signal("api/run").catch(() => ({ run: null }))).run;
-    if (S.run?.running && S.runView === undefined) openRun();
+    const latest = (await signal("api/run").catch(() => ({ run: null }))).run;
+    if (late()) return;
+    S.run = latest;
+    // Not over a window someone is using: it opens on the next refresh after that one closes (#57).
+    if (S.run?.running && S.runView === undefined && !$("#scrim").classList.contains("on")) openRun();
     else if (wasRunning && !S.run?.running && S.runView === undefined) renderHealth();
     if (S.sel === null && body.vms[0]) S.sel = body.vms[0].id;
     S.failed = false;
   } catch (err) {
+    if (late()) return;
     error = err.message || "BossMox couldn't get an answer.";
     S.failed = error;
   }
