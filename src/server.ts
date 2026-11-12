@@ -1273,7 +1273,7 @@ const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, 
     const usedBy = storageBlockers(id, data.vms, jobs);
     let removal: { path: string; disks: string[] };
     try {
-      removal = poolRemoval(map, id, config.find((c) => c.storage === id), directory, usedBy);
+      removal = poolRemoval(map, id, config.find((c) => c.storage === id), directory, usedBy, config);
     } catch (err) {
       throw new AuthError(400, (err as Error).message);
     }

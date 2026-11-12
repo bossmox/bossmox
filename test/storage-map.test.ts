@@ -152,6 +152,11 @@ test("deleting a ZFS mirror erases the whole pool, never rpool or part of one", 
   const tank = input.config.find((c) => c.storage === "tank")!;
   assert.deepEqual(poolRemoval(m, "tank", tank, [], []).disks, ["/dev/sdb", "/dev/sdc"]);
   assert.throws(() => poolRemoval(m, "tank", { ...tank, pool: "tank/data" }, [], []), /part of a bigger ZFS pool/);
+  // Another storage kept inside the pool, nearly empty so the space check alone lets the delete through (review S2).
+  const others = [tank, { storage: "tank-files", type: "zfspool", pool: "tank/files" }, { storage: "tank-dir", type: "dir", path: "/tank/iso" }];
+  assert.throws(() => poolRemoval(m, "tank", tank, [], [], others), /tank-files, tank-dir are kept inside tank/);
+  assert.throws(() => poolRemoval(m, "tank", tank, [], [], [tank, { storage: "tank-files", type: "zfspool", pool: "tank/files" }]), /tank-files is kept inside tank/);
+  assert.deepEqual(poolRemoval(m, "tank", tank, [], [], [tank, { storage: "other", type: "zfspool", pool: "tanker" }]).disks, ["/dev/sdb", "/dev/sdc"], "a pool merely named alike isn't inside");
 });
 
 test("Delete pool won't erase what BossMox can't see (security review M1)", () => {

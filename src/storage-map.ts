@@ -234,7 +234,7 @@ export interface Disk {
  * Whether a pool on a local disk can be deleted, and the Proxmox call that does it (ADR 0015). Strict on purpose:
  * never the system disk, never a pool with anything on it or anything using it, never one BossMox can't place.
  */
-export function poolRemoval(map: StorageMap, id: string, config: RawStorageConfig | undefined, mounts: (RawMount & { unitfile?: string })[], usedBy: string[]) {
+export function poolRemoval(map: StorageMap, id: string, config: RawStorageConfig | undefined, mounts: (RawMount & { unitfile?: string })[], usedBy: string[], allConfigs: RawStorageConfig[] = []) {
   const pools = map.groups.flatMap((g) => g.pools.map((p) => ({ p, g })));
   const found = pools.find((x) => x.p.id === id);
   if (map.network.some((p) => p.id === id)) throw new Error("That's network storage. Remove unhooks it instead, and nothing on it is erased.");
@@ -260,6 +260,10 @@ export function poolRemoval(map: StorageMap, id: string, config: RawStorageConfi
   if (config.type === "zfspool") {
     const pool = config.pool ?? "";
     if (!pool || pool.includes("/") || pool === "rpool") throw new Error(`${id} is part of a bigger ZFS pool, so BossMox won't erase it. Use Proxmox's own screen for this one.`);
+    // Destroying the pool destroys every dataset in it. Another storage kept inside it, even a nearly empty one the
+    // space check lets through, would go too (review S2).
+    const inside = allConfigs.filter((c) => c.storage !== id && ((c.pool ?? "").startsWith(`${pool}/`) || c.path === `/${pool}` || (c.path ?? "").startsWith(`/${pool}/`)));
+    if (inside.length) throw new Error(`${inside.map((c) => c.storage).join(", ")} ${inside.length === 1 ? "is" : "are"} kept inside ${pool}, so deleting ${id} would erase ${inside.length === 1 ? "it" : "them"} too. Remove ${inside.length === 1 ? "it" : "them"} first.`);
     return { path: `disks/zfs/${encodeURIComponent(pool)}?${cleanup}`, disks: g.disks.map((d) => d.path) };
   }
   if (config.type === "lvmthin") {
