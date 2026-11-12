@@ -2048,7 +2048,8 @@ function startUpload() {
   const done = (title, line, bad) => {
     S.taskRunning = false;
     dialog(`<h3>${esc(title)}</h3><p class="${bad ? "loginerr" : ""}">${esc(line)}</p>${closeRow}`);
-    S.afterTask = after;
+    // The step after an upload is for one that worked; a failed one only closes (#74).
+    S.afterTask = bad ? null : after;
   };
   xhr.onload = () => {
     let body = {};
@@ -2066,7 +2067,14 @@ function startUpload() {
     show("Sent. Proxmox is saving it.");
     followTask(server, body.task).then(
       (view) => (view.result === "failed" ? done("The upload failed", `Proxmox couldn't save ${file.name}: ${view.message || "it didn't say why"}.`, true) : done("Uploaded", `${file.name} is ready on ${server}.`, false)),
-      (err) => (err.message === "signed out" ? done("Signed out", "You were signed out while Proxmox was saving the file. Sign in again and check Storage to see if it's there.", true) : done("Not sure it saved", `${file.name} arrived, but BossMox lost sight of Proxmox saving it. Check Storage to see if it's there.`, true)),
+      (err) => {
+        // Signed out: the sign-in screen, not a window over it with a step that would run signed out (#74).
+        if (err.message !== "signed out") return done("Not sure it saved", `${file.name} arrived, but BossMox lost sight of Proxmox saving it. Check Storage to see if it's there.`, true);
+        S.taskRunning = false;
+        S.afterTask = null;
+        closeDialog();
+        showLogin(`You were signed out while Proxmox was saving ${file.name}. Sign in again and check Storage to see if it's there.`);
+      },
     );
   };
   xhr.onerror = () => done("The upload failed", "The connection dropped. Nothing was saved.", true);
@@ -3424,7 +3432,15 @@ document.addEventListener("change", (e) => {
     const [, kind, server] = again.split(":");
     // Saved for the whole cluster, so it asks first (#55). Cancel goes back to the same plan, unchanged.
     const shown = S.runStart;
-    S.afterTask = () => drawRunStart(shown.kind, shown.server, shown.plan, shown.reboot);
+    // Each guest's choice is only in the window, so it's kept and put back too (#74).
+    const picked = [...document.querySelectorAll("[data-vmchoice]")].map((s) => [s.dataset.vmchoice, s.value]);
+    S.afterTask = () => {
+      drawRunStart(shown.kind, shown.server, shown.plan, shown.reboot);
+      for (const [id, value] of picked) {
+        const s = document.querySelector(`[data-vmchoice="${id}"]`);
+        if (s) s.value = value;
+      }
+    };
     return confirmAction(
       `Keep ${keepFreePct}% free on every node?`,
       `This is a cluster-wide setting, not just for this ${kind === "update" ? "update" : "restart"}. From now on BossMox keeps ${keepFreePct}% of each node's memory, storage and processor free when it moves guests, here and in Move off and Move back.`,
