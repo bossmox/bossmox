@@ -108,14 +108,17 @@ test("the run planner lists each running guest on the node with where it would g
 
 
 test("a move job can't start while a run is still planning (#45)", async () => {
-  const c = cluster();
+  // A two-vote cluster with an HA guest, so the run is refused once it has planned and nothing keeps running after.
+  const c = cluster({ nodes: ["n1", "n2"], ha: ["vm:101"] });
   try {
     const release = c.hold();
     const run = c.jobs.startRun(person, "restart", "n1", true, {});
     // The run is planning: it has claimed the cluster but hasn't asked Proxmox anything back yet.
     await assert.rejects(c.jobs.startMoveJob(person, async () => null), (e: Error & { status?: number }) => e.status === 409);
     release();
-    await run;
+    await assert.rejects(run, /only 2 votes/);
+    // And once the run has finished planning (refused here), moves can start again.
+    assert.equal(await c.jobs.startMoveJob(person, async () => null), null);
   } finally {
     c.done();
   }
