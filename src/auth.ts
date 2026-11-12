@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { isIPv6 } from "node:net";
 import { PveError, type LoginResult } from "./pve.js";
+import { HttpError } from "./http-error.js";
 
 const RENEW_MS = 60 * 60 * 1000; // Proxmox tickets last 2 hours, so renew well before that.
 const SESSION_MS = 12 * 60 * 60 * 1000;
@@ -43,11 +44,8 @@ interface Fails {
 }
 export type LoginOutcome = { kind: "ok"; id: string; username: string } | { kind: "code"; id: string };
 
-export class AuthError extends Error {
-  constructor(readonly status: number, message: string) {
-    super(message);
-  }
-}
+/** A sign-in refusal: wrong password, a lockout, no permission. Every other refusal is a plain HttpError. */
+export class AuthError extends HttpError {}
 
 /** A machine can hold a whole IPv6 /64, so that counts as one client. */
 export function clientGroup(address: string): string {

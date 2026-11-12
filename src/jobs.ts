@@ -4,7 +4,7 @@
  * against a fake Proxmox. The server only wires it: it passes Proxmox access and settings in through `JobsContext`.
  */
 import { networkInterfaces } from "node:os";
-import { AuthError, type Session } from "./auth.js";
+import type { Session } from "./auth.js";
 import { discForm } from "./create.js";
 import { checkNetworks, migrationNetwork, SAFE_BATCH, type NetCheck } from "./cluster-net.js";
 import type { Overview, RawConfig, RawResource, RawSnapshot } from "./model.js";
@@ -16,6 +16,7 @@ import { PveError, type PveClient } from "./pve.js";
 import { drive, readRun, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
 import { buildRebootPlan, buildRollingPlan, groupUpdates, haQuorumBlock, section, tieBreakerVotes, type RawStatus, type RawTask, type RawTaskStatus, type RawUpdate, type RollingInput, type Section } from "./server-detail.js";
 import type { TermProxy } from "./terminal.js";
+import { HttpError } from "./http-error.js";
 
 /** What the jobs need from the server. Tests pass a fake Proxmox and files in a temporary folder. */
 export interface JobsContext {
@@ -168,8 +169,8 @@ export function createJobs(ctx: JobsContext) {
   /** Starts a move job in the background. The check and the claim happen before any wait, so two can't start. */
   async function startMoveJob(session: Session, prepare: () => Promise<((deps: MoveDeps) => Promise<void>) | null>): Promise<string | null> {
     // A run claims the cluster before its first wait, while it plans; that counts as going too (#45).
-    if (currentRun?.running || runState.starting) throw new AuthError(409, "An update or restart run is going. Its moves are part of it.");
-    if (moveJob.starting || moveRecord.job?.running) throw new AuthError(409, `BossMox is already moving guests${moveRecord.job?.running ? ` (${moveRecord.job.kind === "off" ? "off" : "home to"} ${moveRecord.job.node})` : ""}. Wait for that to finish.`);
+    if (currentRun?.running || runState.starting) throw new HttpError(409, "An update or restart run is going. Its moves are part of it.");
+    if (moveJob.starting || moveRecord.job?.running) throw new HttpError(409, `BossMox is already moving guests${moveRecord.job?.running ? ` (${moveRecord.job.kind === "off" ? "off" : "home to"} ${moveRecord.job.node})` : ""}. Wait for that to finish.`);
     moveJob.starting = true;
     try {
       const run = await prepare();
@@ -428,19 +429,19 @@ export function createJobs(ctx: JobsContext) {
 
   /** Starts a run with the person's choices. Everything is checked again here; the page's copy is only a request. */
   async function startRun(session: Session, kind: "update" | "restart", server: string, confirmed: boolean, choices: Record<string, unknown>): Promise<string> {
-    if (!confirmed) throw new AuthError(400, "It wasn't confirmed.");
+    if (!confirmed) throw new HttpError(400, "It wasn't confirmed.");
     // A run stops when the sign-in that started it ends. One that won't last a long update is refused up front (#59).
     const left = session.expiresAt - Date.now();
-    if (left < RUN_NEEDS_MS) throw new AuthError(400, `Your sign-in ends in ${Math.max(1, Math.round(left / 60000))} minutes, and a run stops when it does. Sign out and in again first, then start it.`);
-    if (currentRun?.running || runState.starting) throw new AuthError(409, "A run is already going. Open it to follow or stop it.");
-    if (moveRecord.job?.running || moveJob.starting) throw new AuthError(409, "BossMox is moving guests right now. Wait for that to finish.");
+    if (left < RUN_NEEDS_MS) throw new HttpError(400, `Your sign-in ends in ${Math.max(1, Math.round(left / 60000))} minutes, and a run stops when it does. Sign out and in again first, then start it.`);
+    if (currentRun?.running || runState.starting) throw new HttpError(409, "A run is already going. Open it to follow or stop it.");
+    if (moveRecord.job?.running || moveJob.starting) throw new HttpError(409, "BossMox is moving guests right now. Wait for that to finish.");
     runState.starting = true;
     try {
       // Discs chosen to come out are planned as already out. Nothing is ejected until every check below passes (#48).
       const eject = Object.entries(choices).filter(([, c]) => c === "eject").map(([id]) => Number(id));
       const plan = await runPlan(session.ticket, kind, server, eject);
-      if (plan.blocked.length) throw new AuthError(400, plan.blocked.join(" "));
-      if (kind === "update" && !plan.nodes.length) throw new AuthError(400, "Every node is up to date.");
+      if (plan.blocked.length) throw new HttpError(400, plan.blocked.join(" "));
+      if (kind === "update" && !plan.nodes.length) throw new HttpError(400, "Every node is up to date.");
       const nodes: RunNode[] = plan.nodes.map((n) => ({
         name: n.name, install: n.install, restart: n.restart, updates: n.updates, phase: "waiting", note: null, keptConfig: [],
         vms: n.vms.map((v) => {
@@ -454,7 +455,7 @@ export function createJobs(ctx: JobsContext) {
         const moving = n.vms.filter((v) => v.choice === "move").map((v) => v.id);
         if (!moving.length || !n.restart) continue;
         const check = await planEvacuation(session.ticket, n.name, moving, undefined, {}, eject);
-        if (check.problems.length) throw new AuthError(400, `${n.name}: ${check.problems.join(" ")} Choose Shut down for it, or lower Keep free.`);
+        if (check.problems.length) throw new HttpError(400, `${n.name}: ${check.problems.join(" ")} Choose Shut down for it, or lower Keep free.`);
       }
       // Every check passed. Only now do the chosen discs come out.
       for (const n of plan.nodes) for (const v of n.vms.filter((x) => eject.includes(x.id) && x.type === "qemu")) {

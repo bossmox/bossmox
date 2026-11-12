@@ -52,6 +52,7 @@ import { guestActions } from "./actions/guests.js";
 import { storageActions } from "./actions/storage.js";
 import { backupActions } from "./actions/backups.js";
 import { getRoutes, type GetRoute } from "./routes/get.js";
+import { HttpError } from "./http-error.js";
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public");
 /** Written into a release. A copy run from the repo has none, and the page then shows nothing. */
@@ -329,7 +330,7 @@ async function withConfig<T>(path: string, who: Identity, run: (config: RawConfi
   try {
     return run(config);
   } catch (err) {
-    if (err instanceof HardwareError) throw new AuthError(400, err.message);
+    if (err instanceof HardwareError) throw new HttpError(400, err.message);
     throw err;
   }
 }
@@ -338,7 +339,7 @@ function rule<T>(run: () => T): T {
   try {
     return run();
   } catch (err) {
-    if (err instanceof StorageError) throw new AuthError(400, err.message);
+    if (err instanceof StorageError) throw new HttpError(400, err.message);
     throw err;
   }
 }
@@ -360,12 +361,12 @@ const kindOf = (body: Record<string, unknown>) => (body.type === "lxc" ? "lxc" a
 function guestPath(name: string, body: Record<string, unknown>): { id: string; path: string } {
   const id = text(body.guest, 12);
   const type = body.type;
-  if (!/^\d+$/.test(id) || (type !== "qemu" && type !== "lxc")) throw new AuthError(400, "That request isn't valid.");
+  if (!/^\d+$/.test(id) || (type !== "qemu" && type !== "lxc")) throw new HttpError(400, "That request isn't valid.");
   return { id, path: `/nodes/${encodeURIComponent(name)}/${type}/${id}` };
 }
 function snapshotName(body: Record<string, unknown>): string {
   const snap = text(body.snapshot, 40);
-  if (!SNAPSHOT_NAME.test(snap)) throw new AuthError(400, "A snapshot name starts with a letter, then letters, numbers, dashes or underscores.");
+  if (!SNAPSHOT_NAME.test(snap)) throw new HttpError(400, "A snapshot name starts with a letter, then letters, numbers, dashes or underscores.");
   return snap;
 }
 
@@ -447,12 +448,12 @@ async function finishTask(node: string, upid: string, who: Identity, seconds: nu
     if ((who as Partial<Session>).ended) throw new AuthError(401, "You signed out, so BossMox stopped here. What Proxmox had already started carries on.");
     const status = await pve.get<RawTaskStatus>(path, who.ticket);
     if (status.status === "stopped") {
-      if (status.exitstatus !== "OK") throw new AuthError(400, `Proxmox stopped: ${status.exitstatus ?? "it didn't finish"}`);
+      if (status.exitstatus !== "OK") throw new HttpError(400, `Proxmox stopped: ${status.exitstatus ?? "it didn't finish"}`);
       return;
     }
     await new Promise((r) => setTimeout(r, 1000));
   }
-  throw new AuthError(504, "Proxmox is taking a long time. Check the node's activity, then look again.");
+  throw new HttpError(504, "Proxmox is taking a long time. Check the node's activity, then look again.");
 }
 
 /**
@@ -804,7 +805,7 @@ const handler: http.RequestListener = async (req, res) => {
     if (!file) return json(res, 404, { error: "Not found." });
     return send(res, 200, file[1], await readFile(path.join(PUBLIC, file[0])));
   } catch (err) {
-    if (err instanceof AuthError) return json(res, err.status, { error: err.message });
+    if (err instanceof HttpError) return json(res, err.status, { error: err.message });
     // The detail can name internal addresses, and some of these routes are open to anyone, so it stays in the log.
     console.error("Request failed:", err instanceof Error ? err.message : err);
     return json(res, 502, { error: "BossMox couldn't get an answer from Proxmox." });

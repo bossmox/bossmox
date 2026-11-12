@@ -7,6 +7,7 @@ import { optionsForm, RecommendedError } from "../recommended.js";
 import { NODE_NAME, text } from "../checks.js";
 import type { ActionContext } from "../server.js";
 import type { Action } from "./action.js";
+import { HttpError } from "../http-error.js";
 
 export function clusterActions(c: ActionContext): Record<string, Action> {
   const { audit, readOptions, pve, jobs, updates } = c;
@@ -14,7 +15,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
     "update-channel": async (name, who, body) => {
       const target = body.channel;
-      if (target !== "free" && target !== "enterprise") throw new AuthError(400, "That request isn't valid.");
+      if (target !== "free" && target !== "enterprise") throw new HttpError(400, "That request isn't valid.");
       try {
         return await applyChannel({
           get: (p) => pve.get(p, who.ticket),
@@ -22,21 +23,21 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
           post: (p, form) => pve.post(p, who, form),
         }, name, target);
       } catch (err) {
-        if (err instanceof ChannelError) throw new AuthError(400, err.message);
+        if (err instanceof ChannelError) throw new HttpError(400, err.message);
         throw err;
       }
     },
     "restart-server": async (name, who, body) => {
       // The browser only sends this after the person types "reboot", so a stray click can't restart a server.
-      if (body.confirm !== "reboot") throw new AuthError(400, "The restart wasn't confirmed.");
+      if (body.confirm !== "reboot") throw new HttpError(400, "The restart wasn't confirmed.");
       return pve.post<null>(`/nodes/${encodeURIComponent(name)}/status`, who, { command: "reboot" });
     },
     "move-guest": (name, who, body) => {
       const id = text(body.guest, 12);
       const target = text(body.target, 64);
       const type = body.type;
-      if (!/^\d+$/.test(id) || !NODE_NAME.test(target) || (type !== "qemu" && type !== "lxc")) throw new AuthError(400, "That move request isn't valid.");
-      if (body.confirm !== id) throw new AuthError(400, "The move wasn't confirmed.");
+      if (!/^\d+$/.test(id) || !NODE_NAME.test(target) || (type !== "qemu" && type !== "lxc")) throw new HttpError(400, "That move request isn't valid.");
+      if (body.confirm !== id) throw new HttpError(400, "The move wasn't confirmed.");
       const form: Record<string, string> = type === "qemu"
         ? { target, online: "1", "with-local-disks": "1" }
         : { target, restart: "1" };
@@ -44,28 +45,28 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     },
     "move-off": async (name, who, body) => {
       // The browser sends this after the person has seen the plan and confirmed it for this node.
-      if (body.confirm !== name) throw new AuthError(400, "The move wasn't confirmed.");
+      if (body.confirm !== name) throw new HttpError(400, "The move wasn't confirmed.");
       return jobs.startMoveJob(who, async () => {
         const plan = await jobs.planEvacuation(who.ticket, name);
-        if (plan.problems.length) throw new AuthError(400, plan.problems.join(" "));
+        if (plan.problems.length) throw new HttpError(400, plan.problems.join(" "));
         if (!plan.moves.length) return null;
         const batch = await jobs.batchFor(who.ticket);
         return (deps) => runMoveOff(jobs.moveRecord, deps, name, who.username, plan.moves, batch);
       });
     },
     "move-home": async (name, who, body) => {
-      if (body.confirm !== name) throw new AuthError(400, "The move wasn't confirmed.");
+      if (body.confirm !== name) throw new HttpError(400, "The move wasn't confirmed.");
       return jobs.startMoveJob(who, async () => {
-        if (!jobs.moveRecord.away[name]?.guests.length) throw new AuthError(400, `BossMox has nothing recorded as moved off ${name}.`);
+        if (!jobs.moveRecord.away[name]?.guests.length) throw new HttpError(400, `BossMox has nothing recorded as moved off ${name}.`);
         const batch = await jobs.batchFor(who.ticket);
         return (deps) => runMoveHome(jobs.moveRecord, deps, name, who.username, batch);
       });
     },
     "run-start": (_name, who, body) => {
       const kind = body.kind === "restart" ? "restart" : body.kind === "update" ? "update" : null;
-      if (!kind) throw new AuthError(400, "That request isn't valid.");
+      if (!kind) throw new HttpError(400, "That request isn't valid.");
       const server = text(body.server, 64);
-      if (kind === "restart" && !NODE_NAME.test(server)) throw new AuthError(400, "That server name isn't valid.");
+      if (kind === "restart" && !NODE_NAME.test(server)) throw new HttpError(400, "That server name isn't valid.");
       const choices = (body.choices && typeof body.choices === "object" ? body.choices : {}) as Record<string, unknown>;
       return jobs.startRun(who, kind, server, body.confirm === (kind === "update" ? "confirm" : "reboot"), choices);
     },
@@ -96,7 +97,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     "preferences-set": async (_name, who, body) => {
       const elsewhere = body.backupsElsewhere, check = body.updateCheck, keep = body.keepFreePct;
       if ((elsewhere !== undefined && typeof elsewhere !== "boolean") || (check !== undefined && typeof check !== "boolean") || (keep !== undefined && !(typeof keep === "number" && KEEP_FREE_CHOICES.includes(keep))) || (elsewhere === undefined && check === undefined && keep === undefined))
-        throw new AuthError(400, "That request isn't valid.");
+        throw new HttpError(400, "That request isn't valid.");
       // A cluster-wide choice needs the right to change the cluster's own settings in Proxmox (ADR 0018).
       const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", who.ticket).catch((): Record<string, Record<string, number>> => ({}));
       if (!canChangeCluster(perms)) throw new AuthError(403, "Your Proxmox account can't change settings for the whole cluster. That needs the Sys.Modify permission on the whole cluster (/).");
@@ -104,7 +105,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       try {
         writePreferences(c.preferencesFile, next);
       } catch {
-        throw new AuthError(500, "BossMox couldn't save that setting. Nothing changed.");
+        throw new HttpError(500, "BossMox couldn't save that setting. Nothing changed.");
       }
       const turned = next.updateCheck !== c.preferences().updateCheck;
       c.setPreferences(next);
@@ -114,13 +115,13 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     },
     "recommended-set": async (_name, who, body) => {
       const id = body.id;
-      if ((id !== "move-network" && id !== "move-limit" && id !== "ha-shutdown") || typeof body.on !== "boolean") throw new AuthError(400, "That request isn't valid.");
+      if ((id !== "move-network" && id !== "move-limit" && id !== "ha-shutdown") || typeof body.on !== "boolean") throw new HttpError(400, "That request isn't valid.");
       const { options, net } = await readOptions(who.ticket);
       let form: Record<string, string>;
       try {
         form = optionsForm(id, body.on, text(body.choice, 43), options, net);
       } catch (err) {
-        if (err instanceof RecommendedError) throw new AuthError(400, err.message);
+        if (err instanceof RecommendedError) throw new HttpError(400, err.message);
         throw err;
       }
       await pve.put<null>("/cluster/options", who, form);
