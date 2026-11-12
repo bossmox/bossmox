@@ -19,10 +19,17 @@ export interface Identity {
  * Proxmox client. Everything runs with the signed-in person's own ticket, so Proxmox applies their
  * permissions. Writes go through named actions in server.ts, never a general pass-through.
  */
+/** How long a read or a change may go quiet before BossMox gives up on that request. */
+const READ_WAIT_MS = 8000;
+const WRITE_WAIT_MS = 60_000;
+
 export class PveClient {
   private current = 0;
 
-  constructor(private readonly config: Pick<Config, "pveUrl" | "pveUrls" | "pveCa" | "pveTlsName">) {}
+  constructor(
+    private readonly config: Pick<Config, "pveUrl" | "pveUrls" | "pveCa" | "pveTlsName">,
+    private readonly waits = { read: READ_WAIT_MS, write: WRITE_WAIT_MS },
+  ) {}
 
   /** The address that last answered. Terminals use it too. */
   get activeUrl(): URL {
@@ -64,7 +71,9 @@ export class PveClient {
     }
     // A change gets a connection of its own. On a reused one that has gone dead, nobody can tell whether Proxmox
     // got the request, so it couldn't safely move to another node.
-    const options: https.RequestOptions = { method, headers, timeout: 8000, ...(method === "GET" ? {} : { agent: false }) };
+    // A read that hangs moves on to another node after 8 seconds. A change gets a minute: some (deleting a disk,
+    // making storage) take longer, and giving up early reported changes Proxmox went on to finish as failed (#59).
+    const options: https.RequestOptions = { method, headers, timeout: method === "GET" ? this.waits.read : this.waits.write, ...(method === "GET" ? {} : { agent: false }) };
     if (secure && this.config.pveCa) options.ca = this.config.pveCa;
     const tlsName = this.config.pveTlsName;
     if (secure && tlsName) {
@@ -97,7 +106,7 @@ export class PveClient {
         if (socket.connecting) socket.once("connect", () => { connected = true; });
         else connected = true;
       });
-      req.on("timeout", () => req.destroy(new Error("Proxmox took too long to answer")));
+      req.on("timeout", () => req.destroy(new Error(method === "GET" ? "Proxmox took too long to answer" : "Proxmox took too long to answer, and it may still have made the change. Check before trying again.")));
       req.on("error", (err) => reject(Object.assign(err, { unreached: !connected })));
       req.end(body);
     });

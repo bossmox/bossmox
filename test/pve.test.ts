@@ -92,3 +92,15 @@ test("an error from Proxmox never carries the query string, where an SMB scan's 
     p.close();
   }
 });
+
+test("a slow change is waited for, while a slow read still gives up and says so (#59)", async () => {
+  // Proxmox answers after 300 ms. Reads wait 100 ms, changes 2 s: the same gap as 8 s against a minute.
+  const slow = await fake((_req, res) => setTimeout(() => res.end(JSON.stringify({ data: "done" })), 300));
+  const pve = new PveClient({ pveUrl: slow.url, pveUrls: [slow.url], pveCa: undefined, pveTlsName: undefined } as never, { read: 100, write: 2000 });
+  try {
+    assert.equal(await pve.put("/nodes/a/qemu/100/config", who, { delete: "unused0" }), "done", "the change is waited for");
+    await assert.rejects(pve.get("/cluster/resources", "t"), /took too long/);
+  } finally {
+    slow.close();
+  }
+});
