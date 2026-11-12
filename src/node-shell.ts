@@ -37,13 +37,15 @@ export const STILL_RUNNING = 75;
 /**
  * Installs a node's updates with nobody answering: existing config files stay, and the exit code is printed. apt runs
  * as its own systemd job, so it finishes even if the console closes (a timeout, a network blip, BossMox restarting):
- * a closed console used to take apt down with it, mid-upgrade (#59). One already running is never started twice.
+ * a closed console used to take apt down with it, mid-upgrade (#59). Its output goes to the journal, not the console,
+ * so a closed console can't make its writes fail either, and it's printed once the job ends. One already running is
+ * never started twice. The typed line only ever holds `$?`, so the console's echo of it can't read as a result.
  */
 export const INSTALL_COMMAND =
-  `if systemctl is-active --quiet bossmox-update; then echo __BOSSMOX_DONE__:${STILL_RUNNING}; else ` +
-  "systemd-run --quiet --pipe --wait --collect --unit=bossmox-update --setenv=DEBIAN_FRONTEND=noninteractive " +
+  `if systemctl is-active --quiet bossmox-update; then (exit ${STILL_RUNNING}); else s=$(date +%s); ` +
+  "systemd-run --quiet --wait --collect --unit=bossmox-update --setenv=DEBIAN_FRONTEND=noninteractive " +
   "bash -c 'apt-get update -q >/dev/null 2>&1; apt-get -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade'; " +
-  "echo __BOSSMOX_DONE__:$?; fi\n";
+  'c=$?; journalctl -q -o cat -u bossmox-update --since "@$s"; (exit $c); fi; echo __BOSSMOX_DONE__:$?\n';
 
 export interface ShellConfig {
   readonly pveUrl: URL;
