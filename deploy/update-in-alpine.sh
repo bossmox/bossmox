@@ -20,6 +20,7 @@ put_back() {
   mv "$OLD" /opt/bossmox
   [ ! -f "$OLD.env" ] || cp -a "$OLD.env" /etc/bossmox/env
   [ ! -f "$OLD.init" ] || cp -a "$OLD.init" /etc/init.d/bossmox
+  rm -f "$OLD.env" "$OLD.init"
   rc-service bossmox start || true
   finish "$1"
 }
