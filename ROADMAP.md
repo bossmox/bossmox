@@ -2,11 +2,7 @@
 
 What's coming to BossMox, in plain words. Each theme is a [GitHub milestone](https://github.com/bossmox/bossmox/milestones), and each item is an issue you can follow or comment on. There are no dates: a release ships when its whole theme is done and tested on a real cluster.
 
-## Next: [Review fixes](https://github.com/bossmox/bossmox/milestone/5) (0.1.9)
-
-Fixes from the [independent code review of November 2026](https://github.com/bossmox/bossmox/issues/42): the run and move bugs, setup and install problems, and the code-quality work that goes with them. Problems found in [SECURITY.md](SECURITY.md)'s scope are posted once this release carries their fixes.
-
-## Then: [Cluster resilience](https://github.com/bossmox/bossmox/milestone/1) (0.1.10)
+## Next: [Cluster resilience](https://github.com/bossmox/bossmox/milestone/1) (0.1.10)
 
 Keeping a cluster running through a failure, and hearing about it when something goes wrong.
 
@@ -44,4 +40,4 @@ How BossMox is delivered and supported.
 - [Signed releases](https://github.com/bossmox/bossmox/issues/39)
 - [Donate link](https://github.com/bossmox/bossmox/issues/40)
 
-Released work is in the [release notes](https://github.com/bossmox/bossmox/releases), and the reasoning behind each decision is in [docs/adr](docs/adr).
+The review fixes shipped in [0.1.9](https://github.com/bossmox/bossmox/releases/tag/v0.1.9-preview). Released work is in the [release notes](https://github.com/bossmox/bossmox/releases), and the reasoning behind each decision is in [docs/adr](docs/adr).
