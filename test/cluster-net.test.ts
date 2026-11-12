@@ -16,7 +16,7 @@ test("networks from addresses", () => {
 
 test("Maverick: moves share the heartbeat's only network, and 10.0.100.0/24 is free on every node", () => {
   const c = checkNetworks(maverick, null);
-  assert.deepEqual(c, { known: true, shared: true, moveNet: "10.0.0.0/24", others: ["10.0.100.0/24"], batch: 1 });
+  assert.deepEqual(c, { known: true, shared: true, moveNet: "10.0.0.0/24", others: ["10.0.100.0/24"], batch: 1, heartbeat: ["10.0.0.0/24"] });
 });
 
 test("with Migration set to the other network, moves have their own and go three at a time", () => {
@@ -38,7 +38,7 @@ test("Migration set to the heartbeat's own network is still shared", () => {
 
 test("one network only: shared, with nothing to suggest", () => {
   const lab = [244, 245, 246].map((n) => ({ name: `n${n}`, links: [`10.0.30.${n}`], addresses: [`10.0.30.${n}/24`] }));
-  assert.deepEqual(checkNetworks(lab, null), { known: true, shared: true, moveNet: "10.0.30.0/24", others: [], batch: 1 });
+  assert.deepEqual(checkNetworks(lab, null), { known: true, shared: true, moveNet: "10.0.30.0/24", others: [], batch: 1, heartbeat: ["10.0.30.0/24"] });
 });
 
 test("a network only some nodes have isn't offered", () => {

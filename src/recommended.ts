@@ -57,6 +57,9 @@ export function props(v: unknown): Record<string, string> {
 }
 const joinProps = (p: Record<string, string>) => Object.entries(p).map(([k, v]) => (k ? `${k}=${v}` : v)).join(",");
 
+/** Networks every node shares that the heartbeat doesn't use, so moves there leave it alone. */
+const freeNets = (n: NetCheck) => n.others.filter((o) => !n.heartbeat?.includes(o));
+
 const list = (names: string[]) => (names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`);
 
 export function buildRecommended(h: RecommendedInput): Recommended[] {
@@ -65,6 +68,7 @@ export function buildRecommended(h: RecommendedInput): Recommended[] {
   if (h.nodes >= 2) {
     const n = h.net;
     const own = n.known && !n.shared;
+    const free = freeNets(n);
     let move: Recommended;
     if (!n.known) {
       move = { id: "move-network", title: "VM moves use their own network", on: false, recommend: true, can: false, detail: "BossMox couldn't tell which networks the nodes share. That happens when a node is offline or a heartbeat address is a name rather than a number.", why: "BossMox moves one VM at a time until it can tell." };
@@ -74,15 +78,15 @@ export function buildRecommended(h: RecommendedInput): Recommended[] {
         detail: `Moves run on ${n.moveNet}, so they can't crowd out the heartbeat that tells the nodes the others are alive. BossMox moves up to ${FULL_BATCH} VMs at a time.`,
         can: n.current !== null,
         ...(n.current === null ? { why: "The heartbeat has a second link of its own, so there's nothing to change." } : {}),
-        choices: [n.current ?? "", ...n.others.filter((o) => o !== n.current)].filter(Boolean).map((v) => ({ value: v, label: v })),
+        choices: [n.current ?? "", ...free.filter((o) => o !== n.current)].filter(Boolean).map((v) => ({ value: v, label: v })),
         choice: n.current ?? "",
       };
     } else {
       move = {
         id: "move-network", title: "VM moves use their own network", on: false, recommend: true,
-        detail: `Moves run on ${n.moveNet}, the heartbeat's only network. Heavy moves there can make the nodes lose touch, and HA then restarts a node to protect its guests. Until this is on, BossMox moves one VM at a time.${n.others.length > 1 ? " If you know which network is faster, pick that one." : ""}`,
-        can: n.others.length > 0,
-        ...(n.others.length ? { choices: n.others.map((v) => ({ value: v, label: v })), choice: n.others[0] } : { why: "Every node needs an address on a second network first, ideally on a second network card." }),
+        detail: `Moves run on ${n.moveNet}, the heartbeat's only network. Heavy moves there can make the nodes lose touch, and HA then restarts a node to protect its guests. Until this is on, BossMox moves one VM at a time.${free.length > 1 ? " If you know which network is faster, pick that one." : ""}`,
+        can: free.length > 0,
+        ...(free.length ? { choices: free.map((v) => ({ value: v, label: v })), choice: free[0] } : { why: "Every node needs an address on a second network first, ideally on a second network card." }),
       };
     }
     out.push(move.can ? { ...move, ...cant } : move);
@@ -102,9 +106,10 @@ export function buildRecommended(h: RecommendedInput): Recommended[] {
     });
 
     const haOn = h.haPolicy === "migrate";
+    const them = h.haGuests === 1 ? "it" : "them";
     out.push({
       id: "ha-shutdown", title: "HA moves its guests before a node shuts down", on: haOn, recommend: h.haGuests > 0 ? true : null,
-      detail: `${h.haGuests ? `${h.haGuests === 1 ? "One guest is" : `${h.haGuests} guests are`} managed by HA. ` : "No guests are managed by HA yet, so this changes nothing today. "}When a node is restarted outside BossMox, from Proxmox or by hand, ${haOn ? "HA moves those guests to another node first and brings them back after." : "Proxmox's default stops them and leaves them waiting for that node to come back."} BossMox's own restarts move guests first either way. A guest that can't move holds up the shutdown.`,
+      detail: `${h.haGuests ? `${h.haGuests === 1 ? "One guest is" : `${h.haGuests} guests are`} managed by HA. ` : "No guests are managed by HA yet, so this changes nothing today. "}When a node is restarted outside BossMox, from Proxmox or by hand, ${haOn ? `HA moves ${h.haGuests === 1 ? "that guest" : "those guests"} to another node first and brings ${them} back after.` : `Proxmox's default stops ${them} and leaves ${them} waiting for that node to come back.`} BossMox's own restarts move guests first either way. A guest that can't move holds up the shutdown.`,
       can: true, ...cant,
     });
   }
@@ -129,7 +134,7 @@ export function optionsForm(id: Exclude<SettingId, "boot">, on: boolean, choice:
     const m = props(options.migration);
     const type = m.type ?? Object.entries(m).find(([k, v]) => k === "" && (v === "secure" || v === "insecure"))?.[1] ?? "secure";
     if (on) {
-      if (!net.known || !(net.others.includes(choice) || choice === net.current)) throw new RecommendedError("Pick one of the networks shown.");
+      if (!net.known || !(freeNets(net).includes(choice) || (choice === net.current && !net.shared))) throw new RecommendedError("Pick one of the networks shown.");
       return { migration: `type=${type},network=${choice}` };
     }
     return type === "secure" ? { delete: "migration" } : { migration: `type=${type}` };

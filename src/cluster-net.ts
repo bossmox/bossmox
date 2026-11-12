@@ -27,6 +27,8 @@ export interface NetCheck {
   others: string[];
   /** Moves at once that stay safe for the heartbeat. */
   batch: number;
+  /** Every network a node's heartbeat runs on. Moves there would share it again. */
+  heartbeat?: string[];
 }
 
 export const SAFE_BATCH = 1;
@@ -99,5 +101,5 @@ export function checkNetworks(nodes: NodeNets[], migrationNet: string | null): N
   const per = nodes.map((n) => new Set(n.addresses.map(networkOf).filter((x): x is string => !!x)));
   const common = [...(per[0] ?? [])].filter((net) => per.every((s) => s.has(net)) && net !== moveNet);
   common.sort((a, b) => Number(heartbeat.has(a)) - Number(heartbeat.has(b)) || a.localeCompare(b));
-  return { known: true, shared, moveNet, others: common, batch: shared ? SAFE_BATCH : FULL_BATCH };
+  return { known: true, shared, moveNet, others: common, batch: shared ? SAFE_BATCH : FULL_BATCH, heartbeat: [...heartbeat].sort() };
 }

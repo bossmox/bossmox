@@ -20,6 +20,7 @@ test("moves on the heartbeat's only network: the switch is off, recommended on, 
   assert.equal(limit.choice, "50");
   assert.equal(by(list, "ha-shutdown").recommend, true, "HA guests exist");
   assert.match(by(list, "ha-shutdown").detail, /8 guests are managed by HA/);
+  assert.match(by(buildRecommended({ ...base(), haGuests: 1 }), "ha-shutdown").detail, /One guest is managed by HA\..*stops it and leaves it waiting/);
 });
 
 test("no second network: the move switch can't be flipped and says what's missing", () => {
@@ -29,12 +30,15 @@ test("no second network: the move switch can't be flipped and says what's missin
 });
 
 test("moves on their own network: on, can be turned off, and a speed limit isn't recommended", () => {
-  const own = { known: true, shared: false, moveNet: "10.0.100.0/24", others: ["10.0.0.0/24"], batch: 3, current: "10.0.100.0/24" };
+  const own = { known: true, shared: false, moveNet: "10.0.100.0/24", others: ["10.0.0.0/24"], batch: 3, current: "10.0.100.0/24", heartbeat: ["10.0.0.0/24"] };
   const list = buildRecommended({ ...base(), net: own, moveLimit: 51200, haPolicy: "migrate" });
   const move = by(list, "move-network");
   assert.equal(move.on, true);
   assert.equal(move.can, true);
   assert.equal(move.choice, "10.0.100.0/24");
+  assert.deepEqual(move.choices!.map((c) => c.value), ["10.0.100.0/24"], "the heartbeat's network is never offered for moves");
+  assert.throws(() => optionsForm("move-network", true, "10.0.0.0/24", {}, own), /Pick one of the networks/);
+  assert.match(by(list, "ha-shutdown").detail, /moves those guests to another node first and brings them back/);
   assert.equal(by(list, "move-limit").on, true);
   assert.equal(by(list, "move-limit").recommend, false);
   assert.equal(by(list, "ha-shutdown").on, true);
