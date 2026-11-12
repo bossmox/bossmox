@@ -250,14 +250,19 @@ export function createJobs(ctx: JobsContext) {
         const config = await pve.get<RawConfig>(`/nodes/${enc(n.name)}/${type}/${id}/config`, ticket).catch((): RawConfig => ({}));
         const unplaced = evac.unplaced?.find((u) => u.id === id);
         const to = evac.tentative?.find((m) => m.id === id)?.target ?? null;
-        const self = type === "qemu" && isSelf(config, macs);
+        const self = isSelf(config, macs);
         return { id, name: r.name ?? `VM ${id}`, type, canMove: !unplaced, why: unplaced?.why ?? "", to, self, discSlots: evac.ejectable?.find((e) => e.id === id)?.slots ?? [], choice: unplaced && !self ? "shutdown" : "move" };
       }));
       return { ...n, vms: vms.sort((a, b) => a.name.localeCompare(b.name)) };
     }));
     // Rooms counted with every VM moving; a person's Shut down choices only free more.
     const blocked = [...(rolling?.blocked.filter((b) => !rolling.servers.some((s) => b.startsWith(`${s.name}: `))) ?? [])];
-    for (const n of out) for (const v of n.vms) if (v.self && !v.canMove) blocked.push(`BossMox runs in ${v.name} on ${n.name}, and it can't move: ${v.why} BossMox can't shut itself down, so this has to be fixed first.`);
+    for (const n of out) for (const v of n.vms) {
+      if (!v.self) continue;
+      // A running container only moves by stopping, which would stop BossMox in the middle of the run (#46).
+      if (v.type === "lxc") blocked.push(`BossMox runs in the container ${v.name} on ${n.name}. A container can't move without stopping, and that would stop BossMox in the middle of the run. Restart ${n.name} from Proxmox instead, after moving its other guests.`);
+      else if (!v.canMove) blocked.push(`BossMox runs in ${v.name} on ${n.name}, and it can't move: ${v.why} BossMox can't shut itself down, so this has to be fixed first.`);
+    }
     const net = await readNetCheck(ticket);
     return { kind, nodes: out, blocked, votes: rolling?.votes ?? null, keepsMajority: rolling?.keepsMajority ?? true, keepFreePct: ctx.preferences().keepFreePct, moveBatch: net.batch, moveShared: net.known && net.shared };
   }

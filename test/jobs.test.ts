@@ -120,3 +120,28 @@ test("a move job can't start while a run is still planning (#45)", async () => {
     c.done();
   }
 });
+
+test("BossMox in a container recognises itself and won't run on its node; in a VM it moves itself (#46)", async () => {
+  const mine = "bc:24:11:aa:bb:cc";
+  const guests = [{ id: 200, name: "bossmox", node: "n1", type: "lxc" as const, config: { net0: `name=eth0,bridge=vmbr0,hwaddr=${mine.toUpperCase()},ip=dhcp` } }, { id: 101, name: "db", node: "n1" }];
+  const c = cluster({ guests });
+  c.ctx.macs = () => new Set([mine]);
+  try {
+    const plan = await createJobs(c.ctx).runPlan("t", "restart", "n1");
+    assert.equal(plan.nodes[0]!.vms.find((v) => v.name === "bossmox")!.self, true);
+    assert.match(plan.blocked.join(" "), /BossMox runs in the container bossmox on n1/);
+    await assert.rejects(createJobs(c.ctx).startRun(person, "restart", "n1", true, {}), /container bossmox/);
+    assert.equal(c.writes.length, 0, "nothing was shut down or moved");
+  } finally {
+    c.done();
+  }
+  const v = cluster({ guests: [{ id: 300, name: "bossmox", node: "n1", config: { net0: `virtio=${mine.toUpperCase()},bridge=vmbr0` } }] });
+  v.ctx.macs = () => new Set([mine]);
+  try {
+    const plan = await createJobs(v.ctx).runPlan("t", "restart", "n1");
+    assert.deepEqual(plan.blocked, [], "a VM moves live, so the run can go");
+    assert.equal(plan.nodes[0]!.vms[0]!.self, true);
+  } finally {
+    v.done();
+  }
+});
