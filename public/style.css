@@ -455,3 +455,6 @@ i.s1{background:var(--series1)}i.s2{background:var(--series2)}
 .hbdetails summary{cursor:pointer;font-weight:600}
 .hbsteps{display:grid;gap:8px;margin:12px 0}
 .hbstep{display:flex;gap:9px;align-items:baseline}
+.harow{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
+.hafence .haline{display:block;margin-top:8px}
+.hafence .haline:not(.ok){font-weight:600}

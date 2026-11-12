@@ -399,6 +399,7 @@ function healthFix(f) {
     case "move-network": return b(`data-movefix="1"`);
     case "ha-policy": return b(`data-hapolicy="1"`);
     case "leftover": return b(`data-leftover="1"`);
+    case "ha-recover": return b(`data-harecover="${f.vmids[0]}" data-hanode="${esc(f.node)}"`);
     default: return "";
   }
 }
@@ -469,6 +470,8 @@ const HB_WHY = "The nodes check on each other over one network. If it has troubl
 function redundancySection() {
   const v = S.heartbeat?.view;
   if (!v || v.state === "single") return "";
+  const guests = S.haList ?? [];
+  const haRows = `<div class="setrow"><div class="hctext"><b>Guests HA keeps running</b><small>${guests.length ? "If a node fails, HA starts these on another node. Turn it on for a guest from its page." : "None yet. Turn it on for a guest from its page, under Keep this guest running."}</small>${guests.map((g) => `<div class="snap"><div>${esc(g.name)}<small>On ${esc(g.node)}. ${esc(HA_WORDS[g.state] ?? g.state)}</small></div><div class="actions"><button class="btn" data-haoff="${g.id}">Stop protecting</button></div></div>`).join("")}</div></div>`;
   const job = S.heartbeat.job;
   let detail = "";
   let action = "";
@@ -482,7 +485,7 @@ function redundancySection() {
     if (!v.canSetUp) detail += " Setting it up changes a file in a node's console, so it needs a root@pam sign-in.";
   } else if (v.state === "no-port") detail = `${HB_WHY} That needs a second network port on every node, on a network of its own${v.nodes.length ? `. ${v.nodes.join(", ")} ${v.nodes.length === 1 ? "doesn't have one" : "don't have one"}` : ", shared by all of them"}.`;
   else detail = v.why;
-  return `<h3 class="sthd">Redundancy</h3><div class="stgroup"><div class="setrow"><div class="hctext"><b>Backup network for the heartbeat</b>${v.state === "backed-up" ? `<span class="rec ok">Set up</span>` : `<span class="rec">Best practice</span>`}<small>${esc(detail)}</small></div><div class="actions">${action}</div></div></div>`;
+  return `<h3 class="sthd">Redundancy</h3><div class="stgroup"><div class="setrow"><div class="hctext"><b>Backup network for the heartbeat</b>${v.state === "backed-up" ? `<span class="rec ok">Set up</span>` : `<span class="rec">Best practice</span>`}<small>${esc(detail)}</small></div><div class="actions">${action}</div></div>${haRows}</div>`;
 }
 function openHeartbeatSetup() {
   const v = S.heartbeat?.view;
@@ -548,10 +551,11 @@ async function watchHeartbeat() {
 async function loadSettings() {
   const run = S.loadRun;
   try {
-    const [{ settings }, heartbeat] = await Promise.all([signal("api/recommended"), signal("api/heartbeat").catch(() => null)]);
+    const [{ settings }, heartbeat, ha] = await Promise.all([signal("api/recommended"), signal("api/heartbeat").catch(() => null), signal("api/ha").catch(() => null)]);
     if (run !== S.loadRun) return;
     S.recommended = settings;
     S.heartbeat = heartbeat;
+    S.haList = ha?.guests ?? null;
     S.recommendedError = "";
   } catch (err) {
     if (err.message === "signed out" || run !== S.loadRun) return;
@@ -877,6 +881,51 @@ function renderDetail() {
     loadWaiting(v);
   }
 }
+/* Keep this guest running (ADR 0036): Proxmox HA for one guest. */
+const HA_WORDS = { started: "Protected and running", stopped: "Protected, kept off", error: "HA gave up on it: Health check has the fix", fence: "Its node failed; HA is fencing it", recovery: "HA is starting it on another node", migrate: "HA is moving it", relocate: "HA is moving it", disabled: "Protected, but HA is set to leave it off", freeze: "Paused while its node restarts", request_stop: "HA is stopping it", ignored: "HA is ignoring it for now" };
+function haRow(v) {
+  const on = Boolean(v.ha);
+  const words = on ? (HA_WORDS[v.ha] ?? `HA state: ${v.ha}`) : "Off. Turn it on and HA starts it on another node if this one fails.";
+  return `<div class="setrow harow"><div class="hctext"><b>Keep this guest running</b><small>${esc(words)}</small></div>
+    <button class="sw" role="switch" aria-checked="${on}" aria-label="Keep ${esc(v.name)} running" data-haswitch="${v.id}"><i></i></button></div>`;
+}
+async function askHa(id) {
+  const v = S.data?.vms.find((x) => x.id === id);
+  if (!v) return;
+  if (v.ha) {
+    return confirmAction(`Stop protecting ${v.name}?`, `HA won't restart ${v.name} on another node any more if ${v.node} fails. It keeps running where it is.`, "Stop protecting", () => runAction("ha-unprotect", v.node, `Stop protecting ${v.name}`, { id }, () => refresh()));
+  }
+  dialog(`<h3>Checking ${esc(v.name)}</h3><p>Seeing whether HA can look after it.</p>`);
+  let c;
+  try {
+    c = await signal(`api/ha?id=${id}`);
+  } catch (err) {
+    if (err.message === "signed out") return;
+    return dialog(`<h3>Couldn't check it</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  if (c.problems.length) {
+    const eject = c.problems.some((p) => p.fix === "eject");
+    return dialog(`<h3>HA can't keep ${esc(c.name)} running yet</h3>${c.problems.map((p) => `<p class="loginerr">${esc(p.text)}</p>`).join("")}<div class="row-end"><button class="btn" data-dlg="cancel">Close</button>${eject ? `<button class="btn primary" data-haeject="${id}">Change the disc</button>` : ""}</div>`);
+  }
+  const fencing = c.firstTime
+    ? `<div class="advice hafence"><div><b>This turns on fencing for the whole cluster</b>From now on, a node that loses touch with the others for about a minute restarts itself, and HA starts its protected guests on another node. That's right when a node has really failed. It's wrong when the node was fine and only its heartbeat network was busy or had a hiccup: then guests that were running fine get restarted.${c.warnings.map((w) => `<span class="haline ${c.safe ? "ok" : ""}">${esc(w)}</span>`).join("")}</div></div>`
+    : "";
+  S.pending = () => runAction("ha-protect", c.node, `Protecting ${c.name}`, { id }, () => refresh());
+  dialog(`<h3>Keep ${esc(c.name)} running?</h3>
+    <p>If ${esc(c.node)} fails, HA starts ${esc(c.name)} on another node.${c.running ? "" : ` It's off now, so HA starts it as soon as it's protected.`}</p>
+    ${fencing}
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-dlg="ok">Keep it running</button></div>`);
+}
+async function askHaRecover(id, node) {
+  const v = S.data?.vms.find((x) => x.id === id);
+  const name = v?.name ?? `Guest ${id}`;
+  confirmAction(`Bring ${name} back under HA?`, `${v?.lock ? `BossMox unlocks ${name} (${v.lock}), then ` : "BossMox "}sets it to disabled under HA and starts it again.`, "Bring it back", () => runAction("ha-recover", node, `Bringing ${name} back`, { id }, () => {
+    S.healthChecks = null;
+    loadHealthCheck();
+    refresh();
+  }));
+}
+
 const when = (t) => (t ? new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Time not recorded");
 const TAB = {
   overview: (v) => `
@@ -895,6 +944,7 @@ const TAB = {
       <dt>Starts at boot</dt><dd>${v.startsAtBoot ? "Yes" : "No"}</dd>
       <dt>Snapshots</dt><dd>${v.snapshots.length || "None"}</dd>
     </dl>
+    ${v.template || (S.data?.nodes.length ?? 0) < 2 ? "" : haRow(v)}
     ${v.template ? "" : usagePane(`guest:${v.node}:${v.type}:${v.id}`)}`,
   hardware: (v) => {
     const lock = v.template ? "" : "1";
@@ -3325,6 +3375,19 @@ document.addEventListener("click", (e) => {
   if (d.hcback) {
     hcSaveDismissed([]);
     return drawHealthCheck();
+  }
+  if (d.haswitch) return askHa(Number(d.haswitch));
+  if (d.haoff) {
+    const g = (S.haList ?? []).find((x) => x.id === Number(d.haoff));
+    if (!g) return;
+    return confirmAction(`Stop protecting ${g.name}?`, `HA won't restart ${g.name} on another node any more if ${g.node} fails. It keeps running where it is.`, "Stop protecting", () => runAction("ha-unprotect", g.node, `Stop protecting ${g.name}`, { id: g.id }, () => loadSettings()));
+  }
+  if (d.harecover) return askHaRecover(Number(d.harecover), d.hanode);
+  if (d.haeject) {
+    closeDialog();
+    S.sel = Number(d.haeject);
+    S.tab = "settings";
+    return renderDetail();
   }
   if (d.hbsetup) return openHeartbeatSetup();
   if (d.hbgo) return startHeartbeat();
