@@ -121,7 +121,7 @@ export class Sessions {
    * Every attempt counts before Proxmox answers, or a burst sent at once would all pass the check.
    * It's taken back on success, or if Proxmox didn't give an answer about the password.
    */
-  private async attempt(address: string, account: string, run: () => Promise<LoginResult>, wrong: string): Promise<LoginResult> {
+  private async attempt(address: string, account: string, run: () => Promise<LoginResult>, wrong: string, codeStep = false): Promise<LoginResult> {
     const group = clientGroup(address);
     const name = account.toLowerCase();
     const byAddress = `address:${group}`;
@@ -140,8 +140,9 @@ export class Sessions {
       if (!result.needsCode) this.remember(name, group);
       return result;
     } catch (err) {
-      if (err instanceof PveError && (err.status === 401 || err.status === 500)) {
-        // Proxmox answers a bad second factor with either status.
+      // Proxmox answers a bad second factor with 401 or 500. At the password step a 500 is Proxmox failing, not a wrong
+      // password, so it isn't counted against the person (#59).
+      if (err instanceof PveError && (err.status === 401 || (codeStep && err.status === 500))) {
         throw new AuthError(401, wrong);
       }
       const failure = err as NodeJS.ErrnoException & { unreached?: boolean };
@@ -168,7 +169,7 @@ export class Sessions {
       this.challenges.delete(challengeId);
       throw new AuthError(401, "That sign-in timed out. Start again.");
     }
-    const result = await this.attempt(address, c.username, () => this.client.login(c.username, `totp:${code}`, c.challenge), "That code didn't work. Try the next one.");
+    const result = await this.attempt(address, c.username, () => this.client.login(c.username, `totp:${code}`, c.challenge), "That code didn't work. Try the next one.", true);
     this.challenges.delete(challengeId);
     return this.start(result);
   }

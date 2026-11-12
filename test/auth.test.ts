@@ -395,3 +395,15 @@ test("Origin has to be this exact site", () => {
   assert.equal(sameOrigin("https://other.lan:8443", "bossmox.lan", true, names), false);
   assert.equal(sameOrigin("http://bossmox.lan:8443", "bossmox.lan", true, names), false, "still https");
 });
+
+test("Proxmox failing (500) at the password step isn't a wrong password and isn't counted (#59)", async () => {
+  let calls = 0;
+  const s = new Sessions(client(async () => {
+    calls += 1;
+    if (calls <= 12) throw new PveError(500, "pveproxy failed");
+    return ok();
+  }));
+  for (let i = 0; i < 12; i++) await assert.rejects(s.login("a@pve", "pw", "1.1.1.1"), (e: Error) => !(e instanceof AuthError && /Wrong username/.test(e.message)));
+  // Twelve Proxmox failures in a row didn't lock the address out: the real password still gets in.
+  assert.equal((await s.login("a@pve", "pw", "1.1.1.1")).kind, "ok");
+});
