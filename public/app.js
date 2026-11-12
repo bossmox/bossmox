@@ -206,11 +206,18 @@ new ResizeObserver(() => layoutIcons()).observe($("#desk"));
 const count = (n) => ["No things", "One thing", "Two things", "Three things"][n] ?? `${n} things`;
 function overallBars(c, nodeCount) {
   const size = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} TB` : `${Math.round(n * 10) / 10} GB`);
-  const bar = (label, value, pct) => `<div><span>${label}<small>${value}</small></span><div class="meter"><i style="width:${Math.min(pct, 100)}%"></i></div></div>`;
+  // A half-circle gauge each. The arc turns the look's warning colour from 80% and its alert colour from 95%.
+  const gauge = (label, value, pct) => {
+    const p = Math.max(0, Math.min(Math.round(pct), 100));
+    const level = p >= 95 ? "bad" : p >= 80 ? "warn" : "";
+    return `<div class="gauge ${level}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p}" aria-label="${label}, ${p}%, ${value}">
+      <svg viewBox="0 0 100 56" aria-hidden="true"><path class="track" d="M8 50 A42 42 0 0 1 92 50" pathLength="100"/><path class="fill" d="M8 50 A42 42 0 0 1 92 50" pathLength="100" stroke-dasharray="${p} 100"/></svg>
+      <b>${p}%</b><span>${label}</span><small>${value}</small></div>`;
+  };
   return `<div class="overall" aria-label="${nodeCount === 1 ? "This node" : "Whole cluster"}">
-    ${bar(nodeCount === 1 ? "Processor" : "Cluster processor", `${c.cpuPct}% of ${c.cores} cores`, c.cpuPct)}
-    ${bar(nodeCount === 1 ? "Memory" : "Cluster memory", `${size(c.memUsedGb)} of ${size(c.memTotalGb)}`, c.memPct)}
-    ${bar(nodeCount === 1 ? "Storage" : "Cluster storage", `${size(c.diskUsedGb)} of ${size(c.diskTotalGb)}`, c.diskPct)}
+    ${gauge("Processor", `${c.cores} cores`, c.cpuPct)}
+    ${gauge("Memory", `${size(c.memUsedGb)} of ${size(c.memTotalGb)}`, c.memPct)}
+    ${gauge("Storage", `${size(c.diskUsedGb)} of ${size(c.diskTotalGb)}`, c.diskPct)}
   </div>`;
 }
 function ago(t) {

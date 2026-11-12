@@ -84,9 +84,18 @@ h1,h2,h3,p{margin:0}
 .tltools select{padding:6px 8px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface);color:var(--ink);font:inherit}
 #tlrows .taskrow{margin:0}
 .tasklog.whole{max-height:58vh}
-.overall{display:grid;gap:9px;margin-top:14px}
-.overall div>span{display:flex;justify-content:space-between;gap:10px;font-size:13.5px;margin-bottom:3px}
-.overall small{color:var(--muted);font-size:13px}
+.overall{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+.gauge{position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;min-width:0}
+.gauge svg{width:100%;max-width:120px;display:block}
+.gauge path{fill:none;stroke-width:9;stroke-linecap:round}
+.gauge .track{stroke:var(--surface2)}
+.gauge .fill{stroke:var(--accent);transition:stroke-dasharray .6s ease-out}
+.gauge.warn .fill{stroke:var(--warn)}
+.gauge.bad .fill{stroke:var(--bad)}
+.gauge b{margin-top:-30px;font-size:19px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.gauge span{margin-top:8px;font-size:13.5px;font-weight:600}
+.gauge small{color:var(--muted);font-size:12px;line-height:1.3}
+@media (prefers-reduced-motion:reduce){.gauge .fill{transition:none}}
 #health{width:100%;background:var(--pane);backdrop-filter:blur(var(--blur));border:1px solid var(--line);border-radius:var(--r);padding:20px;box-shadow:var(--shadow);animation:rise .5s ease-out both}
 #health h1{font-size:27px;line-height:1.15;font-weight:800;letter-spacing:-.02em}
 #health .sub{color:var(--muted);margin-top:6px}
