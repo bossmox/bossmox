@@ -27,7 +27,7 @@ put_back() {
 
 # How it listens, which may have been changed by hand in the settings file: the port, the address, and HTTPS only
 # when it has its own certificate. Plain HTTP behind a proxy is checked over plain HTTP (#72).
-LISTEN=$( (. /etc/bossmox/env 2>/dev/null; echo "${PORT:-443} ${HOST:-127.0.0.1} $([ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ] && echo https || echo http)") )
+LISTEN=$( (. /etc/bossmox/env 2>/dev/null; echo "${PORT:-443} ${HOST:-127.0.0.1} $([ -n "${TLS_CERT_FILE:-}" ] && [ -n "${TLS_KEY_FILE:-}" ] && echo https || echo http)") )
 answers() {
   LISTEN=$LISTEN node -e '
     const [port, host, scheme] = process.env.LISTEN.split(" ");
