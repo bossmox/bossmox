@@ -2,12 +2,14 @@
  * Recommended settings (ADR 0029): Proxmox settings BossMox suggests, each shown as a switch with what it does and
  * why. Everything here is read from and written to Proxmox itself, so nothing is kept in BossMox.
  */
-import { FULL_BATCH, type NetCheck } from "./cluster-net.js";
+import { freeNets, FULL_BATCH, inNetwork, type NetCheck } from "./cluster-net.js";
 
 export type SettingId = "move-network" | "move-limit" | "ha-shutdown" | "boot";
 export interface Choice {
   value: string;
   label: string;
+  /** Network storage reached over this network, when the choice is a network. */
+  storage?: string[];
 }
 export interface Recommended {
   id: SettingId;
@@ -39,11 +41,20 @@ export interface RecommendedInput {
   noBoot: { id: number; name: string }[];
   /** Whether this person may change the cluster's options (Sys.Modify on /). */
   canChange: boolean;
+  /** Network storage and the address it's reached at (an iSCSI portal, a NAS), to tell when moves would share its network. */
+  storage?: { id: string; ip: string }[];
 }
 
-/** Speeds offered for the move limit, in MB/s. 50 leaves about half of a 1 Gb port for everything else. */
+/**
+ * Speeds offered for the move limit, in MB/s. 50 leaves about half of a 1 Gb port for everything else; 250 (about
+ * 2 Gbps) leaves most of a 10 Gb storage network for the disks.
+ */
 export const LIMITS = [25, 50, 100, 250];
 export const DEFAULT_LIMIT = 50;
+export const STORAGE_LIMIT = 250;
+
+/** The network storage reached over this network, by name. */
+export const storageOn = (net: string | null, storage: { id: string; ip: string }[] = []) => (net ? [...new Set(storage.filter((s) => inNetwork(s.ip, net)).map((s) => s.id))] : []);
 const kib = (mb: number) => mb * 1024;
 
 /** Proxmox gives property strings ("a=1,b=2") either as text or already split up, depending on the version. */
@@ -57,8 +68,6 @@ export function props(v: unknown): Record<string, string> {
 }
 const joinProps = (p: Record<string, string>) => Object.entries(p).map(([k, v]) => (k ? `${k}=${v}` : v)).join(",");
 
-/** Networks every node shares that the heartbeat doesn't use, so moves there leave it alone. */
-const freeNets = (n: NetCheck) => n.others.filter((o) => !n.heartbeat?.includes(o));
 
 const list = (names: string[]) => (names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`);
 
@@ -69,16 +78,21 @@ export function buildRecommended(h: RecommendedInput): Recommended[] {
     const n = h.net;
     const own = n.known && !n.shared;
     const free = freeNets(n);
+    const netChoice = (v: string): Choice => {
+      const on = storageOn(v, h.storage);
+      return { value: v, label: on.length ? `${v}, also used by ${on.join(", ")}` : v, ...(on.length ? { storage: on } : {}) };
+    };
+    const storageNow = n.known ? storageOn(n.moveNet, h.storage) : [];
     let move: Recommended;
     if (!n.known) {
       move = { id: "move-network", title: "VM moves use their own network", on: false, recommend: true, can: false, detail: "BossMox couldn't tell which networks the nodes share. That happens when a node is offline or a heartbeat address is a name rather than a number.", why: "BossMox moves one VM at a time until it can tell." };
     } else if (own) {
       move = {
         id: "move-network", title: "VM moves use their own network", on: true, recommend: true,
-        detail: `Moves run on ${n.moveNet}, so they can't crowd out the heartbeat that tells the nodes the others are alive. BossMox moves up to ${FULL_BATCH} VMs at a time.`,
+        detail: `Moves run on ${n.moveNet}, so they can't crowd out the heartbeat that tells the nodes the others are alive. BossMox moves up to ${FULL_BATCH} VMs at a time.${storageNow.length ? ` It also carries ${storageNow.join(", ")}, so a speed limit keeps moves from crowding the disks.` : ""}`,
         can: n.current !== null,
         ...(n.current === null ? { why: "The heartbeat has a second link of its own, so there's nothing to change." } : {}),
-        choices: [n.current ?? "", ...free.filter((o) => o !== n.current)].filter(Boolean).map((v) => ({ value: v, label: v })),
+        choices: [n.current ?? "", ...free.filter((o) => o !== n.current)].filter(Boolean).map(netChoice),
         choice: n.current ?? "",
       };
     } else {
@@ -86,20 +100,23 @@ export function buildRecommended(h: RecommendedInput): Recommended[] {
         id: "move-network", title: "VM moves use their own network", on: false, recommend: true,
         detail: `Moves run on ${n.moveNet}, the heartbeat's only network. Heavy moves there can make the nodes lose touch, and HA then restarts a node to protect its guests. Until this is on, BossMox moves one VM at a time.${free.length > 1 ? " If you know which network is faster, pick that one." : ""}`,
         can: free.length > 0,
-        ...(free.length ? { choices: free.map((v) => ({ value: v, label: v })), choice: free[0] } : { why: "Every node needs an address on a second network first, ideally on a second network card." }),
+        ...(free.length ? { choices: free.map(netChoice), choice: free[0] } : { why: "Every node needs an address on a second network first, ideally on a second network card." }),
       };
     }
     out.push(move.can ? { ...move, ...cant } : move);
 
     const shared = n.known && n.shared;
     const limitOn = h.moveLimit !== null && h.moveLimit > 0;
-    const mb = limitOn ? Math.round((h.moveLimit as number) / 1024) : DEFAULT_LIMIT;
+    const withStorage = own && storageNow.length > 0;
+    const mb = limitOn ? Math.round((h.moveLimit as number) / 1024) : withStorage ? STORAGE_LIMIT : DEFAULT_LIMIT;
     const speeds = [...new Set([...LIMITS, mb])].sort((a, b) => a - b);
     out.push({
-      id: "move-limit", title: "Limit how fast moves run", on: limitOn, recommend: shared ? true : own ? false : null,
+      id: "move-limit", title: "Limit how fast moves run", on: limitOn, recommend: shared || withStorage ? true : own ? false : null,
       detail: shared
         ? "Moves share the heartbeat's only network. A limit leaves it room, at the cost of slower moves. 50 MB/s keeps about half of a 1 Gb port free."
-        : own
+        : withStorage
+          ? `Moves share ${n.moveNet} with ${storageNow.join(", ")}. A limit keeps most of it for the disks: ${STORAGE_LIMIT} MB/s is about 2 Gbps, so a 16 GB VM still moves in about a minute.`
+          : own
           ? "Moves have a network of their own, so a limit only makes them slower."
           : "A limit slows moves down so other traffic on their network keeps room.",
       can: true, choices: speeds.map((s) => ({ value: String(s), label: `${s} MB/s` })), choice: String(mb), ...cant,

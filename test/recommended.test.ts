@@ -85,3 +85,18 @@ test("each switch changes only its own part of Proxmox's cluster options", () =>
   assert.deepEqual(optionsForm("ha-shutdown", true, "", {}, shared), { ha: "shutdown_policy=migrate" });
   assert.deepEqual(optionsForm("ha-shutdown", false, "", { ha: { shutdown_policy: "migrate" } }, shared), { delete: "ha" });
 });
+
+test("a move network that also carries storage is named, and a limit of 250 MB/s is recommended once moves use it", () => {
+  const storage = [{ id: "MCS-SynNAS-01", ip: "10.0.100.31" }, { id: "FILE", ip: "10.0.0.6" }];
+  const before = by(buildRecommended({ ...base(), storage, net: { ...shared, heartbeat: ["10.0.0.0/24"] } }), "move-network");
+  assert.deepEqual(before.choices, [{ value: "10.0.100.0/24", label: "10.0.100.0/24, also used by MCS-SynNAS-01", storage: ["MCS-SynNAS-01"] }]);
+  const own = { known: true, shared: false, moveNet: "10.0.100.0/24", others: ["10.0.0.0/24"], batch: 3, current: "10.0.100.0/24", heartbeat: ["10.0.0.0/24"] };
+  const after = buildRecommended({ ...base(), storage, net: own });
+  assert.match(by(after, "move-network").detail, /also carries MCS-SynNAS-01/);
+  const limit = by(after, "move-limit");
+  assert.equal(limit.recommend, true, "moves share the link with the disks");
+  assert.equal(limit.choice, "250");
+  assert.match(limit.detail, /keeps most of it for the disks/);
+  // The same layout without storage on that network: a limit only slows moves.
+  assert.equal(by(buildRecommended({ ...base(), net: own }), "move-limit").recommend, false);
+});

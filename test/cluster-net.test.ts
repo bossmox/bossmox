@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkNetworks, inNetwork, networkOf, type NodeNets } from "../src/cluster-net.js";
+import { checkNetworks, freeNets, inNetwork, networkOf, type NodeNets } from "../src/cluster-net.js";
 
 // Maverick as read 2026-11-11: heartbeat and management on 10.0.0.x (1 Gb), a 10 Gb network on 10.0.100.x, no Migration setting.
 const maverick: NodeNets[] = [56, 57, 58].map((n) => ({ name: `pve-node${n - 55}`, links: [`10.0.0.${n}`], addresses: [`10.0.0.${n}/24`, `10.0.100.${n}/24`] }));
@@ -52,4 +52,8 @@ test("can't judge: one node, a heartbeat given as a name, an address the node do
   assert.equal(checkNetworks(maverick.map((n) => ({ ...n, links: ["192.168.9.9"] })), null).known, false);
   assert.equal(checkNetworks(maverick, "not-a-net").known, false);
   assert.equal(checkNetworks(maverick.slice(0, 1), null).batch, 1, "unknown means the careful batch");
+});
+
+test("free networks leave out any network the heartbeat uses, so setup never offers one for moves", () => {
+  assert.deepEqual(freeNets({ known: true, shared: true, moveNet: "10.0.0.0/24", others: ["10.0.1.0/24", "10.0.100.0/24"], batch: 1, heartbeat: ["10.0.0.0/24", "10.0.1.0/24"] }), ["10.0.100.0/24"]);
 });

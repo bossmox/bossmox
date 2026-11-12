@@ -79,6 +79,9 @@ export function migrationNetwork(m: string | { network?: string } | undefined): 
   return m?.network ?? null;
 }
 
+/** Networks every node shares that the heartbeat doesn't use, so moves there leave it alone. */
+export const freeNets = (n: NetCheck) => n.others.filter((o) => !n.heartbeat?.includes(o));
+
 export function checkNetworks(nodes: NodeNets[], migrationNet: string | null): NetCheck {
   const unknown: NetCheck = { known: false, shared: false, moveNet: null, others: [], batch: SAFE_BATCH };
   if (nodes.length < 2) return unknown;

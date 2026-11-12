@@ -46,9 +46,9 @@ test("moves sharing the heartbeat's only network are warned, with the network to
   const shared = by(buildHealth({ ...three, network: { known: true, shared: true, moveNet: "10.0.0.0/24", others: ["10.0.100.0/24"], batch: 1 } }), "move-network")!;
   assert.equal(shared.status, "warn");
   assert.match(shared.detail, /Moves run on 10\.0\.0\.0\/24/);
-  assert.match(shared.detail, /Every node is also on 10\.0\.100\.0\/24\. Settings can give moves that network/);
+  assert.match(shared.detail, /Every node is also on 10\.0\.100\.0\/24\. Fix this gives moves that network/);
   assert.match(shared.detail, /one VM at a time/);
-  assert.equal(shared.fix!.kind, "settings");
+  assert.equal(shared.fix!.kind, "move-network");
   const lonely = by(buildHealth({ ...three, network: { known: true, shared: true, moveNet: "10.0.30.0/24", others: [], batch: 1 } }), "move-network")!;
   assert.match(lonely.detail, /second network card/);
   const own = by(buildHealth({ ...three, network: { known: true, shared: false, moveNet: "10.0.100.0/24", others: [], batch: 3 } }), "move-network")!;
@@ -120,4 +120,28 @@ test("the BossMox version check: newer available, up to date, couldn't check, an
   assert.equal(before.status, "ok", "not checked yet isn't a problem");
   assert.equal(before.fix!.kind, "check-now", "but it can be asked to check now");
   assert.equal(v(undefined), undefined, "a copy with no version");
+});
+
+test("HA guests with Proxmox's default shutdown policy are warned, with Fix this; Migrate passes; no HA guests says nothing", () => {
+  const three = { ...base(), cluster: { quorate: true }, votes: ["a", "b", "c"].map((node) => ({ node, votes: 1 })), nodes: ["a", "b", "c"].map((name) => ({ name, online: true })) };
+  const warn = by(buildHealth({ ...three, ha: { policy: "conditional", guests: 16 } }), "ha-shutdown")!;
+  assert.equal(warn.status, "warn");
+  assert.match(warn.detail, /16 guests are managed by HA/);
+  assert.equal(warn.fix!.kind, "ha-policy");
+  assert.equal(by(buildHealth({ ...three, ha: { policy: "migrate", guests: 1 } }), "ha-shutdown")!.status, "ok");
+  assert.equal(by(buildHealth({ ...three, ha: { policy: "conditional", guests: 0 } }), "ha-shutdown"), undefined);
+  assert.equal(by(buildHealth({ ...base(), ha: { policy: "conditional", guests: 2 } }), "ha-shutdown"), undefined, "a single node has nowhere to move them");
+});
+
+test("leftover disks are listed with their guest and size, and offered for removal", () => {
+  const disk = { vmid: 124, guest: "AT-VDM-SW", node: "pve-node3", type: "qemu" as const, slot: "unused1", volume: "FILE:124/vm-124-disk-0.qcow2", sizeGb: 32 };
+  const one = by(buildHealth({ ...base(), leftover: [disk] }), "leftover")!;
+  assert.equal(one.status, "warn");
+  assert.equal(one.title, "1 leftover disk is taking up space");
+  assert.match(one.detail, /AT-VDM-SW: FILE:124\/vm-124-disk-0\.qcow2 \(32 GB\)/);
+  assert.match(one.detail, /frees 32 GB/);
+  assert.deepEqual(one.fix!.disks, [disk]);
+  const unknown = by(buildHealth({ ...base(), leftover: [disk, { ...disk, slot: "unused2", volume: "nas:9/x.raw", sizeGb: null }] }), "leftover")!;
+  assert.match(unknown.detail, /frees at least 32 GB/);
+  assert.equal(by(buildHealth(base()), "leftover"), undefined);
 });

@@ -18,7 +18,7 @@ import { networkInterfaces } from "node:os";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { applyChannel, ChannelError } from "./update-channel.js";
 import { plainError } from "./plain-errors.js";
-import { buildHealth } from "./health.js";
+import { buildHealth, type Leftover } from "./health.js";
 import { canChangeCluster, KEEP_FREE_CHOICES, preferencesPath, readPreferences, scheduleWarnings, writePreferences, type Preferences } from "./preferences.js";
 import { settingsPath } from "./settings.js";
 import { gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type RawPrecondition } from "./placement.js";
@@ -526,11 +526,12 @@ async function readOptions(ticket: string) {
 /** Recommended settings (ADR 0029), read fresh from Proxmox each time the window opens. */
 async function loadRecommended(session: Session) {
   const t = session.ticket;
-  const [data, { options, net }, ha, perms] = await Promise.all([
+  const [data, { options, net }, ha, perms, stores] = await Promise.all([
     overview(session),
     readOptions(t),
     pve.get<{ sid?: string }[]>("/cluster/ha/resources", t).catch(() => []),
     pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", t).catch((): Record<string, Record<string, number>> => ({})),
+    pve.get<{ storage?: string; portal?: string; server?: string; disable?: number }[]>("/storage", t).catch(() => []),
   ]);
   const limit = Number(props(options.bwlimit).migration);
   return buildRecommended({
@@ -541,6 +542,11 @@ async function loadRecommended(session: Session) {
     haGuests: ha.filter((r) => /^(vm|ct):/.test(r.sid ?? "")).length,
     noBoot: data.vms.filter((v) => v.running && !v.template && !v.startsAtBoot).map((v) => ({ id: v.id, name: v.name })),
     canChange: canChangeCluster(perms),
+    // An iSCSI portal ("10.0.100.31:3260") or a NAS address. Host names are left out: nothing to compare.
+    storage: stores.filter((x) => x.disable !== 1).flatMap((x) => {
+      const ip = /^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/.exec((x.portal ?? x.server ?? "").trim())?.[1];
+      return ip && x.storage ? [{ id: x.storage, ip }] : [];
+    }),
   });
 }
 
@@ -790,7 +796,7 @@ async function loadHealth(session: Session) {
   const data = await overview(session);
   const online = data.nodes.filter((n) => n.online).map((n) => n.name);
   const weekAgo = Date.now() / 1000 - 7 * 86400;
-  const [status, nodeConfig, qdevice, jobs, tasks, details, maps, network] = await Promise.all([
+  const [status, nodeConfig, qdevice, jobs, tasks, details, maps, network, options, haResources, leftover] = await Promise.all([
     pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", t).catch(() => []),
     pve.get<{ node?: string; quorum_votes?: string | number }[]>("/cluster/config/nodes", t).catch(() => []),
     pve.get<Record<string, unknown>>("/cluster/config/qdevice", t).catch(() => ({})),
@@ -799,6 +805,9 @@ async function loadHealth(session: Session) {
     Promise.all(online.map((n) => loadServerDetail(n, t).catch(() => null))),
     Promise.all(online.map((n) => storageMapFor(n, t, data).then((r) => r.map).catch(() => null))),
     readNetCheck(t),
+    pve.get<Record<string, unknown>>("/cluster/options", t).catch((): Record<string, unknown> => ({})),
+    pve.get<{ sid?: string }[]>("/cluster/ha/resources", t).catch(() => []),
+    leftoverDisks(data.vms, t),
   ]);
   const cluster = status.find((x) => x.type === "cluster");
   const names = new Map(data.vms.map((v) => [String(v.id), v.name]));
@@ -808,6 +817,8 @@ async function loadHealth(session: Session) {
     votes: nodeConfig.map((n) => ({ node: n.node ?? "", votes: Number(n.quorum_votes ?? 1) })),
     tieBreaker: Object.keys(qdevice ?? {}).length > 0,
     network,
+    ha: { policy: props(options.ha).shutdown_policy ?? "conditional", guests: haResources.filter((r) => /^(vm|ct):/.test(r.sid ?? "")).length },
+    leftover,
     channels: details.flatMap((d) => (d?.channel ? [{ node: d.name, ...d.channel }] : [])),
     updates: details.flatMap((d) => (d?.updates ? [{ node: d.name, total: d.updates.total }] : [])),
     guests: data.vms,
@@ -822,6 +833,16 @@ async function loadHealth(session: Session) {
     ownDhcp: ownAddressFromDhcp(),
     ...(HAS_VERSION ? { update: { ...updates.state, running: `version ${SHORT_VERSION}` } } : {}),
   });
+}
+
+/** Every leftover disk with its size, asked of the storage that holds it. A size it can't read is left as unknown. */
+async function leftoverDisks(vms: Overview["vms"], ticket: string): Promise<Leftover[]> {
+  const list = vms.flatMap((v) => v.leftover.map((d) => ({ vmid: v.id, guest: v.name, node: v.node, type: (v.type === "lxc" ? "lxc" : "qemu") as Leftover["type"], slot: d.slot, volume: d.volume })));
+  return Promise.all(list.map(async (d) => {
+    const storage = d.volume.split(":")[0] ?? "";
+    const info = await pve.get<{ size?: number }>(`/nodes/${encodeURIComponent(d.node)}/storage/${encodeURIComponent(storage)}/content/${encodeURIComponent(d.volume)}`, ticket).catch(() => null);
+    return { ...d, sizeGb: info?.size ? Math.round((info.size / 1024 ** 3) * 10) / 10 : null };
+  }));
 }
 
 /** Waits for a Proxmox task to finish, and fails with its own words if it didn't end OK. */
@@ -1036,6 +1057,17 @@ const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, 
     // Health check reads these too, so its kept answer is out of date now.
     preferencesEpoch += 1;
     return null;
+  },
+  "leftover-remove": async (name, who, body) => {
+    // Deletes one detached disk for good. The browser sends the volume the person saw; if the slot now holds
+    // something else, nothing is removed.
+    const { path } = guestPath(name, body);
+    const slot = text(body.slot, 12);
+    if (!/^unused\d+$/.test(slot)) throw new AuthError(400, "That request isn't valid.");
+    const config = await pve.get<RawConfig>(`${path}/config`, who.ticket);
+    const now = String(config[slot] ?? "").split(",")[0];
+    if (!now || now !== body.confirm) throw new AuthError(400, "That disk has changed since BossMox looked. Check again, then remove it.");
+    return pve.put<null>(`${path}/config`, who, { delete: slot });
   },
   "snapshot-fix": async (name, who, body) => {
     const { id, path } = guestPath(name, { ...body, type: "qemu" });

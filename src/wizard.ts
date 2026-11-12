@@ -6,7 +6,7 @@ import { parseAddress, PinError, PveReply } from "./pinned.js";
 import { applyChannel, ChannelError, type ChannelIO } from "./update-channel.js";
 import { plainError } from "./plain-errors.js";
 import type { Saved } from "./settings.js";
-import { checkNetworks, migrationNetwork, type NetCheck } from "./cluster-net.js";
+import { freeNets, checkNetworks, migrationNetwork, type NetCheck } from "./cluster-net.js";
 
 const MAX_CODE_TRIES = 10;
 const MAX_CODE_TRIES_ALL = 200;
@@ -283,7 +283,9 @@ export class Wizard {
       return { name, links, addresses: ifaces.flatMap((i) => (i.cidr ? [i.cidr] : [])) };
     }));
     const current = migrationNetwork(options.migration);
-    return { ...checkNetworks(nodes, current), current };
+    const check = checkNetworks(nodes, current);
+    // Only networks the heartbeat doesn't use: moves on another heartbeat link would share it all the same.
+    return { ...check, others: freeNets(check), current };
   }
 
   /** Points VM moves at one of the networks every node shares. Keeps the encrypted (secure) move type as it was. */
