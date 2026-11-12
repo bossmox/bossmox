@@ -7,28 +7,27 @@ import { fileURLToPath } from "node:url";
 import { AuthError, Sessions, type LoginOutcome, type Session } from "./auth.js";
 import { clientAddress, loadConfig, sameOrigin } from "./config.js";
 import { Terminals, type TermProxy } from "./terminal.js";
-import { buildOverview, clonesOf, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
+import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
-import { containerForm, CreateError, discDownload, discForm, FILE_STORAGE, installerLabel, vmForm, type CreateInput } from "./create.js";
-import { changesForm, SettingsError, waitingChanges } from "./guest-settings.js";
+import { FILE_STORAGE, installerLabel, } from "./create.js";
+import { waitingChanges } from "./guest-settings.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
-import { assertCanWipe, buildStorageList, eraseBlocker, setupPlan, deviceIsValid, diskStorageForm, hostIsValid, networkForm, readHardDisks, StorageError, storageBlockers, usesForm, type RawDisk, type RawStorageConfig } from "./storage.js";
-import { snapshotFix, addDiskForm, addNicForm, addressForm, growForm, HardwareError, pickAddresses, removeDiskForm, removeNicForm } from "./hardware.js";
+import { buildStorageList, eraseBlocker, setupPlan, deviceIsValid, hostIsValid, readHardDisks, StorageError, type RawDisk, type RawStorageConfig } from "./storage.js";
+import { snapshotFix, HardwareError, pickAddresses, } from "./hardware.js";
 import { networkInterfaces } from "node:os";
 import { PveClient, PveError, type Identity } from "./pve.js";
-import { applyChannel, ChannelError } from "./update-channel.js";
 import { plainError } from "./plain-errors.js";
 import { buildHealth, type Leftover } from "./health.js";
-import { canChangeCluster, KEEP_FREE_CHOICES, preferencesPath, readPreferences, scheduleWarnings, writePreferences, type Preferences } from "./preferences.js";
+import { canChangeCluster, preferencesPath, readPreferences, scheduleWarnings, type Preferences } from "./preferences.js";
 import { settingsPath } from "./settings.js";
-import { jobFor, movesPath, runMoveHome, runMoveOff, stillAway } from "./moves.js";
+import { jobFor, movesPath, stillAway } from "./moves.js";
 import { createJobs } from "./jobs.js";
 import { migrationNetwork, } from "./cluster-net.js";
-import { buildRecommended, optionsForm, props, RecommendedError } from "./recommended.js";
+import { buildRecommended, props, } from "./recommended.js";
 import { runFor, runsPath, } from "./run.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
 import { buildUsage, RANGES, type Range, type RawPoint } from "./usage.js";
-import { buildStorageMap, isListedBackup, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
+import { buildStorageMap, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import { auditLine } from "./audit.js";
 import { sharedLoad } from "./shared-load.js";
 import { readJsonBody } from "./body.js";
@@ -53,6 +52,12 @@ import {
   type ServerDetail,
 } from "./server-detail.js";
 import { hostName, requestPath } from "./config.js";
+import { NODE_NAME, UPID, STORAGE, SNAPSHOT_NAME, text } from "./checks.js";
+import type { Action } from "./actions/action.js";
+import { clusterActions } from "./actions/cluster.js";
+import { guestActions } from "./actions/guests.js";
+import { storageActions } from "./actions/storage.js";
+import { backupActions } from "./actions/backups.js";
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public");
 /** Written into a release. A copy run from the repo has none, and the page then shows nothing. */
@@ -313,17 +318,10 @@ function send(res: http.ServerResponse, status: number, type: string, body: stri
 const json = (res: http.ServerResponse, status: number, value: unknown, extra?: Record<string, string>) =>
   send(res, status, "application/json; charset=utf-8", JSON.stringify(value), extra);
 
-const NODE_NAME = /^(?!\.+$)[\w.-]{1,64}$/;
-const UPID = /^UPID:[\w.-]+:[0-9A-F]{8}:[0-9A-F]{8,}:[0-9A-F]{8}:\w+:[^:\s]*:[\w.@!-]+:$/;
 
-const POWER = new Set(["start", "shutdown", "reboot", "stop"]);
 const MAX_UPLOAD = 200 * 1024 ** 3;
 const FULL_LOG = 20000;
 const BODY_WAIT_MS = 30_000;
-const UEFI_WINDOW_MS = 8000;
-const UEFI_GAP_MS = 1200;
-const BIOS_SETTLE_MS = 8000;
-const BIOS_ESC_AFTER_MS = 1500;
 const UPLOAD_NAME = /^[\w.-]{1,200}\.(iso|img)$/i;
 
 /** Turns a hardware rule into a plain 400, and reads the guest's settings the rule needs. */
@@ -362,12 +360,7 @@ const nodeDisks = async (name: string, ticket: string, data: Overview) => {
 };
 const usesStorageNames = (body: unknown) => (Array.isArray(body) ? body.filter((d): d is string => typeof d === "string").slice(0, 32) : []);
 const kindOf = (body: Record<string, unknown>) => (body.type === "lxc" ? "lxc" as const : "qemu" as const);
-const VOLUME = /^[\w.-]+:[\w./-]+$/;
 // Dot-only names ("." and "..") are refused: addresses fold them into the path around them (pre-public review 2026-11-09).
-const STORAGE = /^(?!\.+$)[\w.-]{1,64}$/;
-const JOB_ID = /^[\w-]{1,64}$/;
-const SCHEDULE = /^((mon|tue|wed|thu|fri|sat|sun) )?([01]\d|2[0-3]):[0-5]\d$/;
-const SNAPSHOT_NAME = /^[A-Za-z][\w-]{1,39}$/;
 
 /** The address of one VM or container, checked, for actions that take one. */
 function guestPath(name: string, body: Record<string, unknown>): { id: string; path: string } {
@@ -545,528 +538,26 @@ async function keepsFiles(node: string, storage: string, ticket: string): Promis
   return FILE_STORAGE.has(list.find((s) => s.storage === storage)?.type ?? "");
 }
 
-/** Everything BossMox can change on Proxmox is listed here. There is no general pass-through. */
-const ACTIONS: Record<string, (name: string, who: Session, body: Record<string, unknown>) => Promise<string | null>> = {
-  "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
-  "update-channel": async (name, who, body) => {
-    const target = body.channel;
-    if (target !== "free" && target !== "enterprise") throw new AuthError(400, "That request isn't valid.");
-    try {
-      return await applyChannel({
-        get: (p) => pve.get(p, who.ticket),
-        put: (p, form) => pve.put(p, who, form),
-        post: (p, form) => pve.post(p, who, form),
-      }, name, target);
-    } catch (err) {
-      if (err instanceof ChannelError) throw new AuthError(400, err.message);
-      throw err;
-    }
-  },
-  "restart-server": async (name, who, body) => {
-    // The browser only sends this after the person types "reboot", so a stray click can't restart a server.
-    if (body.confirm !== "reboot") throw new AuthError(400, "The restart wasn't confirmed.");
-    return pve.post<null>(`/nodes/${encodeURIComponent(name)}/status`, who, { command: "reboot" });
-  },
-  "move-guest": (name, who, body) => {
-    const id = text(body.guest, 12);
-    const target = text(body.target, 64);
-    const type = body.type;
-    if (!/^\d+$/.test(id) || !NODE_NAME.test(target) || (type !== "qemu" && type !== "lxc")) throw new AuthError(400, "That move request isn't valid.");
-    if (body.confirm !== id) throw new AuthError(400, "The move wasn't confirmed.");
-    const form: Record<string, string> = type === "qemu"
-      ? { target, online: "1", "with-local-disks": "1" }
-      : { target, restart: "1" };
-    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${type}/${id}/migrate`, who, form);
-  },
-  "move-off": async (name, who, body) => {
-    // The browser sends this after the person has seen the plan and confirmed it for this node.
-    if (body.confirm !== name) throw new AuthError(400, "The move wasn't confirmed.");
-    return jobs.startMoveJob(who, async () => {
-      const plan = await jobs.planEvacuation(who.ticket, name);
-      if (plan.problems.length) throw new AuthError(400, plan.problems.join(" "));
-      if (!plan.moves.length) return null;
-      const batch = await jobs.batchFor(who.ticket);
-      return (deps) => runMoveOff(jobs.moveRecord, deps, name, who.username, plan.moves, batch);
-    });
-  },
-  "move-home": async (name, who, body) => {
-    if (body.confirm !== name) throw new AuthError(400, "The move wasn't confirmed.");
-    return jobs.startMoveJob(who, async () => {
-      if (!jobs.moveRecord.away[name]?.guests.length) throw new AuthError(400, `BossMox has nothing recorded as moved off ${name}.`);
-      const batch = await jobs.batchFor(who.ticket);
-      return (deps) => runMoveHome(jobs.moveRecord, deps, name, who.username, batch);
-    });
-  },
-  "run-start": (_name, who, body) => {
-    const kind = body.kind === "restart" ? "restart" : body.kind === "update" ? "update" : null;
-    if (!kind) throw new AuthError(400, "That request isn't valid.");
-    const server = text(body.server, 64);
-    if (kind === "restart" && !NODE_NAME.test(server)) throw new AuthError(400, "That server name isn't valid.");
-    const choices = (body.choices && typeof body.choices === "object" ? body.choices : {}) as Record<string, unknown>;
-    return jobs.startRun(who, kind, server, body.confirm === (kind === "update" ? "confirm" : "reboot"), choices);
-  },
-  "run-stop": async (_name, who) => {
-    if (!jobs.currentRun?.running) return null;
-    // The person who started it, or anyone who can change the cluster's settings.
-    if (jobs.currentRun.by !== who.username) {
-      const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", who.ticket).catch((): Record<string, Record<string, number>> => ({}));
-      if (!canChangeCluster(perms)) throw new AuthError(403, `Only ${jobs.currentRun.by}, or someone who can change the cluster's settings, can stop it.`);
-    }
-    jobs.currentRun.stop = `${who.username} pressed Stop.`;
-    jobs.saveRun(jobs.currentRun);
-    return null;
-  },
-  "move-stop": async (_name, who) => {
-    const job = jobs.moveRecord.job;
-    if (!job?.running) return null;
-    if (job.by !== who.username) throw new AuthError(403, `Only ${job.by}, who started these moves, can stop them.`);
-    // The move under way finishes; nothing new starts.
-    jobs.moveJob.stop = `${who.username} pressed Stop.`;
-    return null;
-  },
-  "guest-power": (name, who, body) => {
-    const { id, path } = guestPath(name, body);
-    const power = text(body.power, 16);
-    if (!POWER.has(power)) throw new AuthError(400, "That request isn't valid.");
-    if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
-    // Force off has to win over a shutdown that's stuck waiting for the guest.
-    return pve.post<string>(`${path}/status/${power}`, who, power === "stop" ? { "overrule-shutdown": "1" } : {});
-  },
-  "update-check-now": async () => {
-    // Anyone signed in may ask; the checker answers from its last look if that was under a minute ago.
-    await updates.checkNow();
-    return null;
-  },
-  "preferences-set": async (_name, who, body) => {
-    const elsewhere = body.backupsElsewhere, check = body.updateCheck, keep = body.keepFreePct;
-    if ((elsewhere !== undefined && typeof elsewhere !== "boolean") || (check !== undefined && typeof check !== "boolean") || (keep !== undefined && !(typeof keep === "number" && KEEP_FREE_CHOICES.includes(keep))) || (elsewhere === undefined && check === undefined && keep === undefined))
-      throw new AuthError(400, "That request isn't valid.");
-    // A cluster-wide choice needs the right to change the cluster's own settings in Proxmox (ADR 0018).
-    const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", who.ticket).catch((): Record<string, Record<string, number>> => ({}));
-    if (!canChangeCluster(perms)) throw new AuthError(403, "Your Proxmox account can't change settings for the whole cluster. That needs the Sys.Modify permission on the whole cluster (/).");
-    const next = { ...preferences, ...(typeof elsewhere === "boolean" ? { backupsElsewhere: elsewhere } : {}), ...(typeof check === "boolean" ? { updateCheck: check } : {}), ...(typeof keep === "number" ? { keepFreePct: keep } : {}) };
-    try {
-      writePreferences(PREFERENCES_FILE, next);
-    } catch {
-      throw new AuthError(500, "BossMox couldn't save that setting. Nothing changed.");
-    }
-    const turned = next.updateCheck !== preferences.updateCheck;
+/** What the action modules get from the server (review #61). The preferences live here, so they're read and set through it. */
+const actionContext = {
+  pve,
+  jobs,
+  updates,
+  preferences: () => preferences,
+  setPreferences: (next: Preferences) => {
     preferences = next;
-    if (turned) await updates.setOn(next.updateCheck);
+  },
+  bumpEpoch: () => {
     preferencesEpoch += 1;
-    return null;
   },
-  "boot-on": async (_name, who, body) => {
-    const ids = text(body.guests, 400);
-    if (!/^\d+(,\d+)*$/.test(ids)) throw new AuthError(400, "That request isn't valid.");
-    const data = await loadOverview(who.ticket);
-    for (const id of ids.split(",").map(Number)) {
-      const v = data.vms.find((g) => g.id === id);
-      if (!v) continue;
-      await pve.put<null>(`/nodes/${encodeURIComponent(v.node)}/${v.type}/${id}/config`, who, { onboot: "1" });
-    }
-    return null;
-  },
-  "recommended-set": async (_name, who, body) => {
-    const id = body.id;
-    if ((id !== "move-network" && id !== "move-limit" && id !== "ha-shutdown") || typeof body.on !== "boolean") throw new AuthError(400, "That request isn't valid.");
-    const { options, net } = await readOptions(who.ticket);
-    let form: Record<string, string>;
-    try {
-      form = optionsForm(id, body.on, text(body.choice, 43), options, net);
-    } catch (err) {
-      if (err instanceof RecommendedError) throw new AuthError(400, err.message);
-      throw err;
-    }
-    await pve.put<null>("/cluster/options", who, form);
-    audit("cluster-option", who.username, "settings", { [id]: body.on ? "on" : "off", ...form });
-    // Health check reads these too, so its kept answer is out of date now.
-    preferencesEpoch += 1;
-    return null;
-  },
-  "leftover-remove": async (name, who, body) => {
-    // Deletes one detached disk for good. The browser sends the volume the person saw; if the slot now holds
-    // something else, nothing is removed.
-    const { path } = guestPath(name, body);
-    const slot = text(body.slot, 12);
-    if (!/^unused\d+$/.test(slot)) throw new AuthError(400, "That request isn't valid.");
-    const config = await pve.get<RawConfig>(`${path}/config`, who.ticket);
-    const now = String(config[slot] ?? "").split(",")[0];
-    if (!now || now !== body.confirm) throw new AuthError(400, "That disk has changed since BossMox looked. Check again, then remove it.");
-    return pve.put<null>(`${path}/config`, who, { delete: slot });
-  },
-  "snapshot-fix": async (name, who, body) => {
-    const { id, path } = guestPath(name, { ...body, type: "qemu" });
-    if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
-    const status = await pve.get<{ status?: string }>(`${path}/status/current`, who.ticket);
-    // Tested with the VM shut down. Converting the firmware and TPM disks of a running VM isn't something to try.
-    if (status.status !== "stopped") throw new AuthError(400, "Shut it down first.");
-    const slots = await snapshotFixFor(name, path, who.ticket);
-    if (!slots.length) throw new AuthError(400, "Converting its disks wouldn't make snapshots work, so nothing was changed.");
-    const config = await pve.get<RawConfig>(`${path}/config`, who.ticket);
-    for (const disk of slots) {
-      const storage = String(config[disk]).split(":")[0] ?? "";
-      await finishTask(name, await pve.post<string>(`${path}/move_disk`, who, { disk, storage, format: "qcow2", delete: "1" }), who, 900);
-    }
-    return null;
-  },
-  "snapshot-take": (name, who, body) => {
-    const { path } = guestPath(name, body);
-    const snapname = snapshotName(body);
-    const description = text(body.description, 200);
-    return pve.post<string>(`${path}/snapshot`, who, description ? { snapname, description } : { snapname });
-  },
-  "snapshot-restore": (name, who, body) => {
-    const { path } = guestPath(name, body);
-    const snap = snapshotName(body);
-    // The browser only sends this after the person types "restore", because newer changes are lost.
-    if (body.confirm !== "restore") throw new AuthError(400, "That wasn't confirmed.");
-    return pve.post<string>(`${path}/snapshot/${snap}/rollback`, who, body.start === true ? { start: "1" } : {});
-  },
-  "snapshot-delete": (name, who, body) => {
-    const { path } = guestPath(name, body);
-    const snap = snapshotName(body);
-    if (body.confirm !== snap) throw new AuthError(400, "That wasn't confirmed.");
-    return pve.delete<string>(`${path}/snapshot/${snap}`, who);
-  },
-  "guest-create": async (name, who, body) => {
-    const kind = body.kind;
-    if (kind !== "qemu" && kind !== "lxc") throw new AuthError(400, "That request isn't valid.");
-    const input: CreateInput = {
-      id: text(body.id, 12),
-      name: text(body.name, 63),
-      cores: Number(body.cores),
-      memoryMb: Number(body.memoryMb),
-      diskGb: Number(body.diskGb),
-      storage: text(body.storage, 64),
-      bridge: text(body.bridge, 64),
-      installer: text(body.installer, 256),
-      os: text(body.os, 16),
-      start: body.start === true,
-      password: text(body.password, 128),
-      fileStorage: kind === "qemu" && (await keepsFiles(name, text(body.storage, 64), who.ticket)),
-    };
-    try {
-      const form = kind === "qemu" ? vmForm(input) : containerForm(input);
-      return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${kind}`, who, form);
-    } catch (err) {
-      if (err instanceof CreateError) throw new AuthError(400, err.message);
-      throw err;
-    }
-  },
-  "guest-settings": async (name, who, body) => {
-    const { path } = guestPath(name, body);
-    if (typeof body.changes !== "object" || body.changes === null || Array.isArray(body.changes)) throw new AuthError(400, "That request isn't valid.");
-    const [config, status] = await Promise.all([pve.get<RawConfig>(`${path}/config`, who.ticket), pve.get<{ status?: string }>(`${path}/status/current`, who.ticket)]);
-    try {
-      await pve.put<null>(`${path}/config`, who, changesForm(kindOf(body), config, body.changes as Record<string, unknown>, status.status === "running"));
-      return null;
-    } catch (err) {
-      if (err instanceof SettingsError) throw new AuthError(400, err.message);
-      throw err;
-    }
-  },
-  /**
-   * Proxmox has no "stop at the boot menu" setting, so this presses the key at the right moment. BIOS opens its
-   * menu on Esc and also closes it on Esc, so it gets exactly one press. The moment is only dependable after a
-   * reset, so a shut-down VM is started and then reset. UEFI ignores repeats of F2, so it's pressed throughout.
-   */
-  "guest-boot-menu": async (name, who, body) => {
-    const { id, path } = guestPath(name, { ...body, type: "qemu" });
-    if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
-    const [current, config] = await Promise.all([pve.get<{ status?: string }>(`${path}/status/current`, who.ticket), pve.get<RawConfig>(`${path}/config`, who.ticket)]);
-    const uefi = config.bios === "ovmf";
-    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
-    const reset = () => pve.post<string | null>(`${path}/status/reset`, who);
-    if (current.status === "running") await reset();
-    else {
-      const task = await pve.post<string>(`${path}/status/start`, who);
-      const taskPath = `/nodes/${encodeURIComponent(name)}/tasks/${encodeURIComponent(task)}/status`;
-      for (let i = 0; i < 60; i++) {
-        const status = await pve.get<RawTaskStatus>(taskPath, who.ticket);
-        if (status.status === "stopped") {
-          if (status.exitstatus !== "OK") throw new AuthError(400, status.exitstatus ?? "It wouldn't start.");
-          break;
-        }
-        await wait(250);
-      }
-      // Proxmox doesn't answer for a VM that's only just started, so it gets a few seconds before the reset.
-      await wait(BIOS_SETTLE_MS);
-      for (let i = 0; ; i++) {
-        const done = await reset().then(() => true, () => false);
-        if (done) break;
-        if (i === 12) throw new AuthError(400, "It started, but wouldn't restart to the boot menu.");
-        await wait(1000);
-      }
-    }
-    if (uefi) {
-      // A VM still starting can refuse a key, which only means pressing again.
-      const until = Date.now() + UEFI_WINDOW_MS;
-      while (Date.now() < until) {
-        await pve.put<null>(`${path}/sendkey`, who, { key: "f2" }).catch(() => null);
-        await wait(UEFI_GAP_MS);
-      }
-      return null;
-    }
-    await wait(BIOS_ESC_AFTER_MS);
-    await pve.put<null>(`${path}/sendkey`, who, { key: "esc" });
-    return null;
-  },
-  "guest-disc": async (name, who, body) => {
-    const { path } = guestPath(name, body);
-    if (typeof body.disc !== "string" || body.disc.length > 256) throw new AuthError(400, "That disc isn't valid.");
-    const slot = body.slot === undefined ? "ide2" : text(body.slot, 12);
-    const current = await pve.get<RawConfig>(`${path}/config`, who.ticket);
-    try {
-      await pve.put<null>(`${path}/config`, who, discForm(body.disc, current, slot));
-      return null;
-    } catch (err) {
-      if (err instanceof CreateError) throw new AuthError(400, err.message);
-      throw err;
-    }
-  },
-  "disc-download": (name, who, body) => {
-    const storage = text(body.storage, 64);
-    if (!STORAGE.test(storage)) throw new AuthError(400, "That request isn't valid.");
-    try {
-      const { url, filename } = discDownload(text(body.url, 1024));
-      return pve.post<string>(`/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}/download-url`, who, { content: "iso", url, filename });
-    } catch (err) {
-      if (err instanceof CreateError) throw new AuthError(400, err.message);
-      throw err;
-    }
-  },
-  "storage-add": async (name, who, body) => {
-    const form = rule(() => networkForm({ kind: text(body.kind, 8), id: text(body.id, 64), host: text(body.host, 253), path: text(body.path, 255), username: text(body.username, 64), password: text(body.password, 256), domain: text(body.domain, 64), uses: body.uses }));
-    await pve.post<null>("/storage", who, form);
-    // Saving doesn't prove it works, so ask a node to use it. One that can't connect isn't left behind.
-    const path = `/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(form.storage as string)}/status`;
-    for (let i = 0; i < 8; i++) {
-      const status = await pve.get<{ active?: number }>(path, who.ticket).catch(() => null);
-      if (status?.active === 1) return null;
-      await new Promise((r) => setTimeout(r, 1000));
-    }
-    await pve.delete<null>(`/storage/${encodeURIComponent(form.storage as string)}`, who).catch(() => null);
-    throw new AuthError(400, `${name} couldn't connect to that share, so it wasn't added. Check that the NAS lets this node in.`);
-  },
-  "content-delete": async (name, who, body) => {
-    const storage = text(body.storage, 64);
-    const volid = text(body.volid, 300);
-    if (!STORAGE.test(storage) || !volid || body.confirm !== volid) throw new AuthError(400, "That wasn't confirmed.");
-    const base = `/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}`;
-    // Fresh, not the cached overview: a guest made a moment ago must count.
-    const [volumes, data] = await Promise.all([pve.get<RawVolume[]>(`${base}/content`, who.ticket), loadOverview(who.ticket)]);
-    const item = poolItems(volumes, guestRefs(data), data.nodes.every((n) => n.online), await seesAllGuests(who.ticket)).find((i) => i.volid === volid);
-    if (!item) throw new AuthError(400, `That isn't on ${storage} anymore.`);
-    if (!item.canDelete) throw new AuthError(400, item.whyNot);
-    return pve.delete<string>(`${base}/content/${encodeURIComponent(volid)}`, who);
-  },
-  "storage-setup": async (name, who, body) => {
-    if (body.confirm !== "erase") throw new AuthError(400, "That wasn't confirmed.");
-    const devices = usesStorageNames(body.devices);
-    const poolName = text(body.name, 32);
-    const node = encodeURIComponent(name);
-    const disks = await nodeDisks(name, who.ticket, await loadOverview(who.ticket));
-    const plan = rule(() => setupPlan(disks, devices, text(body.purpose, 8), poolName));
-    const configs = await pve.get<RawStorageConfig[]>("/storage", who.ticket);
-    if (configs.some((c) => c.storage === poolName)) throw new AuthError(400, `There's already storage called ${poolName}. Pick another name.`);
-    // A drive with old data is wiped first, the same strict check as Wipe, then the pool is made on the clean drives.
-    for (const disk of plan.wipe) {
-      rule(() => assertCanWipe(disks, disk));
-      await finishTask(name, await pve.put<string>(`/nodes/${node}/disks/wipedisk`, who, { disk }), who, 120);
-    }
-    const fresh = plan.wipe.length ? await nodeDisks(name, who.ticket, await loadOverview(who.ticket)) : disks;
-    const form = rule(() => diskStorageForm(plan.kind, fresh, { name: poolName, devices, raid: plan.raid, filesystem: plan.filesystem }));
-    await finishTask(name, await pve.post<string>(`/nodes/${node}/disks/${plan.kind}`, who, form), who, 300);
-    // What it's for. Proxmox gives a new folder every use, which isn't what the person picked.
-    await pve.put<null>(`/storage/${encodeURIComponent(poolName)}`, who, { content: plan.uses });
-    return null;
-  },
-  "pool-delete": async (name, who, body) => {
-    const id = text(body.storage, 64);
-    if (!STORAGE.test(id) || body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
-    const [data, backupJobs] = await Promise.all([loadOverview(who.ticket), pve.get<{ storage?: string }[]>("/cluster/backup", who.ticket)]);
-    const { map, config, directory } = await storageMapFor(name, who.ticket, data);
-    const usedBy = storageBlockers(id, data.vms, backupJobs);
-    let removal: { path: string; disks: string[] };
-    try {
-      removal = poolRemoval(map, id, config.find((c) => c.storage === id), directory, usedBy, config);
-    } catch (err) {
-      throw new AuthError(400, (err as Error).message);
-    }
-    return pve.delete<string>(`/nodes/${encodeURIComponent(name)}/${removal.path}`, who);
-  },
-  "storage-edit": async (_name, who, body) => {
-    const id = text(body.id, 64);
-    if (!STORAGE.test(id)) throw new AuthError(400, "That storage isn't valid.");
-    const list = await pve.get<RawStorageConfig[]>("/storage", who.ticket);
-    const found = list.find((s) => s.storage === id);
-    if (!found) throw new AuthError(400, "That storage doesn't exist.");
-    await pve.put<null>(`/storage/${encodeURIComponent(id)}`, who, { content: rule(() => usesForm(found.type ?? "", body.uses, found.content ?? "")) });
-    return null;
-  },
-  "storage-remove": async (_name, who, body) => {
-    const id = text(body.id, 64);
-    if (!STORAGE.test(id) || body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
-    const [data, backupJobs] = await Promise.all([loadOverview(who.ticket), pve.get<{ storage?: string }[]>("/cluster/backup", who.ticket)]);
-    const using = storageBlockers(id, data.vms, backupJobs);
-    if (using.length) throw new AuthError(400, `${id} is still in use by ${using.join(", ")}.`);
-    await pve.delete<null>(`/storage/${encodeURIComponent(id)}`, who);
-    return null;
-  },
-  "disk-storage": async (name, who, body) => {
-    if (body.confirm !== "erase") throw new AuthError(400, "That wasn't confirmed.");
-    const kind = text(body.kind, 12);
-    const disks = await nodeDisks(name, who.ticket, await loadOverview(who.ticket));
-    const form = rule(() => diskStorageForm(kind, disks, { name: text(body.name, 32), devices: usesStorageNames(body.devices), raid: text(body.raid, 8), filesystem: text(body.filesystem, 8) }));
-    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/disks/${kind}`, who, form);
-  },
-  "disk-wipe": async (name, who, body) => {
-    const disk = text(body.disk, 64);
-    if (body.confirm !== "erase" || !deviceIsValid(disk)) throw new AuthError(400, "That wasn't confirmed.");
-    const disks = await nodeDisks(name, who.ticket, await loadOverview(who.ticket));
-    rule(() => assertCanWipe(disks, disk));
-    return pve.put<string>(`/nodes/${encodeURIComponent(name)}/disks/wipedisk`, who, { disk });
-  },
-  "disk-grow": async (name, who, body) => {
-    const { path } = guestPath(name, body);
-    const form = await withConfig(path, who, (c) => growForm(kindOf(body), c, text(body.disk, 16), Number(body.addGb)));
-    return (await pve.put<string | null>(`${path}/resize`, who, form)) ?? null;
-  },
-  "disk-add": async (name, who, body) => {
-    const { path } = guestPath(name, body);
-    const fileStorage = kindOf(body) === "qemu" && (await keepsFiles(name, text(body.storage, 64), who.ticket));
-    const form = await withConfig(path, who, (c) => addDiskForm(kindOf(body), c, { storage: text(body.storage, 64), sizeGb: Number(body.sizeGb), mount: text(body.mount, 200), fileStorage }));
-    await pve.put<null>(`${path}/config`, who, form);
-    return null;
-  },
-  "disk-remove": async (name, who, body) => {
-    const { path } = guestPath(name, body);
-    // This one erases data, so it needs the typed word, and the disk is cleared rather than left detached.
-    if (body.confirm !== "erase") throw new AuthError(400, "That wasn't confirmed.");
-    const slot = text(body.disk, 16);
-    const before = await withConfig(path, who, (c) => ({ config: c, form: removeDiskForm(kindOf(body), c, slot) }));
-    const volume = String(before.config[slot]).split(",")[0];
-    await pve.put<null>(`${path}/config`, who, before.form);
-    const after = await pve.get<RawConfig>(`${path}/config`, who.ticket);
-    const unused = Object.entries(after).find(([k, v]) => /^unused\d+$/.test(k) && String(v) === volume)?.[0];
-    if (unused) await pve.put<null>(`${path}/config`, who, { delete: unused });
-    return null;
-  },
-  "nic-add": async (name, who, body) => {
-    const { path } = guestPath(name, body);
-    const form = await withConfig(path, who, (c) => addNicForm(kindOf(body), c, { bridge: text(body.bridge, 32), vlan: text(body.vlan, 4) }));
-    await pve.put<null>(`${path}/config`, who, form);
-    return null;
-  },
-  "guest-address": async (name, who, body) => {
-    const { path } = guestPath(name, body);
-    if (kindOf(body) !== "lxc") throw new AuthError(400, "Only a container's address can be set from here. A VM sets its own, inside the VM.");
-    const slot = text(body.nic, 8);
-    if (body.confirm !== slot) throw new AuthError(400, "That wasn't confirmed.");
-    const form = await withConfig(path, who, (c) => {
-      // Moving the container BossMox runs in would cut off everyone using it, this page included.
-      const mine = ownAddresses();
-      const configured = part(String(c[slot] ?? ""), "ip").split("/")[0] ?? "";
-      if (mine.has(configured)) throw new HardwareError("This container is BossMox itself. Changing its address here would cut you off, so it isn't offered.");
-      return addressForm(c, slot, { mode: text(body.mode, 8), address: text(body.address, 20), gateway: text(body.gateway, 16) });
-    });
-    const live = await pve.get<{ inet?: string }[]>(`${path}/interfaces`, who.ticket).catch(() => []);
-    if (live.some((i) => ownAddresses().has(String(i.inet ?? "").split("/")[0] ?? ""))) throw new AuthError(400, "This container is BossMox itself. Changing its address here would cut you off, so it isn't offered.");
-    await pve.put<null>(`${path}/config`, who, form);
-    return null;
-  },
-  "nic-remove": async (name, who, body) => {
-    const { path } = guestPath(name, body);
-    if (body.confirm !== text(body.nic, 8)) throw new AuthError(400, "That wasn't confirmed.");
-    const form = await withConfig(path, who, (c) => removeNicForm(c, text(body.nic, 8)));
-    await pve.put<null>(`${path}/config`, who, form);
-    return null;
-  },
-  "guest-clone": async (name, who, body) => {
-    const { path } = guestPath(name, body);
-    const newName = text(body.name, 63);
-    const storage = text(body.storage, 64);
-    if (!/^[A-Za-z0-9]([A-Za-z0-9.-]{0,61}[A-Za-z0-9])?$/.test(newName)) throw new AuthError(400, "A name uses letters, numbers, dots and dashes, and starts and ends with a letter or number.");
-    if (!STORAGE.test(storage)) throw new AuthError(400, "Pick a storage.");
-    const newid = String(await pve.get<string | number>("/cluster/nextid", who.ticket));
-    return pve.post<string>(`${path}/clone`, who, { newid, full: "1", storage, [kindOf(body) === "qemu" ? "name" : "hostname"]: newName });
-  },
-  "guest-template": async (name, who, body) => {
-    const { path } = guestPath(name, body);
-    // There's no way back from this short of cloning it, so it gets the typed word too.
-    if (body.confirm !== "template") throw new AuthError(400, "That wasn't confirmed.");
-    return (await pve.post<string | null>(`${path}/template`, who)) ?? null;
-  },
-  "template-download": (name, who, body) => {
-    const storage = text(body.storage, 64);
-    const template = text(body.template, 200);
-    if (!STORAGE.test(storage) || !/^[\w.+-]+$/.test(template)) throw new AuthError(400, "That request isn't valid.");
-    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/aplinfo`, who, { storage, template });
-  },
-  "guest-delete": async (name, who, body) => {
-    const { id, path } = guestPath(name, body);
-    if (body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
-    const clones = clonesOf(Number(id), (await loadOverview(who.ticket)).vms);
-    if (clones.length) throw new AuthError(400, `${clones.join(", ")} ${clones.length === 1 ? "was" : "were"} made from this template and still ${clones.length === 1 ? "needs" : "need"} it. Delete ${clones.length === 1 ? "that clone" : "those clones"} first.`);
-    return pve.delete<string>(`${path}?purge=1`, who);
-  },
-  "backup-restore": async (name, who, body) => {
-    const volid = text(body.volid, 256);
-    const storage = text(body.storage, 64);
-    const type = body.type;
-    const id = text(body.guest, 12);
-    if (!VOLUME.test(volid) || !STORAGE.test(storage) || !/^\d+$/.test(id) || (type !== "qemu" && type !== "lxc")) throw new AuthError(400, "That restore request isn't valid.");
-    const replace = body.replace === true;
-    // Replacing erases the guest as it is now, so it needs its own typed word.
-    if (replace && body.confirm !== "replace") throw new AuthError(400, "That wasn't confirmed.");
-    const form: Record<string, string> = { vmid: id, storage };
-    if (replace) form.force = "1";
-    else form.unique = "1";
-    const copyName = text(body.name, 63);
-    if (!replace && /^[A-Za-z0-9][A-Za-z0-9.-]*$/.test(copyName)) form[type === "qemu" ? "name" : "hostname"] = copyName;
-    if (type === "qemu") form.archive = volid;
-    else Object.assign(form, { ostemplate: volid, restore: "1" });
-    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${type}`, who, form);
-  },
-  "backup-delete": async (name, who, body) => {
-    const volid = text(body.volid, 256);
-    const storage = text(body.storage, 64);
-    if (!VOLUME.test(volid) || !STORAGE.test(storage)) throw new AuthError(400, "That request isn't valid.");
-    if (body.confirm !== volid) throw new AuthError(400, "That wasn't confirmed.");
-    const base = `/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}`;
-    if (!isListedBackup(await pve.get<RawVolume[]>(`${base}/content?content=backup`, who.ticket), volid)) throw new AuthError(400, `That isn't a backup on ${storage}.`);
-    return pve.delete<string>(`${base}/content/${encodeURIComponent(volid)}`, who);
-  },
-  "schedule-add": async (_name, who, body) => {
-    const schedule = text(body.schedule, 16);
-    const storage = text(body.storage, 64);
-    const guests = text(body.guests, 256);
-    const keep = Number(body.keep);
-    if (!SCHEDULE.test(schedule) || !STORAGE.test(storage) || !Number.isInteger(keep) || keep < 1 || keep > 99) throw new AuthError(400, "That schedule isn't valid.");
-    if (guests !== "all" && !/^\d+(,\d+)*$/.test(guests)) throw new AuthError(400, "That schedule isn't valid.");
-    await pve.post<null>("/cluster/backup", who, { schedule, storage, mode: "snapshot", compress: "zstd", enabled: "1", "prune-backups": `keep-last=${keep}`, ...(guests === "all" ? { all: "1" } : { vmid: guests }) });
-    return null;
-  },
-  "schedule-toggle": async (_name, who, body) => {
-    const id = text(body.job, 64);
-    if (!JOB_ID.test(id) || typeof body.on !== "boolean") throw new AuthError(400, "That request isn't valid.");
-    await pve.put<null>(`/cluster/backup/${encodeURIComponent(id)}`, who, { enabled: body.on ? "1" : "0" });
-    return null;
-  },
-  "schedule-delete": async (_name, who, body) => {
-    const id = text(body.job, 64);
-    if (!JOB_ID.test(id) || body.confirm !== id) throw new AuthError(400, "That wasn't confirmed.");
-    await pve.delete<null>(`/cluster/backup/${encodeURIComponent(id)}`, who);
-    return null;
-  },
-  "back-up-guests": (name, who, body) => {
-    const vmid = text(body.guests, 256);
-    const storage = text(body.storage, 64);
-    if (!/^\d+(,\d+)*$/.test(vmid) || !/^[\w.-]+$/.test(storage)) throw new AuthError(400, "That backup request isn't valid.");
-    return pve.post<string>(`/nodes/${encodeURIComponent(name)}/vzdump`, who, { vmid, storage, mode: "snapshot", compress: "zstd" });
-  },
+  preferencesFile: PREFERENCES_FILE,
+  audit, finishTask, guestPath, guestRefs, keepsFiles, kindOf, loadOverview, nodeDisks, overview, ownAddresses, part, readOptions,
+  rule, seesAllGuests, snapshotFixFor, snapshotName, storageMapFor, usesStorageNames, withConfig,
 };
+export type ActionContext = typeof actionContext;
+
+/** Everything BossMox can change on Proxmox is listed in src/actions. There is no general pass-through. */
+const ACTIONS: Record<string, Action> = { ...clusterActions(actionContext), ...guestActions(actionContext), ...storageActions(actionContext), ...backupActions(actionContext) };
 
 async function openNodeTerminal(res: http.ServerResponse, name: string, session: Session, form: Record<string, string>) {
   const proxy = await pve.post<TermProxy>(`/nodes/${encodeURIComponent(name)}/termproxy`, session, form);
@@ -1160,7 +651,6 @@ function setCookie(id: string, maxAge: number): Record<string, string> {
 
 const readJson = (req: http.IncomingMessage) => readJsonBody(req, { maxBytes: MAX_BODY, waitMs: BODY_WAIT_MS });
 
-const text = (v: unknown, max: number) => (typeof v === "string" && v.length > 0 && v.length <= max ? v : "");
 
 /** Who did what, for anyone looking into an incident. Names and addresses only, never tickets, passwords or request bodies. */
 function audit(event: string, who: string, address: string, fields: Record<string, string | number> = {}) {
