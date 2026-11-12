@@ -454,6 +454,8 @@ async function leftoverDisks(vms: Overview["vms"], ticket: string): Promise<Left
 async function finishTask(node: string, upid: string, who: Identity, seconds: number) {
   const path = `/nodes/${encodeURIComponent(node)}/tasks/${encodeURIComponent(upid)}/status`;
   for (let i = 0; i < seconds; i++) {
+    // Someone who signed out isn't acting any more: an action with more steps stops here, not on their old ticket (#59).
+    if ((who as Partial<Session>).ended) throw new AuthError(401, "You signed out, so BossMox stopped here. What Proxmox had already started carries on.");
     const status = await pve.get<RawTaskStatus>(path, who.ticket);
     if (status.status === "stopped") {
       if (status.exitstatus !== "OK") throw new AuthError(400, `Proxmox stopped: ${status.exitstatus ?? "it didn't finish"}`);

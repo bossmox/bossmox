@@ -28,6 +28,8 @@ export interface Session {
   expiresAt: number;
   /** Set while a renewal is waiting on Proxmox, so anything else asking waits for the same answer. */
   renewing?: Promise<void> | undefined;
+  /** Set once it has ended (signed out, expired, refused), so work still holding it stops at its next step. */
+  ended?: boolean;
 }
 interface Challenge {
   username: string;
@@ -74,7 +76,10 @@ export class Sessions {
   private drop(id: string) {
     const s = this.sessions.get(id);
     this.sessions.delete(id);
-    if (s) this.onEnd(s);
+    if (s) {
+      s.ended = true;
+      this.onEnd(s);
+    }
   }
 
   private checkLimit(key: string, max: number) {

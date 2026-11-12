@@ -407,3 +407,12 @@ test("Proxmox failing (500) at the password step isn't a wrong password and isn'
   // Twelve Proxmox failures in a row didn't lock the address out: the real password still gets in.
   assert.equal((await s.login("a@pve", "pw", "1.1.1.1")).kind, "ok");
 });
+
+test("an ended session says so, so work still holding it stops at its next step (#59)", async () => {
+  const s = new Sessions(client(async () => ok("T")));
+  const out = await s.login("a@pve", "pw", "1.1.1.1");
+  const session = (await s.get(out.id))!;
+  assert.equal(session.ended, undefined);
+  s.end(out.id);
+  assert.equal(session.ended, true);
+});
