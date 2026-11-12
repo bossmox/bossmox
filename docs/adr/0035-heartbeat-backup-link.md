@@ -61,7 +61,7 @@ All of these must hold, or it stops and says which one failed:
 "I don't mind having a notice in the health checks that says it's 'best practice' to redundant storage, network, heartbeat networks - and the notices should be dismissable - and, it should be something they can set up later - that would go in the settings menu."
 
 - **Settings** gets a Redundancy section: the heartbeat's links, and "Set up a second heartbeat network" when every node has a second port. Set up any time, not only from a notice.
-- **Health check** gets best-practice notices, each dismissable, each pointing to Settings: one for the heartbeat (a single link), and, as their own pieces, ones for redundant networking and storage (definitions below, to be confirmed).
+- **Health check** gets best-practice notices, each dismissable, each pointing to Settings: one for the heartbeat (a single link). Networking and storage notices come later (see Decided).
 - **Dismissing** hides that notice in this browser, like the desktop widget's notices (`readNotices`); it comes back if the situation changes (a new key), and "Bring back dismissed" shows them again. A best-practice notice is a suggestion, not a fault: it reads "Best practice", never a warning colour.
 - With a backup link set up, the heartbeat notice becomes a pass: "The heartbeat has a backup link", listing the links.
 
@@ -88,4 +88,5 @@ Changing link priorities; removing a link; IPv6; heartbeats given as names; two 
 - Only offered when every node has a second physical port with a network on it (Rocky, 2026-11-12).
 - Typed cluster name and an explanation to confirm (Rocky, 2026-11-12, reversing my reading of "just ask").
 - Set up from Settings; Health check carries a dismissable best-practice notice pointing there.
+- Networking and storage notices are later work, not this piece (Rocky, 2026-11-12: "that's all part of making this 'easy' proxmox management - we will build in a lot of these 'best practice' things with wizards to help"). Agreed definitions for then: **network**, each node's main bridge runs over a bond of two or more ports; **storage**, the disks guests run on are mirrored or RAID, or shared, and a single disk isn't redundant.
 - The network moves use is offered when it's the only second-port network, with the shared-with-moves line.
