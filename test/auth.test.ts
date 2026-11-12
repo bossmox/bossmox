@@ -416,3 +416,8 @@ test("an ended session says so, so work still holding it stops at its next step 
   s.end(out.id);
   assert.equal(session.ended, true);
 });
+
+test("an IPv6 proxied name matches the Origin, which URL keeps in brackets (#71)", () => {
+  assert.equal(sameOrigin("https://[2001:db8::1]", "proxy.lan", true, new Set(["2001:db8::1"])), true);
+  assert.equal(sameOrigin("https://[2001:db8::2]", "proxy.lan", true, new Set(["2001:db8::1"])), false);
+});

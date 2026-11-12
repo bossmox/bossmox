@@ -1,5 +1,6 @@
 import http from "node:http";
 import tls from "node:tls";
+import net from "node:net";
 
 const TIMEOUT_MS = 10000;
 
@@ -25,6 +26,12 @@ export function parseAddress(input: string): { host: string; port: number } | nu
 }
 
 const bare = (host: string) => host.replace(/^\[|\]$/g, "");
+
+/** Where a verified TLS connection goes: tls.connect wants an IPv6 address without brackets, and no SNI for an address (#71). */
+export function tlsTarget(host: string): { host: string; servername: string | undefined } {
+  const h = bare(host);
+  return { host: h, servername: net.isIP(h) ? undefined : h };
+}
 
 function connect(host: string, port: number): Promise<tls.TLSSocket> {
   return new Promise((resolve, reject) => {
