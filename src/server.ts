@@ -526,11 +526,12 @@ async function readOptions(ticket: string) {
 /** Recommended settings (ADR 0029), read fresh from Proxmox each time the window opens. */
 async function loadRecommended(session: Session) {
   const t = session.ticket;
-  const [data, { options, net }, ha, perms] = await Promise.all([
+  const [data, { options, net }, ha, perms, stores] = await Promise.all([
     overview(session),
     readOptions(t),
     pve.get<{ sid?: string }[]>("/cluster/ha/resources", t).catch(() => []),
     pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", t).catch((): Record<string, Record<string, number>> => ({})),
+    pve.get<{ storage?: string; portal?: string; server?: string; disable?: number }[]>("/storage", t).catch(() => []),
   ]);
   const limit = Number(props(options.bwlimit).migration);
   return buildRecommended({
@@ -541,6 +542,11 @@ async function loadRecommended(session: Session) {
     haGuests: ha.filter((r) => /^(vm|ct):/.test(r.sid ?? "")).length,
     noBoot: data.vms.filter((v) => v.running && !v.template && !v.startsAtBoot).map((v) => ({ id: v.id, name: v.name })),
     canChange: canChangeCluster(perms),
+    // An iSCSI portal ("10.0.100.31:3260") or a NAS address. Host names are left out: nothing to compare.
+    storage: stores.filter((x) => x.disable !== 1).flatMap((x) => {
+      const ip = /^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/.exec((x.portal ?? x.server ?? "").trim())?.[1];
+      return ip && x.storage ? [{ id: x.storage, ip }] : [];
+    }),
   });
 }
 

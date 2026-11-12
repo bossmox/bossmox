@@ -10,7 +10,7 @@ import type { StorageMap } from "./storage-map.js";
 export type Status = "ok" | "warn" | "bad" | "off";
 export interface Fix {
   /** Which button the screen shows: each maps to something BossMox already does. */
-  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check" | "check-now" | "settings";
+  kind: "channel" | "updates" | "protect" | "add-storage" | "open-storage" | "tasks" | "boot-on" | "open-vm" | "backups-elsewhere" | "bossmox-update" | "update-check" | "check-now" | "settings" | "move-network";
   label: string;
   node?: string;
   channel?: string;
@@ -69,9 +69,9 @@ export function buildHealth(h: HealthInput): Check[] {
     const net = h.network;
     if (net?.known && net.shared) {
       const fix = net.others.length
-        ? ` Every node is also on ${net.others[0]}. Settings can give moves that network with one switch.`
-        : " Giving moves a network of their own takes a second network card on each node. Until then, Settings can limit how fast moves run.";
-      add({ id: "move-network", group: "Nodes", status: "warn", title: "VM moves and the cluster heartbeat share one network", detail: `Moves run on ${net.moveNet}, which is also the only network the nodes use to check on each other. A few big moves at once can fill it, the nodes lose touch, and HA restarts a node to protect its VMs. Until moves have their own network, BossMox moves one VM at a time.${fix}`, fix: { kind: "settings", label: "Open Settings" } });
+        ? ` Every node is also on ${net.others[0]}. Fix this gives moves that network.`
+        : " Giving moves a network of their own takes a second network card on each node. Until then, Fix this can limit how fast moves run.";
+      add({ id: "move-network", group: "Nodes", status: "warn", title: "VM moves and the cluster heartbeat share one network", detail: `Moves run on ${net.moveNet}, which is also the only network the nodes use to check on each other. A few big moves at once can fill it, the nodes lose touch, and HA restarts a node to protect its VMs. Until moves have their own network, BossMox moves one VM at a time.${fix}`, fix: { kind: "move-network", label: "Fix this" } });
     } else if (net?.known) {
       add({ id: "move-network", group: "Nodes", status: "ok", title: "VM moves have a network of their own", detail: `Moves run on ${net.moveNet}, apart from the cluster heartbeat, so BossMox moves up to ${net.batch} VMs at a time.` });
     }

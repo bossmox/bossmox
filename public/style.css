@@ -287,6 +287,10 @@ summary{cursor:pointer;font-weight:650}
 .hcrow.off .hctext b{font-weight:500;color:var(--muted)}
 .bkelse{margin:0 0 12px}
 .updcmd{white-space:pre-wrap;word-break:break-all;user-select:all}
+.mfline{display:flex;align-items:center;gap:8px;margin-top:16px;font-weight:600}
+.mfsteps{padding-left:20px;margin:10px 0}
+.mfsteps li{margin:6px 0}
+#dialog .choices{margin:10px 0 4px}
 .setrow{display:flex;gap:16px;align-items:flex-start;padding:14px 0;border-bottom:1px solid var(--line)}
 .setrow:last-child{border-bottom:0}
 .setrow .hctext{flex:1;min-width:0}

@@ -367,6 +367,7 @@ function healthFix(f) {
     case "update-check": return b(`data-updatecheck="${S.data?.update?.on === false ? "on" : "off"}"`);
     case "check-now": return b(`data-checknow="1"`);
     case "settings": return b(`data-open="settings"`);
+    case "move-network": return b(`data-movefix="1"`);
     default: return "";
   }
 }
@@ -463,6 +464,94 @@ function askSetting(id, on, choice) {
       : ["Go back to Proxmox's default shutdown policy?", "When a node restarts, the guests HA manages stop and wait for it to come back.", "Go back"],
   }[id];
   confirmAction(words[0], words[1], words[2], save({ id, on, choice }), !on && s.recommend === true);
+}
+
+/*
+ * Fix this, for moves on the heartbeat's only network (ADR 0030). One screen: which network moves should use, and a
+ * speed limit when that network also carries storage. It says exactly what changes before anything does.
+ */
+async function moveFix() {
+  S.moveFix = { loading: true };
+  drawMoveFix();
+  try {
+    const { settings } = await signal("api/recommended");
+    S.recommended = settings;
+  } catch (err) {
+    if (err.message === "signed out") return;
+    S.moveFix = { error: err.message || "BossMox lost contact with Proxmox." };
+    return drawMoveFix();
+  }
+  const net = S.recommended.find((x) => x.id === "move-network");
+  const limit = S.recommended.find((x) => x.id === "move-limit");
+  const pick = net?.choices?.[0];
+  S.moveFix = {
+    net: net?.on ? null : net?.choice ?? null,
+    limitOn: !!(limit?.on || pick?.storage || !net?.choices?.length),
+    speed: limit?.on ? limit.choice : pick?.storage ? "250" : limit?.choice ?? "50",
+  };
+  drawMoveFix();
+}
+function drawMoveFix() {
+  const f = S.moveFix;
+  const close = (label = "Cancel") => `<div class="row-end"><button class="btn" data-dlg="cancel">${label}</button></div>`;
+  const head = "<h3>Give VM moves their own network</h3>";
+  if (f.loading) return dialog(`${head}<p>Reading the cluster's networks.</p>${close()}`);
+  if (f.error) return dialog(`${head}<p class="loginerr">${esc(f.error)}</p>${close("Close")}`);
+  if (f.done) return dialog(`<h3>Done</h3><p>${esc(f.done)}</p>${close("Close")}`);
+  const net = S.recommended.find((x) => x.id === "move-network");
+  const limit = S.recommended.find((x) => x.id === "move-limit");
+  if (!net || net.on) return dialog(`${head}<p>Moves already have a network of their own, so there's nothing to fix.</p>${close("Close")}`);
+  if (!limit?.can && limit?.why) return dialog(`${head}<p>${esc(limit.why)}</p>${close("Close")}`);
+  const speeds = (limit?.choices ?? []).map((c) => `<option value="${esc(c.value)}" ${c.value === f.speed ? "selected" : ""}>${esc(c.label)}</option>`).join("");
+  const limitRow = (line) => `<label class="mfline"><input type="checkbox" id="mflimit" ${f.limitOn ? "checked" : ""}> <span>Limit moves to</span> <select id="mfspeed" aria-label="Move speed limit">${speeds}</select></label><p class="meta">${esc(line)}</p>`;
+  const limitChange = f.limitOn && (!limit?.on || limit.choice !== f.speed);
+  if (!net.choices?.length) {
+    // No second network yet: say what it takes, and offer the limit in the meantime.
+    return dialog(`${head}<p>Moves run on the only network the nodes use to check on each other. BossMox can't give moves another one yet, because the nodes don't share a second network.</p>
+      <ol class="mfsteps"><li>Give each node a second network port, connected to its own switch or VLAN. A 10 Gb port is best.</li><li>In Proxmox, give every node an address on that network: the node, then System, then Network, then the port, with the same network for all of them.</li><li>Come back to Health check and use Fix this again. BossMox will offer that network.</li></ol>
+      <p class="stq">Until then</p>${limitRow("A limit leaves the heartbeat room while moves share its network. 50 MB/s keeps about half of a 1 Gb port free.")}
+      <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-mfgo="1" ${limitChange ? "" : "disabled"}>Set the limit</button></div>`);
+  }
+  const chosen = net.choices.find((c) => c.value === f.net) ?? net.choices[0];
+  const changes = [`Proxmox's Migration network becomes ${chosen.value}`];
+  if (limitChange) changes.push(`moves are limited to ${f.speed} MB/s`);
+  if (!f.limitOn && limit?.on) changes.push("the move speed limit is removed");
+  dialog(`${head}<p>Moves run on the only network the nodes use to check on each other, so heavy moves can make them lose touch. ${net.choices.length === 1 ? "This network reaches" : "These networks reach"} every node and ${net.choices.length === 1 ? "leaves" : "leave"} the heartbeat alone:</p>
+    <div class="choices" role="radiogroup" aria-label="Network for moves" style="grid-template-columns:1fr">${net.choices.map((c) => `<button class="choice ${c === chosen ? "on" : ""}" role="radio" aria-checked="${c === chosen}" data-mfnet="${esc(c.value)}"><b>${esc(c.value)}</b><small>${c.storage ? `Also carries ${esc(c.storage.join(", "))}, so a speed limit keeps moves from crowding the disks.` : "Nothing else BossMox knows of uses it."}</small></button>`).join("")}</div>
+    ${limitRow(chosen.storage ? "250 MB/s is about 2 Gbps: most of a 10 Gb link stays free for the disks, and a 16 GB VM still moves in about a minute." : "Not needed on a network of its own. It only makes moves slower.")}
+    <p><b>What changes:</b> ${esc(changes.join(", and "))}. This is for the whole cluster, from BossMox and Proxmox alike. BossMox then moves up to 3 VMs at a time. Moves already running finish where they are.</p>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-mfgo="1">Make the change</button></div>`);
+}
+async function applyMoveFix() {
+  const f = S.moveFix;
+  const net = S.recommended.find((x) => x.id === "move-network");
+  const limit = S.recommended.find((x) => x.id === "move-limit");
+  const steps = [];
+  if (net?.choices?.length && !net.on) steps.push({ id: "move-network", on: true, choice: f.net ?? net.choices[0].value });
+  if (f.limitOn && (!limit?.on || limit.choice !== f.speed)) steps.push({ id: "move-limit", on: true, choice: f.speed });
+  if (!f.limitOn && limit?.on && net?.choices?.length) steps.push({ id: "move-limit", on: false, choice: "" });
+  S.moveFix = { loading: true };
+  dialog(`<h3>Saving</h3><p>Changing Proxmox's settings.</p>`);
+  try {
+    for (const step of steps) {
+      const res = await post("api/action/recommended-set", { server: onlineNodes()[0], ...step });
+      const body = await res.json();
+      if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+      if (!res.ok) throw new Error(body.error);
+    }
+    // Read back from Proxmox, so the result says what is set, not what was asked.
+    const { settings } = await signal("api/recommended");
+    S.recommended = settings;
+    const n = settings.find((x) => x.id === "move-network");
+    const l = settings.find((x) => x.id === "move-limit");
+    S.moveFix = { done: `${n?.on ? `Moves now run on ${n.choice}, apart from the heartbeat, up to 3 at a time.` : "Moves still share the heartbeat's network."} ${l?.on ? `They're limited to ${l.choice} MB/s.` : "There's no speed limit."} Settings shows these and can change them.` };
+  } catch (err) {
+    S.moveFix = { error: `${err.message || "BossMox lost contact with Proxmox."} Anything before that step was saved, and Settings shows what's set now.` };
+  }
+  drawMoveFix();
+  S.healthChecks = null;
+  if (wins.health) loadHealthCheck();
+  if (wins.settings) drawSettings();
 }
 
 /* Notices are one person's view, so this lives in the browser. The problem itself stays on the guest's own page. */
@@ -2998,6 +3087,15 @@ document.addEventListener("click", (e) => {
       ? confirmAction("Stop warning about backup schedules?", "Use this if your guests are backed up by something Proxmox doesn't know about, such as Veeam, a script or another backup server. BossMox stops warning about guests without a Proxmox backup schedule, for everyone who uses it, in every browser. Failed Proxmox backups are still reported, and you can turn the warnings back on any time.", "Stop the warnings", () => runAction("preferences-set", onlineNodes()[0], "Saving", { backupsElsewhere: true }, after))
       : confirmAction("Check backup schedules again?", "BossMox will warn again about any guest that isn't on a Proxmox backup schedule, for everyone who uses it.", "Check schedules again", () => runAction("preferences-set", onlineNodes()[0], "Saving", { backupsElsewhere: false }, after));
   }
+  if (d.movefix) return moveFix();
+  if (d.mfnet) {
+    S.moveFix.net = d.mfnet;
+    const c = S.recommended?.find((x) => x.id === "move-network")?.choices?.find((x) => x.value === d.mfnet);
+    // A network that also carries storage starts with the limit on.
+    if (c?.storage) Object.assign(S.moveFix, { limitOn: true, speed: S.moveFix.speed === "50" ? "250" : S.moveFix.speed });
+    return drawMoveFix();
+  }
+  if (d.mfgo) return applyMoveFix();
   if (d.setsw) {
     const s = S.recommended?.find((x) => x.id === d.setsw);
     if (!s) return;
@@ -3212,6 +3310,11 @@ document.addEventListener("input", (e) => {
   }
 });
 document.addEventListener("change", (e) => {
+  if (e.target.id === "mflimit" || e.target.id === "mfspeed") {
+    if (e.target.id === "mflimit") S.moveFix.limitOn = e.target.checked;
+    else S.moveFix.speed = e.target.value;
+    return drawMoveFix();
+  }
   if (e.target.dataset?.setpick) {
     const id = e.target.dataset.setpick;
     S.setChoice[id] = e.target.value;
