@@ -2,9 +2,13 @@
 
 What's coming to BossMox, in plain words. Each theme is a [GitHub milestone](https://github.com/bossmox/bossmox/milestones), and each item is an issue you can follow or comment on. There are no dates: a release ships when its whole theme is done and tested on a real cluster.
 
-## Next: [Cluster resilience](https://github.com/bossmox/bossmox/milestone/1) (0.1.9)
+## Next: [Review fixes](https://github.com/bossmox/bossmox/milestone/5) (0.1.9)
 
-Next release. Keeping a cluster running through a failure, and hearing about it when something goes wrong.
+Fixes from the [independent code review of November 2026](https://github.com/bossmox/bossmox/issues/42): the run and move bugs, setup and install problems, and the code-quality work that goes with them. Problems found in [SECURITY.md](SECURITY.md)'s scope are posted once this release carries their fixes.
+
+## Then: [Cluster resilience](https://github.com/bossmox/bossmox/milestone/1) (0.1.10)
+
+Keeping a cluster running through a failure, and hearing about it when something goes wrong.
 
 - [Heartbeat backup link](https://github.com/bossmox/bossmox/issues/31)
 - [Keep this guest running (HA)](https://github.com/bossmox/bossmox/issues/32)
@@ -26,6 +30,12 @@ More hardware a guest can use, and growing the cluster after setup.
 
 - [USB passthrough](https://github.com/bossmox/bossmox/issues/37)
 - [Add a node after setup](https://github.com/bossmox/bossmox/issues/38)
+
+### [Code structure](https://github.com/bossmox/bossmox/milestone/6)
+
+Splitting the browser app into modules.
+
+- [Split public/app.js into modules](https://github.com/bossmox/bossmox/issues/60)
 
 ### [Releases and support](https://github.com/bossmox/bossmox/milestone/4)
 
