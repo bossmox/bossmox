@@ -204,3 +204,15 @@ test("the planner marks a guest refused only for a busy processor, and not one s
   const full = planMoves("n1", [g], [room("n1"), room("n2", { cpuLoad: 3.9 }), room("n3", { memUsed: 31 * 1024 ** 3 })], 10);
   assert.equal(full.unplaced?.[0]?.busyOnly, undefined, "one node is short of memory, which won't pass by itself");
 });
+
+test("a container with a bind mount can't move, and a guest in a restricted HA group only goes to its group's nodes (#59)", () => {
+  const room = (name: string): NodeRoom => ({ name, version: "8.4.21", cpuModel: "x", cores: 8, cpuLoad: 0.2, memTotal: 32 * 1024 ** 3, memUsed: 4 * 1024 ** 3, storages: {} });
+  const facts = { id: 1, name: "files", type: "lxc" as const, mem: 1024 ** 3, cores: 1, cpuLoad: 0.1, hasSnapshots: false, precondition: {}, sourceStorages: {} };
+  const bound = guestNeed({ ...facts, config: { rootfs: "san:subvol-1-disk-0", mp0: "/mnt/media,mp=/media" } });
+  assert.match(bound.stuck ?? "", /uses a folder on its node \(mp0\)/);
+  const grouped = guestNeed({ ...facts, name: "db", type: "qemu", config: {}, haNodes: ["n1", "n3"] });
+  const plan = planMoves("n1", [grouped], [room("n1"), room("n2"), room("n3")], 10);
+  assert.deepEqual(plan.moves.map((m) => m.target), ["n3"], "never n2, which its group leaves out");
+  const nowhere = planMoves("n1", [guestNeed({ ...facts, name: "db", type: "qemu", config: {}, haNodes: ["n1"] })], [room("n1"), room("n2")], 10);
+  assert.match(nowhere.problems[0] ?? "", /n2 isn't in db's HA group \(n1\)/);
+});

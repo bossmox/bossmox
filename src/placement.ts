@@ -40,6 +40,8 @@ export interface GuestNeed {
   stuck: string | null;
   /** Drives holding a disc from its node's own storage. When that's the only reason it's stuck, ejecting frees it. */
   discSlots: string[];
+  /** The only nodes it may run on, when a restricted HA group says so (Proxmox 8). */
+  onlyNodes?: string[];
   /** Nodes Proxmox itself refuses for this guest, with the reason. */
   refused: Record<string, string>;
 }
@@ -112,6 +114,8 @@ export interface GuestFacts {
   precondition: RawPrecondition;
   /** The storages on the node it's on now, to tell its own from shared ones. */
   sourceStorages: Record<string, StorageRoom>;
+  /** The nodes its restricted HA group allows, if it's in one. */
+  haNodes?: string[];
 }
 
 /**
@@ -137,8 +141,11 @@ export function guestNeed(f: GuestFacts): GuestNeed {
   const discs = volumes.filter((v) => v.value.includes("media=cdrom") && !v.value.includes("cloudinit"));
   const physical = Object.entries(f.config).filter(([k, v]) => /^(ide|sata|scsi)\d+$/.test(k) && String(v).startsWith("cdrom")).map(([k]) => k);
   const discSlots = [...physical, ...discs.filter((d) => isLocal(d.storage)).map((d) => d.slot)];
+  // A container's bind mount is a folder on its node (mp0: /mnt/data,...). It isn't a volume, so it's easy to miss (#59).
+  const bindMounts = Object.entries(f.config).filter(([k, v]) => /^mp\d+$/.test(k) && String(v).startsWith("/")).map(([k]) => k);
   let stuck: string | null = null;
   if ((f.precondition.local_resources ?? []).length > 0) stuck = `${f.name} uses hardware attached to its node, so it can't move.`;
+  else if (bindMounts.length) stuck = `${f.name} uses a folder on its node (${bindMounts.join(", ")}), so it can't move. Shut it down for the restart instead.`;
   else if (physical.length) stuck = `${f.name} uses its node's own disc drive, so it can't move. Eject it first.`;
   else if (discs.some((d) => isLocal(d.storage))) stuck = `${f.name} has a disc image from its node's own storage in its drive, so it can't move. Eject the disc first.`;
   const copied = volumes.filter((v) => !v.value.includes("media=cdrom") && isLocal(v.storage));
@@ -157,7 +164,7 @@ export function guestNeed(f: GuestFacts): GuestNeed {
   const hostCpu = /^(cputype=)?host(,|$)/.test(cpu);
   // Ejecting only helps when the disc is the whole story: not with passed-through hardware or a snapshot too.
   const discOnly = discSlots.length > 0 && stuck !== null && /disc image|own disc drive/.test(stuck);
-  return { id: f.id, name: f.name, type: f.type, mem: f.mem, cores: f.cores, cpuLoad: f.cpuLoad, storages, localDisks, hostCpu, stuck, refused, discSlots: discOnly ? discSlots : [] };
+  return { id: f.id, name: f.name, type: f.type, mem: f.mem, cores: f.cores, cpuLoad: f.cpuLoad, storages, localDisks, hostCpu, stuck, refused, discSlots: discOnly ? discSlots : [], ...(f.haNodes ? { onlyNodes: f.haNodes } : {}) };
 }
 
 interface Projected extends NodeRoom {
@@ -174,6 +181,8 @@ function whyNot(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number): { 
 function roomCheck(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number): string | typeof BUSY | null {
   const ROOM = room(keepPct);
   if (g.refused[n.name]) return g.refused[n.name] as string;
+  // Proxmox 8's HA groups aren't in its migrate check, so a restricted group is read and kept here (#59).
+  if (g.onlyNodes && !g.onlyNodes.includes(n.name)) return `isn't in ${g.name}'s HA group (${g.onlyNodes.join(", ")})`;
   const missing = g.storages.filter((s) => !n.storages[s]);
   if (missing.length) return `doesn't have the storage ${missing.join(", ")}`;
   if (compareVersions(n.version, from.version) < 0) return `runs an older Proxmox (${n.version ?? "unknown"}) than ${from.name} (${from.version ?? "unknown"})`;

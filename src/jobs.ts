@@ -75,6 +75,16 @@ export function createJobs(ctx: JobsContext) {
       n.memUsed += pending[n.name]?.mem ?? 0;
       n.cpuLoad += pending[n.name]?.cpu ?? 0;
     }
+    // Restricted HA groups (Proxmox 8): a guest in one may only run on the group's nodes.
+    const [haResources, haGroups] = await Promise.all([
+      pve.get<{ sid?: string; group?: string }[]>("/cluster/ha/resources", ticket).catch(() => []),
+      pve.get<{ group?: string; nodes?: string; restricted?: number }[]>("/cluster/ha/groups", ticket).catch(() => []),
+    ]);
+    const haNodesOf = (type: string, id: number) => {
+      const group = haResources.find((r) => r.sid === `${type === "lxc" ? "ct" : "vm"}:${id}`)?.group;
+      const g = group ? haGroups.find((x) => x.group === group && x.restricted === 1) : undefined;
+      return g ? (g.nodes ?? "").split(",").map((n) => n.split(":")[0]?.trim() ?? "").filter(Boolean) : undefined;
+    };
     const guests = resources.filter((r) => (r.type === "qemu" || r.type === "lxc") && r.node === from && r.template !== 1 && (ids ? ids.includes(Number(r.vmid)) : r.status === "running" || r.status === "paused"));
     const needs = await Promise.all(guests.map(async (g) => {
       const type = g.type === "lxc" ? "lxc" : "qemu";
@@ -101,6 +111,7 @@ export function createJobs(ctx: JobsContext) {
         hasSnapshots: snaps.some((s) => s.name !== "current"),
         precondition,
         sourceStorages: storagesOf(from),
+        ...(haNodesOf(type, id) ? { haNodes: haNodesOf(type, id) as string[] } : {}),
       });
     }));
     const keep = ctx.preferences().keepFreePct;
