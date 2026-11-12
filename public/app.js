@@ -3621,12 +3621,14 @@ $("#signout").addEventListener("click", async () => {
 /* Live data */
 async function refresh() {
   let error = "";
-  // Sign-out bumps loadRun, and each refresh bumps refreshSeq. An answer that arrives after either is dropped, so a slow
-  // refresh can't bring the desktop back after Sign out, or an older answer replace a newer one (#59).
+  // Sign-out bumps loadRun: an answer that arrives after it is dropped, so a slow refresh can't bring the desktop back
+  // (#59). An answer is also dropped once a newer one has been shown, so an older answer can't replace it. Only a newer
+  // answer that has arrived counts: when every read takes longer than the 10-second poll, each answer is still shown,
+  // and a failure still raises "Showing old data" (#70).
   const gen = S.loadRun;
   S.refreshSeq = (S.refreshSeq ?? 0) + 1;
   const seq = S.refreshSeq;
-  const late = () => gen !== S.loadRun || seq !== S.refreshSeq;
+  const late = () => gen !== S.loadRun || (S.shownSeq ?? 0) > seq;
   try {
     const res = await fetch("api/overview");
     const body = await res.json();
@@ -3636,6 +3638,7 @@ async function refresh() {
       return;
     }
     if (!res.ok) throw new Error(body.error);
+    S.shownSeq = seq;
     S.data = body;
     S.who = body.username;
     $("#who").textContent = body.username;
