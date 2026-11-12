@@ -30,6 +30,7 @@ import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js
 import { buildUsage, RANGES, type Range, type RawPoint } from "./usage.js";
 import { buildStorageMap, isListedBackup, poolItems, poolRemoval, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import { auditLine } from "./audit.js";
+import { sharedLoad } from "./shared-load.js";
 import {
   buildMovePlan,
   buildRebootPlan,
@@ -301,8 +302,8 @@ async function loadRecommended(session: Session) {
 }
 
 
-let realms: { realm: string; comment?: string; default?: number }[] = [];
-let realmsAt = 0;
+/** The sign-in realms. Anyone can ask for them, so one load a minute is shared by everyone (#59). */
+const realms = sharedLoad(60 * 1000, () => pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains"));
 
 function send(res: http.ServerResponse, status: number, type: string, body: string | Buffer, extra: Record<string, string> = {}) {
   res.writeHead(status, { ...HEADERS, ...(secureCookie ? { "Strict-Transport-Security": "max-age=31536000" } : {}), "Content-Type": type, "Cache-Control": "no-store", ...extra });
@@ -1307,12 +1308,7 @@ const handler: http.RequestListener = async (req, res) => {
     if (req.method !== "GET") return json(res, 405, { error: "That method isn't allowed." });
     if (route === "/healthz") return json(res, 200, { ok: true });
     if (route === "/api/login-info") {
-      // Anyone can ask this, so a flood of them shouldn't become a flood at Proxmox.
-      if (Date.now() - realmsAt > 60 * 1000) {
-        realms = await pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains");
-        realmsAt = Date.now();
-      }
-      return json(res, 200, { realms });
+      return json(res, 200, { realms: await realms() });
     }
     if (route === "/api/usage" || route === "/api/overview" || route === "/api/server" || route === "/api/task" || route === "/api/reboot-plan" || route === "/api/move-plan" || route === "/api/rolling-plan" || route === "/api/moves" || route === "/api/run" || route === "/api/run-plan" || route === "/api/snapshot-support" || route === "/api/backups" || route === "/api/restore-plan" || route === "/api/create-plan" || route === "/api/network" || route === "/api/guest-addresses" || route === "/api/templates" || route === "/api/tasks" || route === "/api/storage-list" || route === "/api/disks" || route === "/api/disk-smart" || route === "/api/storage-map" || route === "/api/health" || route === "/api/setup-plan" || route === "/api/guest-waiting" || route === "/api/cpu-types" || route === "/api/recommended") {
       const id = cookieId(req);
