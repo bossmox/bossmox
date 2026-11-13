@@ -6,9 +6,16 @@ Version numbers: fixes to a released version bump the last number (0.2.0 to 0.2.
 
 ## Next: [Email alerts](https://github.com/bossmox/bossmox/milestone/7) (0.2.1)
 
-0.2.0 sends Proxmox's alerts to ntfy, Discord, Slack, Teams or Gotify. 0.2.1 adds email.
+0.2.0 sends Proxmox's alerts to ntfy, Discord, Slack, Teams or Gotify. 0.2.1 adds email. It also stops a normal update from turning into a major upgrade by accident.
 
 - [Alerts by email](https://github.com/bossmox/bossmox/issues/34)
+- [Refuse to update a node whose repositories point at a different release](https://github.com/bossmox/bossmox/issues/94)
+
+## Then: [Proxmox upgrades](https://github.com/bossmox/bossmox/milestone/8) (0.3.0)
+
+Upgrade a cluster to the next major version of Proxmox VE (for example 8 to 9) from BossMox, one node at a time, without Proxmox's own interface or a shell.
+
+- [Upgrade to the next major version of Proxmox VE](https://github.com/bossmox/bossmox/issues/95)
 
 ## Later, in no particular order
 
