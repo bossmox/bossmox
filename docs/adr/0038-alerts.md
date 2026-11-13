@@ -8,14 +8,14 @@ Proxmox 8.1+ has its own notification system: **targets** (where a message goes:
 
 **On a fresh install they go nowhere.** Read on the bmx8 lab (8.4), and it's the default: one target, `mail-to-root`, sends through the node's local sendmail to root@pam's email address. Root has no email address set, and the local mail server has no relay. So a failed backup or a fenced node tells no one.
 
-Rocky's call (2026-11-12): (a) Proxmox's own notifications first, then (b) BossMox's own health-check emails.
+Rocky's call (2026-11-12): (a) Proxmox's own notifications first, then (b) BossMox's own health-check alerts.
 
 ## Decision (part a)
 
 ### Where it lives
 
-- **Settings → Alerts** (a new section): who gets emailed, how it's sent, what's included, Send a test, and Change.
-- **Health check:** while nothing can deliver, a best-practice item, "Best practice: get an email when something fails", that's dismissable and has Open Settings (the ADR 0035 pattern). It counts as nothing set up when the only target is the built-in `mail-to-root` and root@pam has no email address. With a BossMox target set up and its last test passed, it's a pass: "Proxmox emails {address} when something fails".
+- **Settings → Alerts** (a new section): where alerts go, what's included, Send a test, and Change.
+- **Health check:** while nothing can deliver, a best-practice item, "Best practice: get an alert when something fails", that's dismissable and has Open Settings (the ADR 0035 pattern). It counts as nothing set up when the only target is the built-in `mail-to-root` and root@pam has no email address. With a BossMox target set up and its last test passed, it's a pass: "Proxmox sends alerts to {where} when something fails".
 
 ### Where alerts go (Rocky, 2026-11-13: "SMTP is basically dead - so we might need a different way")
 
@@ -62,7 +62,7 @@ Changing notification targets needs Proxmox's notification permission (`Mapping.
 
 ## Not in this
 
-Part (b), BossMox's own health-check emails. Proxmox has no API for another program to send through its notification targets, and won't hand back the SMTP password, so (b) needs its own sending. Provider presets; Gotify and webhooks; quiet hours (Proxmox's `match-calendar`).
+Part (b), BossMox's own health-check alerts. Proxmox has no API for another program to send through its notification targets, and won't hand back the SMTP password, so (b) needs its own sending. Provider presets; Gotify and webhooks; quiet hours (Proxmox's `match-calendar`).
 
 ## Open for Rocky
 
