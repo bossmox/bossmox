@@ -65,6 +65,17 @@ The Migrate policy's Health check item gets one more line: "Before shutting ever
   5. Stop protecting web: the HA resource is gone and web keeps running.
 - Snapshots of 903-905 before step 2 (the `preheartbeat` ones still stand).
 
+## Lab results (2026-11-12/13, bmx8, Proxmox 8.4)
+
+1. **Stop protecting** db from Settings → Redundancy: its HA resource went, db kept running. The cluster then had no HA guests.
+2. **Refused:** a disc from node1's own storage put in db. The switch said "The disc test-disc.iso is on local, which only bmx8-node1 has. Take it out first." with Change the disc, and nothing was sent to Proxmox.
+3. **Protect** web from its page: the first-time window explained fencing and, checked live, "The heartbeat has one network ... Give it a backup network first: every node has 10.0.31.0/24 on a second port". HA reported web started.
+4. **Failover:** node3 (web's node) powered off hard from Maverick. HA: fence at 60 s, starting on node1 at 131 s, **started at 154 s**. node3 rejoined about 20 s after starting it again.
+5. **HA's error state:** db protected, locked (`migrate`) and asked to start: error after 50 s. Health check showed "HA gave up on db" with the lock named. **Two bugs found here and fixed:** started was sent 5 s after disabled and refused while HA was still in error; then the wait looked for "disabled", but Proxmox reports HA's own state, "stopped". Now it waits for "not error". Fix this then unlocked db and brought it back started, and the Health item went once the check was read past its cache (a third small fix).
+6. **Stop protecting** web from its page: off, web kept running.
+
+Lab left as it was: db protected, web not (web now on node1, where the failover put it).
+
 ## Not in this
 
 HA groups and rules (which nodes a guest prefers); max restart and relocate counts; protecting many guests in one go; the shutdown policy itself (ADR 0031 has it).
