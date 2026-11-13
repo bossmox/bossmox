@@ -115,7 +115,7 @@ h1,h2,h3,p{margin:0}
 .look-x:hover{color:var(--ink)}
 .look-controls{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 14px;margin-top:10px;font-size:13.5px}
 .dot{width:9px;height:9px;border-radius:50%;flex:none;display:inline-block;background:var(--muted)}
-.dot.running{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.tip{background:var(--accent)} .dot.busy{background:var(--accent);animation:pulse 1s infinite}
+.dot.running{background:var(--ok)} .dot.ok{background:var(--ok)} .dot.bad{background:var(--bad)} .dot.warn{background:var(--warn)} .dot.tip{background:var(--accent)} .dot.busy{background:var(--accent);animation:pulse 1s infinite}
 @keyframes pulse{50%{opacity:.3}}
 @keyframes rise{from{opacity:0;transform:translateY(8px)}}
 
@@ -476,3 +476,8 @@ i.s1{background:var(--series1)}i.s2{background:var(--series2)}
 .hafence .haline:not(.ok){font-weight:600}
 .tblines{background:var(--surface2);padding:10px 12px;border-radius:8px;overflow-x:auto;font-size:12.5px;white-space:pre;margin:6px 0 10px}
 .check{display:flex;gap:8px;align-items:center;margin:6px 0;font-size:14px}
+
+/* Upgrade readiness (ADR 0042) */
+.okline{color:var(--ok);font-weight:650}
+#upbody .snap .dot{margin-right:6px;vertical-align:1px}
+#upbody pre{white-space:pre-wrap;margin:6px 0 0}

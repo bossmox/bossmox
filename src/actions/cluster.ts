@@ -70,6 +70,10 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       if (c.email.status().account) await c.email.remove(who);
       return null;
     },
+    "upgrade-check": async (_name, who) => {
+      await c.upgradeReady.start(who);
+      return null;
+    },
     "email-start": async (_name, who) => {
       await c.email.start(who);
       return null;

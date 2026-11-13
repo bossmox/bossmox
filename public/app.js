@@ -448,6 +448,8 @@ function healthFix(f) {
       return b(`data-checknow="1"`);
     case "settings":
       return b(`data-open="settings"`);
+    case "upgrade":
+      return b(`data-upgrade="1"`);
     case "move-network":
       return b(`data-movefix="1"`);
     case "ha-policy":
@@ -734,6 +736,73 @@ async function cancelOutlook() {
   await post("api/action/email-cancel", { server: onlineNodes()[0] }).catch(() => null);
   closeDialog();
   loadSettings();
+}
+
+/*
+ * Getting ready to upgrade Proxmox (ADR 0042): Proxmox's own checker on every node, read and explained, beside
+ * BossMox's own checks. Nothing is changed on the nodes.
+ */
+const UP_HANDLING = {
+  blocks: ["bad", "Fix first"],
+  fix: ["warn", "BossMox can fix this"],
+  bossmox: ["ok", "BossMox takes care of it"],
+  advice: ["off", "Good to know"],
+};
+function upgradeBody(u) {
+  if (!u.checkedAt && !u.running) return `<p>BossMox runs Proxmox's own upgrade checker on every node, one at a time, and explains what it finds. It only reads: nothing on the nodes changes.</p>`;
+  if (u.running) return `<p>Running Proxmox's checker on each node. This takes about a minute per node.</p>`;
+  const verdict = u.ready
+    ? `<p class="okline">Nothing stands in the way of upgrading to Proxmox VE ${esc(String(u.to))}.</p>`
+    : `<p class="loginerr">${u.blocking === 1 ? "One thing has" : `${u.blocking} things have`} to be fixed before upgrading${u.to ? ` to Proxmox VE ${esc(String(u.to))}` : ""}.</p>`;
+  const nodeBlock = (n) => {
+    const counts = n.counts
+      ? `${n.counts.passed} passed, ${n.counts.warnings} ${n.counts.warnings === 1 ? "warning" : "warnings"}, ${n.counts.failures} ${n.counts.failures === 1 ? "failure" : "failures"}`
+      : "";
+    const items = n.items
+      .map((i) => {
+        const [tone, words] = UP_HANDLING[i.handling] ?? UP_HANDLING.advice;
+        return `<div class="snap"><div><span class="dot ${tone}"></span><b>${esc(i.title)}</b> <span class="rec${tone === "ok" ? " ok" : ""}">${esc(words)}</span>${i.detail ? `<small>${esc(i.detail)}</small>` : ""}${i.original && i.original !== i.title ? `<details class="hbdetails"><summary>Proxmox's words</summary><pre class="meta">${esc(i.original)}</pre></details>` : ""}</div></div>`;
+      })
+      .join("");
+    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${n.version ? `Proxmox VE ${esc(n.version)}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small></div></div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
+  };
+  return `${verdict}${u.nodes.map(nodeBlock).join("")}<p class="meta">Checked ${esc(new Date(u.checkedAt).toLocaleString())}.</p>`;
+}
+async function openUpgrade() {
+  let u;
+  try {
+    u = await signal("api/upgrade");
+  } catch (err) {
+    if (err.message === "signed out") return;
+    return dialog(`<h3>Upgrade Proxmox</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  drawUpgrade(u);
+  if (u.running) followUpgradeCheck();
+}
+function drawUpgrade(u) {
+  dialog(`<h3>Get ready to upgrade${u.to ? ` to Proxmox VE ${esc(String(u.to))}` : " Proxmox"}</h3>
+    <div id="upbody">${upgradeBody(u)}</div>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn primary" data-upgradecheck="1" ${u.running ? "disabled" : ""}>${u.checkedAt ? "Check again" : "Run the checker"}</button></div>`);
+}
+async function startUpgradeCheck() {
+  try {
+    const res = await post("api/action/upgrade-check", { server: onlineNodes()[0] });
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) return dialog(`<h3>The checker didn't start</h3><p class="loginerr">${esc((await res.json()).error)}</p>${closeRow}`);
+  } catch (err) {
+    return dialog(`<h3>The checker didn't start</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  drawUpgrade({ running: true, nodes: [], checkedAt: null, to: null });
+  followUpgradeCheck();
+}
+async function followUpgradeCheck() {
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 3000));
+    if (!$("#upbody")) return;
+    const u = await signal("api/upgrade").catch(() => null);
+    if (!u || !$("#upbody")) return;
+    if (!u.running) return drawUpgrade(u);
+  }
 }
 
 /* Redundancy (ADR 0035): a backup network for the cluster heartbeat, set up here when every node has a second port. */
@@ -4506,6 +4575,8 @@ document.addEventListener("click", (e) => {
   }
   if (d.rolling) return openRunStart("update");
   if (d.pvenote) return d.pvenote === "ended" ? openWin("health") : openRunStart("update");
+  if (d.upgrade) return openUpgrade();
+  if (d.upgradecheck) return startUpgradeCheck();
   if (d.runstart) {
     t.disabled = true;
     return startRun();

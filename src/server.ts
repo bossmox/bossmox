@@ -58,6 +58,7 @@ import { CLIENT_ID, createOutlook } from "./outlook.js";
 import { keyPath, readKey } from "./sealed.js";
 import { createAlertLink, INBOUND_PATH } from "./alert-link.js";
 import { createProxmoxNotice } from "./proxmox-notice.js";
+import { createUpgradeReady } from "./upgrade-ready.js";
 import { X509Certificate } from "node:crypto";
 import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
@@ -224,6 +225,7 @@ const jobs = createJobs({
 /** Checks GitHub for a newer BossMox every 6 hours while it's on (ADR 0019). A copy with no version never checks. */
 const updates = new UpdateChecker(VERSION, preferences.updateCheck);
 const proxmoxNotice = createProxmoxNotice(pve);
+const upgradeReady = createUpgradeReady({ pve, console: nodeConsole(pve, () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName })) });
 updates.start();
 const HAS_VERSION = versionNumbers(VERSION) !== null;
 const SHORT_VERSION = VERSION.replace(/^(\d+\.\d+\.\d+(?:-[a-z]+)?).*$/, "$1");
@@ -678,6 +680,7 @@ const actionContext = {
   alerts,
   email,
   alertLink,
+  upgradeReady,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -967,6 +970,7 @@ const routeContext = {
   snapshotFixFor,
   updateView,
   proxmoxNotice,
+  upgradeReady,
   viewerOf,
   epoch: () => preferencesEpoch,
 };

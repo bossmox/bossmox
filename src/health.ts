@@ -17,6 +17,7 @@ export type Status = "ok" | "warn" | "bad" | "off" | "tip";
 export interface Fix {
   /** Which button the screen shows: each maps to something BossMox already does. */
   kind:
+    | "upgrade"
     | "channel"
     | "updates"
     | "protect"
@@ -293,6 +294,7 @@ export function buildHealth(h: HealthInput): Check[] {
         status: "bad",
         title: `Proxmox VE ${major} stopped getting updates on ${longDate(life.endOfLife)}`,
         detail: `${who} Since then it gets no security fixes.${next}`,
+        ...(life.newer ? { fix: { kind: "upgrade" as const, label: "Get ready to upgrade" } } : {}),
       });
     else if (life.state === "ending" && life.endOfLife)
       add({
@@ -301,6 +303,7 @@ export function buildHealth(h: HealthInput): Check[] {
         status: "warn",
         title: `Proxmox VE ${major} stops getting updates on ${longDate(life.endOfLife)}`,
         detail: `That's ${life.daysLeft === 1 ? "1 day" : `${life.daysLeft} days`} from now. ${who} After that it gets no security fixes.${next ? ` Plan the upgrade to Proxmox VE ${life.newer} before then.` : ""}`,
+        ...(life.newer ? { fix: { kind: "upgrade" as const, label: "Get ready to upgrade" } } : {}),
       });
     else if (life.state === "unknown")
       add({
