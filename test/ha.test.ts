@@ -34,11 +34,12 @@ test("the fencing warning names what this cluster has against restarts that were
   assert.match(fencingWarnings({ state: "no-port", nodes: ["c"] }, null).lines[0]!, /not every node has a second port/);
 });
 
-function fake(opts: { disk?: string; lock?: string; hastate?: string; votes?: number; cantMove?: string | null; haGuests?: number } = {}) {
+function fake(opts: { disk?: string; lock?: string; hastate?: string; votes?: number; cantMove?: string | null; haGuests?: number; stuck?: boolean } = {}) {
   const calls: string[] = [];
+  let hastate = opts.hastate;
   const pve = {
     get: async (path: string) => {
-      if (path === "/cluster/resources?type=vm") return [{ type: "qemu", vmid: 101, name: "web", node: "n3", status: "running", ...(opts.hastate ? { hastate: opts.hastate } : {}) }];
+      if (path === "/cluster/resources?type=vm") return [{ type: "qemu", vmid: 101, name: "web", node: "n3", status: "running", ...(hastate ? { hastate } : {}) }];
       if (path === "/cluster/resources?type=storage") return [{ type: "storage", storage: "ISCSI_SHARE", node: "n3", shared: 1 }, { type: "storage", storage: "local-lvm", node: "n3", shared: 0 }];
       if (path === "/nodes/n3/qemu/101/config") return { scsi0: opts.disk ?? "ISCSI_SHARE:vm-101-disk-0", ...(opts.lock ? { lock: opts.lock } : {}) };
       if (path === "/cluster/config/nodes") return Array((opts.votes ?? 3)).fill({ quorum_votes: 1 });
@@ -47,7 +48,12 @@ function fake(opts: { disk?: string; lock?: string; hastate?: string; votes?: nu
       throw new Error(`unexpected ${path}`);
     },
     post: async (path: string, _w: unknown, form: Record<string, string>) => { calls.push(`POST ${path} ${JSON.stringify(form)}`); return null; },
-    put: async (path: string, _w: unknown, form: Record<string, string>) => { calls.push(`PUT ${path} ${JSON.stringify(form)}`); return null; },
+    put: async (path: string, _w: unknown, form: Record<string, string>) => {
+      calls.push(`PUT ${path} ${JSON.stringify(form)}`);
+      // HA takes the new state on its next cycle; a stuck one stays in error.
+      if (path.startsWith("/cluster/ha/resources/") && !opts.stuck) hastate = form.state;
+      return null;
+    },
     delete: async (path: string) => { calls.push(`DELETE ${path}`); return null; },
   } as unknown as PveClient;
   const ha = createHa({ pve, cantMove: async () => opts.cantMove ?? null, heartbeat: async () => ({ state: "backed-up", links: 2 }), netCheck: async () => null, audit: () => {}, wait: async () => {} });
@@ -86,4 +92,10 @@ test("recover: unlocks a locked guest as root, then disabled and started under H
   await assert.rejects(other.ha.recover({ ...root, username: "admin@pve" } as Session, 101), (e: { status: number; message: string }) => e.status === 403 && /qm unlock 101/.test(e.message));
   assert.deepEqual(other.calls, []);
   await assert.rejects(fake({ hastate: "started" }).ha.recover(root, 101), (e: { status: number }) => e.status === 400);
+});
+
+test("recover waits for HA to leave its error state, and says so if it doesn't within a minute (lab, 2026-11-12)", async () => {
+  const { ha, calls } = fake({ hastate: "error", stuck: true });
+  await assert.rejects(ha.recover(root, 101), (e: { status: number; message: string }) => e.status === 502 && /within a minute/.test(e.message));
+  assert.equal(calls.filter((c) => c.includes('"started"')).length, 0, "started is never sent while HA still says error");
 });

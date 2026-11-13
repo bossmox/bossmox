@@ -154,7 +154,12 @@ export function createHa(deps: HaDeps) {
     }
     const sid = encodeURIComponent(sidOf(type, id));
     await pve.put<null>(`/cluster/ha/resources/${sid}`, session, { state: "disabled" });
-    await deps.wait(5000);
+    // HA takes a cycle (about 10 s) to leave its error state; started before then is refused (lab, 2026-11-12).
+    for (let i = 0; ; i++) {
+      await deps.wait(3000);
+      if ((await guest(session.ticket, id)).r.hastate === "disabled") break;
+      if (i >= 20) throw new HttpError(502, `HA didn't take ${r.name ?? id} out of its error state within a minute. It's unlocked and set to disabled; try Fix this again shortly.`);
+    }
     await pve.put<null>(`/cluster/ha/resources/${sid}`, session, { state: "started" });
     deps.audit("ha-recover", session.username, { guest: id, unlocked: config.lock ? String(config.lock) : "" });
   }
