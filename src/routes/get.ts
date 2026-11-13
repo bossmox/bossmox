@@ -85,7 +85,7 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
     // Only root@pam can run the checker, and its findings name storage and guests, so only root@pam sees them.
     "/api/upgrade": async (_route, session, _params, _req, res) =>
       session.username === "root@pam"
-        ? json(res, 200, { ...c.upgradeReady.view(), fixes: c.upgradeFixes.last() })
+        ? json(res, 200, { ...c.upgradeReady.view(), fixes: c.upgradeFixes.last(), sources: c.upgradeSources.view() })
         : json(res, 403, { error: "Only root@pam can check the upgrade, because the checker runs in each node's root console." }),
     "/api/email": async (_route, session, _params, _req, res) => json(res, 200, c.email.view({ username: session.username, canChange: await c.alerts.canChange(session) })),
     "/api/tiebreaker": async (_route, session, params, _req, res) => {

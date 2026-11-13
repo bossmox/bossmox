@@ -772,7 +772,13 @@ function upgradeBody(u) {
         : pin.already
           ? "Every port already has a fixed name, so a new kernel can't rename them."
           : `Pinned: ${pin.renames.map((r) => `${r.from} becomes ${r.to}`).join(", ")}, at the next restart.${pin.kept?.length ? ` ${pin.kept.map((k) => k.name).join(", ")} ${pin.kept.length === 1 ? "keeps its name" : "keep their names"}: another file already fixes ${pin.kept.length === 1 ? "it" : "them"}.` : ""}`;
-    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${n.version ? `Proxmox VE ${esc(n.version)}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}</small></div>${!pin?.ok ? `<div class="actions"><button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button></div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
+    const src = u.sources?.[n.node];
+    const srcWords = src?.backup
+      ? `<div class="snap"><div><span class="dot warn"></span><b>Update sources switched to the next release</b><small>Normal updates are held for this node until it's upgraded or the old sources are back.${src.others?.length ? ` Left as they were: ${esc(src.others.map((o) => o.uri).join(", "))}.` : ""}</small></div><div class="actions"><button class="btn" data-upsrcback="${esc(n.node)}">Put the old sources back</button></div></div>`
+      : src?.error
+        ? `<p class="loginerr">${esc(src.error)}</p>`
+        : "";
+    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${n.version ? `Proxmox VE ${esc(n.version)}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}</small></div>${!pin?.ok ? `<div class="actions"><button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button></div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${srcWords}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
   };
   const lvm = u.fixes?.lvm;
   const lvmWords = lvm
@@ -819,6 +825,13 @@ function askPin(node) {
     <p class="meta">BossMox does this anyway before it restarts a node for the upgrade. Doing it now means the restart after the next update already uses the new names, and you can see the result before upgrading.</p>
     <label class="field restartname"><span>Type ${esc(node)} to confirm</span><input id="rname" data-word="${esc(node.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-uppingo="${esc(node)}" disabled>Pin port names</button></div>`);
+  $("#rname").focus();
+}
+function askSourcesBack(node) {
+  dialog(`<h3>Put the old update sources back on ${esc(node)}?</h3>
+    <p>BossMox restores the copy of ${esc(node)}'s sources it saved before switching them, and refreshes the package lists. Nothing is installed or removed.</p>
+    <label class="field restartname"><span>Type ${esc(node)} to confirm</span><input id="rname" data-word="${esc(node.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-upsrcbackgo="${esc(node)}" disabled>Put them back</button></div>`);
   $("#rname").focus();
 }
 async function runUpgradeFix(action, node, body, words, checkAfter) {
@@ -4619,6 +4632,8 @@ document.addEventListener("click", (e) => {
   if (d.upgradecheck) return startUpgradeCheck();
   if (d.upfix === "lvm") return askLvmFix();
   if (d.uppin) return askPin(d.uppin);
+  if (d.upsrcback) return askSourcesBack(d.upsrcback);
+  if (d.upsrcbackgo) return runUpgradeFix("upgrade-sources-undo", d.upsrcbackgo, { confirm: $("#rname").value.trim() }, `Putting the old sources back on ${d.upsrcbackgo}`, false);
   if (d.uplvmgo) return runUpgradeFix("upgrade-fix-lvm", onlineNodes()[0], { confirm: "lvm-autoactivation" }, "Turning off autoactivation on every node", true);
   if (d.uppingo) return runUpgradeFix("upgrade-pin", d.uppingo, { confirm: $("#rname").value.trim() }, `Pinning port names on ${d.uppingo}`, false);
   if (d.runstart) {

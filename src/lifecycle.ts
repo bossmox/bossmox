@@ -7,16 +7,18 @@
 export interface Release {
   major: number;
   debian: string;
+  /** Debian's codename, as it's written in the update sources. */
+  codename: string;
   /** The last day of updates, or null while Proxmox hasn't announced one. */
   endOfLife: string | null;
 }
 
 /** From Proxmox's FAQ, read 2026-11-13. The FAQ gives months; VE 8's day is from Rocky (2026-08-31). */
 export const RELEASES: Release[] = [
-  { major: 9, debian: "Debian 13 (Trixie)", endOfLife: null },
-  { major: 8, debian: "Debian 12 (Bookworm)", endOfLife: "2026-08-31" },
-  { major: 7, debian: "Debian 11 (Bullseye)", endOfLife: "2024-07-31" },
-  { major: 6, debian: "Debian 10 (Buster)", endOfLife: "2022-09-30" },
+  { major: 9, debian: "Debian 13 (Trixie)", codename: "trixie", endOfLife: null },
+  { major: 8, debian: "Debian 12 (Bookworm)", codename: "bookworm", endOfLife: "2026-08-31" },
+  { major: 7, debian: "Debian 11 (Bullseye)", codename: "bullseye", endOfLife: "2024-07-31" },
+  { major: 6, debian: "Debian 10 (Buster)", codename: "buster", endOfLife: "2022-09-30" },
 ];
 
 /** How far ahead Health check starts saying the end is coming. */

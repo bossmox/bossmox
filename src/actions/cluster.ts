@@ -1,5 +1,6 @@
 import { AuthError } from "../auth.js";
 import { KINDS, type AlertKind } from "../alerts.js";
+import { RELEASES } from "../lifecycle.js";
 import { applyChannel, ChannelError } from "../update-channel.js";
 import { canChangeCluster, KEEP_FREE_CHOICES, writePreferences } from "../preferences.js";
 import { runMoveHome, runMoveOff } from "../moves.js";
@@ -76,6 +77,21 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     },
     "upgrade-fix-lvm": async (_name, who, body) => {
       await c.upgradeFixes.lvm(who, text(body.confirm, 64));
+      return null;
+    },
+    "upgrade-sources": async (name, who, body) => {
+      const version = await pve.get<{ version?: string }>(`/nodes/${encodeURIComponent(name)}/version`, who.ticket);
+      const major = Number.parseInt(version.version ?? "", 10);
+      const from = RELEASES.find((r) => r.major === major)?.codename;
+      const to = RELEASES.find((r) => r.major === major + 1)?.codename;
+      if (!from || !to) throw new HttpError(400, `BossMox doesn't know which release comes after Proxmox VE ${version.version ?? "this version"}.`);
+      const r = await c.upgradeSources.switchNode(who, name, text(body.confirm, 64), from, to);
+      if (r.error) throw new HttpError(400, r.error);
+      return null;
+    },
+    "upgrade-sources-undo": async (name, who, body) => {
+      const r = await c.upgradeSources.undo(who, name, text(body.confirm, 64));
+      if (r.error) throw new HttpError(400, r.error);
       return null;
     },
     "upgrade-pin": async (name, who, body) => {

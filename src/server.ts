@@ -60,6 +60,7 @@ import { createAlertLink, INBOUND_PATH } from "./alert-link.js";
 import { createProxmoxNotice } from "./proxmox-notice.js";
 import { createUpgradeReady } from "./upgrade-ready.js";
 import { createUpgradeFixes } from "./upgrade-fixes.js";
+import { createUpgradeSources } from "./upgrade-sources.js";
 import { X509Certificate } from "node:crypto";
 import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
@@ -228,6 +229,7 @@ const updates = new UpdateChecker(VERSION, preferences.updateCheck);
 const proxmoxNotice = createProxmoxNotice(pve);
 const rootConsole = nodeConsole(pve, () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName }));
 const upgradeReady = createUpgradeReady({ pve, console: rootConsole });
+const upgradeSources = createUpgradeSources({ pve, console: rootConsole, audit: (event, who, detail) => audit(event, who, "settings", detail) });
 const upgradeFixes = createUpgradeFixes({
   console: rootConsole,
   onlineNodes: async (session) =>
@@ -693,6 +695,7 @@ const actionContext = {
   alertLink,
   upgradeReady,
   upgradeFixes,
+  upgradeSources,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -984,6 +987,7 @@ const routeContext = {
   proxmoxNotice,
   upgradeReady,
   upgradeFixes,
+  upgradeSources,
   viewerOf,
   epoch: () => preferencesEpoch,
 };
