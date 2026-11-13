@@ -1,4 +1,4 @@
-# 0038: Alerts by email, through Proxmox's own notifications
+# 0038: Alerts, through Proxmox's own notifications
 
 **Date:** 2026-11-13. **Status:** proposed (Rocky reads before any code). Issue #34, 0.2.0 piece 4, part (a).
 
@@ -17,22 +17,37 @@ Rocky's call (2026-11-12): (a) Proxmox's own notifications first, then (b) BossM
 - **Settings → Alerts** (a new section): who gets emailed, how it's sent, what's included, Send a test, and Change.
 - **Health check:** while nothing can deliver, a best-practice item, "Best practice: get an email when something fails", that's dismissable and has Open Settings (the ADR 0035 pattern). It counts as nothing set up when the only target is the built-in `mail-to-root` and root@pam has no email address. With a BossMox target set up and its last test passed, it's a pass: "Proxmox emails {address} when something fails".
 
-### Setting it up
+### Where alerts go (Rocky, 2026-11-13: "SMTP is basically dead - so we might need a different way")
+
+Plain email by SMTP is still there, but it's no longer the main way: most mail providers now refuse simple password sign-in for sending. Proxmox 8.3+ also has **webhook** targets, which send to any web address and keep a secret (a token) on Proxmox's side, and **Gotify**. Both are on the bmx8 lab (8.4). So the person picks one, and BossMox fills in Proxmox's settings for it. Pasting one link or token is all they do:
+
+| Choice | What the person gives | Proxmox target |
+|---|---|---|
+| **Phone push with ntfy** (free, no account, can be self-hosted) | a topic name, or their own ntfy server address; an access token if their server needs one | webhook, POST to the topic, token as a Proxmox secret |
+| **Discord** | the channel's webhook link | webhook, POST with Discord's message shape |
+| **Slack** | the incoming-webhook link | webhook, POST with Slack's shape |
+| **Microsoft Teams** | the channel's Workflows webhook link | webhook, POST with Teams' shape |
+| **Gotify** | server address and app token | Proxmox's own Gotify target |
+| **Email** | addresses, and an SMTP server that relays (host, port, security, optional username and password, from address) | SMTP target |
+
+Each webhook preset's message format (title, message, severity) is checked against the real service before release. ntfy can be checked on the lab: its public server, or one run on VM 906. Discord, Slack and Teams need a test channel, which is Rocky's choice.
 
 One window:
-1. **Send to:** one or more email addresses.
-2. **Send through:** an SMTP server (host, port, security TLS/STARTTLS/none, optional username and password, from address), with a line saying where to find these for common providers in plain words (an app password, not the account password). No provider presets in this piece.
+1. **Send alerts to:** one of the choices above, then its one or two fields.
 3. **What to send:**
    - **Failures and warnings** (Proxmox's severities warning and error): fenced nodes, failed backups, failed replication. Always on, since that's the point.
    - **New updates are available** (Proxmox's `package-updates`): on by default.
    - **Every backup, including the ones that worked:** off by default.
-4. **Save and send a test.** BossMox creates one SMTP target, `bossmox-email`, and one matcher, `bossmox-alerts`, routing the chosen messages to it. Then it calls Proxmox's own test for that target. The window asks "Did the test arrive?" Yes marks it confirmed. No keeps it unconfirmed, with the usual causes (port blocked, app password, from address the server won't accept).
+4. **Save and send a test.** BossMox creates one target, `bossmox-alerts-target`, and one matcher, `bossmox-alerts`, routing the chosen messages to it. Then it calls Proxmox's own test for that target. The window asks "Did the test arrive?" Yes marks it confirmed. No keeps it unconfirmed, with the usual causes (port blocked, app password, from address the server won't accept).
 
-Proxmox's built-in target and matcher are left alone: BossMox adds, never rewrites. **Change** edits `bossmox-email` and `bossmox-alerts`; **Turn off** removes only those two.
+Proxmox's built-in target and matcher are left alone: BossMox adds, never rewrites. **Change** edits `bossmox-alerts-target` and `bossmox-alerts`; **Turn off** removes only those two.
 
-### The SMTP password
+### Passwords, tokens and webhook links (Rocky, 2026-11-13: "form field is fine as long as BossMox passes it encrypted to Proxmox and doesn't store it in any way")
 
-Proxmox keeps it, in its root-only private config (`/etc/pve/priv/notifications.cfg`), and needs it to send. BossMox passes it to Proxmox once when it's typed. It doesn't store it, doesn't log it, and never sends it back to the page. On Change, an empty password field keeps the one Proxmox has.
+An SMTP password, an ntfy or Gotify token, and a webhook link (for Discord, Slack and Teams the link itself is the secret) are typed into a form field. Proxmox keeps them in its root-only private config (`/etc/pve/priv/notifications.cfg`), because it needs them to send.
+- **Encrypted both ways:** the browser reaches BossMox over HTTPS, and BossMox reaches Proxmox's API over HTTPS, checked against Proxmox's own certificate (`src/pve.ts`). When BossMox runs on plain HTTP behind someone's own proxy (`BOSSMOX_BEHIND_HTTPS_PROXY`), the hop from that proxy to BossMox is theirs, and the window says so before asking for a secret.
+- **Stored nowhere by BossMox:** not in a file, not in a log or audit line, not in memory past the request, and never sent back to the page. The page shows only that one is set. On Change, an empty field keeps the one Proxmox has.
+- A test proves this: the secret appears in no answer, no audit line and no file BossMox writes.
 
 ### Who can
 
@@ -40,9 +55,9 @@ Changing notification targets needs Proxmox's notification permission (`Mapping.
 
 ## Tests
 
-- **Unit:** "nothing delivers" (only the built-in target and no root email; a disabled BossMox target); the matcher BossMox sends for each choice; the password never in an answer to the page or the audit line; Change with an empty password sends no password.
-- **Lab, bmx8:** a mail catcher on VM 906 (Python's built-in debugging SMTP server on port 2525, plain): set up through the page with security none, Send a test, and see the mail arrive at the catcher. Then a real alert: a backup job to a storage that refuses it fails, and its mail arrives. Then Change, and Turn off (only BossMox's two entries go).
-- **Not covered by the lab:** a real provider with TLS and a password. Optional, if Rocky wants to point it at a mailbox of his.
+- **Unit:** "nothing delivers" (only the built-in target and no root email; a disabled BossMox target); the target and matcher BossMox sends for each choice; secrets never in an answer to the page, an audit line or a file; Change with an empty secret sends none.
+- **Lab, bmx8:** ntfy on VM 906 (its single binary), set up through the page, Send a test, and see the message arrive. A real alert: a backup job to a storage that refuses it fails, and its message arrives. Email: a mail catcher on 906. Then Change, and Turn off (only BossMox's two entries go).
+- **Not covered by the lab:** Discord, Slack and Teams need test channels; a real mail provider with TLS.
 
 ## Not in this
 
@@ -50,5 +65,6 @@ Part (b), BossMox's own health-check emails. Proxmox has no API for another prog
 
 ## Open for Rocky
 
-1. The SMTP password passing through BossMox to Proxmox (not kept by BossMox), or tell people to type it into Proxmox's own screen?
-2. Part (b): in 0.2.0, or the next release?
+1. ~~SMTP password~~ **Decided (Rocky, 2026-11-13):** a form field, encrypted both hops, stored nowhere by BossMox.
+2. Which choices ship in 0.2.0: all six, or ntfy and email first (the two the lab can test end to end)?
+3. Part (b): in 0.2.0, or the next release?
