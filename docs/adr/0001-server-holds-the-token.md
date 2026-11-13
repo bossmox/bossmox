@@ -4,6 +4,8 @@ Date: 2026-11-05. Status: accepted.
 
 ## Decision
 
+(Superseded in part by ADR 0041, 2026-11-13: the VM is now the one supported install, and the Docker image is gone.)
+
 BossMox ships as one Docker container: a small Node and TypeScript server plus a plain JavaScript front end. The server holds the Proxmox token and returns a simplified overview to the browser.
 
 ## Why

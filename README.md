@@ -133,9 +133,9 @@ qm guest exec <VM ID> -- bossmox-reset
 
 To remove BossMox completely: `qm destroy <VM ID> --purge 1`. If you set up email alerts, each node also trusts BossMox's certificate authority; remove that on each node with `rm /usr/local/share/ca-certificates/bossmox-ca.crt && update-ca-certificates --fresh`, and turn off the alert in Proxmox's Notifications. Nothing else was changed.
 
-## Running it somewhere else
+## Proxies and development
 
-Docker, another machine, reverse proxies and development: see [docs/running-elsewhere.md](docs/running-elsewhere.md).
+Reverse proxies, trying it without Proxmox, and development: see [docs/running-elsewhere.md](docs/running-elsewhere.md). The VM from the one-line install is the one supported way to run BossMox.
 
 ## How it's built
 

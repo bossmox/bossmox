@@ -8,7 +8,7 @@ const SAVED = ["PVE_URL", "PVE_CA_FILE", "PVE_TLS_NAME", "BOSSMOX_ALLOWED_HOSTS"
 export type Saved = Partial<Record<(typeof SAVED)[number], string>>;
 
 /**
- * Fills in anything the environment doesn't already set, so Docker and scripted installs keep working
+ * Fills in anything the environment doesn't already set, so scripted installs keep working
  * and win over the file. Returns true when there's still no Proxmox to talk to, which means setup mode.
  */
 export function applySettings(env: NodeJS.ProcessEnv): boolean {

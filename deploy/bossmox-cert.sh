@@ -7,7 +7,7 @@
 # certificate lasts 825 days and is renewed from the same CA, so the nodes never need it again.
 #
 # Usage: bossmox-cert <address or name>[,...]   install and update: adds these to the names already covered
-#        bossmox-cert renew                      the daily job: renews when under 60 days are left, then restarts
+#        bossmox-cert renew                      the daily job (busybox crond): renews when under 60 days are left, then restarts
 # Prints "changed" when the website certificate was replaced, and "new CA" when the nodes need it again.
 set -eu
 # Names come from the command line and files; none of them may expand as a file pattern.
@@ -158,5 +158,5 @@ put "$D/tls.fingerprint" 644 "$(openssl x509 -noout -fingerprint -sha256 -in "$D
 echo changed
 
 if [ "${1:-}" = renew ]; then
-  if command -v rc-service >/dev/null 2>&1; then rc-service bossmox restart >/dev/null; else systemctl restart bossmox; fi
+  rc-service bossmox restart >/dev/null
 fi
