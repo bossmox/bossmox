@@ -12,9 +12,9 @@ import type { Form, PveClient } from "./pve.js";
 export const TARGET = "bossmox-alerts-target";
 export const MATCHER = "bossmox-alerts";
 
-export type AlertKind = "ntfy" | "discord" | "slack" | "teams" | "gotify";
-export const KINDS: AlertKind[] = ["ntfy", "discord", "slack", "teams", "gotify"];
-export const KIND_NAMES: Record<AlertKind, string> = { ntfy: "ntfy", discord: "Discord", slack: "Slack", teams: "Microsoft Teams", gotify: "Gotify" };
+export type AlertKind = "ntfy" | "discord" | "slack" | "teams" | "gotify" | "email";
+export const KINDS: AlertKind[] = ["ntfy", "discord", "slack", "teams", "gotify", "email"];
+export const KIND_NAMES: Record<AlertKind, string> = { ntfy: "ntfy", discord: "Discord", slack: "Slack", teams: "Microsoft Teams", gotify: "Gotify", email: "email (Outlook)" };
 
 export interface AlertInput {
   kind: AlertKind;
@@ -62,6 +62,22 @@ export function targetForm(input: AlertInput, keepSecrets = false): { type: "web
     const server = parseServer(input.server ?? "", "Gotify address");
     if (!keepSecrets && !input.token) throw new HttpError(400, "Paste the Gotify app token.");
     return { type: "gotify", form: { server: server.origin + server.pathname.replace(/\/$/, ""), comment, ...(keepSecrets ? {} : { token: input.token as string }) } };
+  }
+  // Email goes through BossMox (ADR 0040): Proxmox posts to BossMox's own address with a key, and BossMox sends it on.
+  if (input.kind === "email") {
+    const to = parseServer(input.server ?? "", "BossMox address");
+    if (!keepSecrets && !/^[0-9a-f]{64}$/.test(input.token ?? "")) throw new HttpError(400, "BossMox didn't make a key for Proxmox.");
+    return {
+      type: "webhook",
+      form: {
+        method: "post",
+        url: to.href,
+        header: [header("Content-Type", "application/json"), header("Authorization", "Bearer {{ secrets.key }}")],
+        body: b64('{"title": {{ json title }}, "message": {{ json message }}, "severity": {{ json severity }}}'),
+        comment,
+        ...(keepSecrets ? {} : { secret: [secret("key", input.token as string)] }),
+      },
+    };
   }
   if (input.kind === "ntfy") {
     const server = parseServer(input.server || "https://ntfy.sh", "ntfy server");

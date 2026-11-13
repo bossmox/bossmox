@@ -77,6 +77,10 @@ export interface HealthInput {
   alerts?: AlertsView | null;
   /** Why email alerts stopped, when Microsoft refused BossMox (ADR 0040). */
   emailFailed?: string | null;
+  /** Nodes that don't have BossMox's CA yet, so their alerts can't reach it for email (ADR 0040). */
+  linkMissing?: string[];
+  /** Days left on BossMox's own certificate. */
+  certDaysLeft?: number | null;
   /** Disks detached from their guests but still on storage (ADR 0031). */
   leftover?: Leftover[];
   channels: { node: string; ok: boolean; headline: string; note: string; offer: string | null }[];
@@ -208,6 +212,23 @@ export function buildHealth(h: HealthInput): Check[] {
         });
     }
     if (h.emailFailed) add({ id: "email", group: "Nodes", status: "warn", title: "Email alerts have stopped", detail: h.emailFailed, fix: { kind: "settings" as const, label: "Open Settings" } });
+    if (h.linkMissing?.length)
+      add({
+        id: "email-nodes",
+        group: "Nodes",
+        status: "warn",
+        title: "Some nodes can't send alerts to BossMox for email",
+        detail: `${h.linkMissing.join(", ")} ${h.linkMissing.length === 1 ? "hasn't" : "haven't"} been given BossMox's certificate, so ${h.linkMissing.length === 1 ? "its" : "their"} alerts can't reach it. In Settings, choose Change under Alerts and save again as root@pam.`,
+        fix: { kind: "settings" as const, label: "Open Settings" },
+      });
+    if (h.certDaysLeft !== undefined && h.certDaysLeft !== null && h.certDaysLeft < 30)
+      add({
+        id: "bossmox-cert",
+        group: "Nodes",
+        status: "warn",
+        title: h.certDaysLeft < 0 ? "BossMox's certificate has run out" : `BossMox's certificate runs out in ${h.certDaysLeft} days`,
+        detail: "BossMox renews it every day once under 60 days are left, so this means renewing failed. On the BossMox machine, run bossmox-cert renew as root and read what it says.",
+      });
     // A guest HA gave up on (ADR 0036): it won't start again by itself.
     for (const g of h.guests.filter((x) => x.ha === "error")) {
       const lock = g.lock ? ` It's also locked (${g.lock})${g.lock === "migrate" ? ", which usually means a move was cut off, such as by every node shutting down at once" : ""}.` : "";

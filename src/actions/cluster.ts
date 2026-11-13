@@ -33,14 +33,21 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     "alerts-save": async (_name, who, body) => {
       const kind = text(body.kind, 16) as AlertKind;
       if (!KINDS.includes(kind)) throw new HttpError(400, "Pick where alerts go.");
+      const choices = { updates: body.updates === true, allBackups: body.allBackups === true };
+      if (kind === "email") {
+        // Each node gets BossMox's CA first, then Proxmox gets the address and key (ADR 0040).
+        if (!c.email.view().account) throw new HttpError(400, "Connect an Outlook account first.");
+        const { url, key } = await c.alertLink.connect(who);
+        await c.alerts.save(who, { kind, server: url, token: key, ...choices });
+        return null;
+      }
       await c.alerts.save(who, {
         kind,
         server: text(body.alertServer, 256),
         topic: text(body.topic, 64),
         link: text(body.link, 1024),
         token: text(body.token, 512),
-        updates: body.updates === true,
-        allBackups: body.allBackups === true,
+        ...choices,
       });
       return null;
     },
@@ -54,6 +61,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     },
     "alerts-remove": async (_name, who) => {
       await c.alerts.remove(who);
+      c.alertLink.forget();
       return null;
     },
     "email-start": async (_name, who) => {

@@ -56,6 +56,8 @@ import { releaseMismatch } from "./release-guard.js";
 import { createEmail, emailPath } from "./email.js";
 import { CLIENT_ID, createOutlook } from "./outlook.js";
 import { keyPath, readKey } from "./sealed.js";
+import { createAlertLink, INBOUND_PATH } from "./alert-link.js";
+import { X509Certificate } from "node:crypto";
 import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
 import { createHeartbeat, nodeConsole } from "./heartbeat.js";
@@ -169,6 +171,27 @@ const email = createEmail({
   audit: (event, who, detail) => audit(event, who, "settings", detail),
 });
 setInterval(() => void email.keepAlive(), 6 * 60 * 60 * 1000).unref();
+const certDir = path.dirname(keyPath(process.env));
+const alertLink = createAlertLink({
+  file: path.join(path.dirname(emailPath(process.env)), "alert-link.json"),
+  caFile: path.join(certDir, "ca.crt"),
+  namesFile: path.join(certDir, "cert-names"),
+  port: config.port,
+  pve,
+  console: nodeConsole(pve, () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName })),
+  email,
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
+});
+/** Days until BossMox's own certificate runs out, for Health check: the daily job renews it with 60 left (ADR 0040). */
+function certDaysLeft(): number | null {
+  const file = process.env.TLS_CERT_FILE;
+  if (!file) return null;
+  try {
+    return Math.floor((new Date(new X509Certificate(readFileSync(file)).validTo).getTime() - Date.now()) / 86_400_000);
+  } catch {
+    return null;
+  }
+}
 void email.keepAlive();
 
 /** Keep this guest running (ADR 0036). Where a guest could go comes from the same planning moves use. */
@@ -501,6 +524,8 @@ async function loadHealth(session: Session) {
     heartbeat: heartbeatView,
     alerts: alertsView,
     emailFailed: email.view().failed,
+    linkMissing: alertsView?.kind === "email" ? alertLink.missing(data.nodes.map((n) => n.name)) : [],
+    certDaysLeft: certDaysLeft(),
     channels: details.flatMap((d) => (d?.channel ? [{ node: d.name, ...d.channel }] : [])),
     updates: details.flatMap((d) => (d?.updates ? [{ node: d.name, total: d.updates.total }] : [])),
     guests: data.vms,
@@ -644,6 +669,7 @@ const actionContext = {
   tieBreaker,
   alerts,
   email,
+  alertLink,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -936,6 +962,14 @@ const handler: http.RequestListener = async (req, res) => {
     // A target that can't be read as a path ("//") is the client's mistake, not Proxmox's: 400, not 502.
     const route = requestPath(req.url);
     if (route === null) return json(res, 400, { error: "That address isn't valid." });
+    // Proxmox's webhook, not a browser: no cookie and no BossMox header. Its own key and address check it (ADR 0040).
+    if (req.method === "POST" && route === INBOUND_PATH) {
+      const body = await readJson(req);
+      const auth = req.headers.authorization;
+      const r = await alertLink.receive(Array.isArray(auth) ? auth[0] : auth, req.socket.remoteAddress, body);
+      if (r.status !== 200) audit("alert-refused", "proxmox", req.socket.remoteAddress ?? "", { status: r.status });
+      return json(res, r.status, r.error ? { error: r.error } : { ok: true });
+    }
     if (req.method === "POST") return await handlePost(req, res, route);
     if (req.method !== "GET") return json(res, 405, { error: "That method isn't allowed." });
     if (route === "/healthz") return json(res, 200, { ok: true });
