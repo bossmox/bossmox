@@ -1448,7 +1448,7 @@ const TAB = {
   hardware: (v) => {
     const lock = v.template ? "" : "1";
     const disk = (d) =>
-      `<div class="snap"><div>${d.boot ? "Boot disk" : d.mount ? esc(d.mount) : "Disk"}<small>${d.sizeGb} GB on ${esc(d.storage)}, ${esc(d.slot)}</small></div>${lock ? `<div class="actions"><button class="btn" data-diskgrow="${esc(d.slot)}">Grow</button>${d.boot ? "" : `<button class="btn" data-diskremove="${esc(d.slot)}">Remove</button>`}</div>` : ""}</div>`;
+      `<div class="snap"><div>${d.boot ? "Boot disk" : d.mount ? esc(d.mount) : "Disk"}<small>${Number(d.sizeGb)} GB on ${esc(d.storage)}, ${esc(d.slot)}</small></div>${lock ? `<div class="actions"><button class="btn" data-diskgrow="${esc(d.slot)}">Grow</button>${d.boot ? "" : `<button class="btn" data-diskremove="${esc(d.slot)}">Remove</button>`}</div>` : ""}</div>`;
     const nic = (n) =>
       `<div class="snap"><div>${esc(n.bridge || "Not connected")}${n.vlan ? `, VLAN ${esc(n.vlan)}` : ""}<small>${v.type === "lxc" ? `${esc(addrWords(n))}, ` : ""}${esc(n.model)}, ${esc(n.mac)}</small></div><div class="actions">${lock && v.type === "lxc" ? `<button class="btn" data-addrchange="${esc(n.slot)}">Change address</button>` : ""}${lock && v.nics.length > 1 ? `<button class="btn" data-nicremove="${esc(n.slot)}">Remove</button>` : ""}</div></div>`;
     return `${v.configLoaded ? "" : `<p class="meta">Proxmox didn't return this guest's settings.</p>`}
@@ -2206,7 +2206,7 @@ function askMakeStorage() {
   dialog(`<h3>Make storage on ${esc(S.storeNode)}</h3><p class="loginerr" id="formerr" hidden></p>
     <label class="field restartname"><span>Type</span><select id="mkkind"><option value="zfs">ZFS: copies, checks and snapshots</option><option value="lvmthin">LVM-thin: simple, with snapshots</option><option value="directory">Folder: holds anything, including backups</option></select></label>
     <label class="field restartname"><span>Name</span><input id="mkname" maxlength="31" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="fast"></label>
-    <fieldset class="uses" id="mkdisks"><legend>Disks</legend>${free.map((d) => `<label class="createcheck"><input type="checkbox" value="${esc(d.path)}"> ${esc(d.path)}, ${d.sizeGb} GB${d.model ? ` ${esc(d.model)}` : ""}</label>`).join("")}</fieldset>
+    <fieldset class="uses" id="mkdisks"><legend>Disks</legend>${free.map((d) => `<label class="createcheck"><input type="checkbox" value="${esc(d.path)}"> ${esc(d.path)}, ${Number(d.sizeGb)} GB${d.model ? ` ${esc(d.model)}` : ""}</label>`).join("")}</fieldset>
     <div id="mkraidwrap"></div><div id="mkfswrap" hidden><label class="field restartname"><span>Format</span><select id="mkfs"><option>ext4</option><option>xfs</option></select></label></div>
     <label class="field restartname"><span>Everything on these disks is erased. Type erase to confirm</span><input id="rname" data-word="erase" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-mkgo="1" disabled>Make storage</button></div>`);
