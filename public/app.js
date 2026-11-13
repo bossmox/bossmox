@@ -761,12 +761,24 @@ function upgradeBody(u) {
     const items = n.items
       .map((i) => {
         const [tone, words] = UP_HANDLING[i.handling] ?? UP_HANDLING.advice;
-        return `<div class="snap"><div><span class="dot ${tone}"></span><b>${esc(i.title)}</b> <span class="rec${tone === "ok" ? " ok" : ""}">${esc(words)}</span>${i.detail ? `<small>${esc(i.detail)}</small>` : ""}${i.original && i.original !== i.title ? `<details class="hbdetails"><summary>Proxmox's words</summary><pre class="meta">${esc(i.original)}</pre></details>` : ""}</div></div>`;
+        return `<div class="snap"><div><span class="dot ${tone}"></span><b>${esc(i.title)}</b> <span class="rec${tone === "ok" ? " ok" : ""}">${esc(words)}</span>${i.detail ? `<small>${esc(i.detail)}</small>` : ""}${i.fixId === "lvm-autoactivation" ? `<div class="actions"><button class="btn" data-upfix="lvm">Turn it off</button></div>` : ""}${i.original && i.original !== i.title ? `<details class="hbdetails"><summary>Proxmox's words</summary><pre class="meta">${esc(i.original)}</pre></details>` : ""}</div></div>`;
       })
       .join("");
-    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${n.version ? `Proxmox VE ${esc(n.version)}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small></div></div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
+    const pin = u.fixes?.pins?.[n.node];
+    const pinWords = !pin
+      ? "Before this node restarts for the upgrade, BossMox pins its port names, so a new kernel can't rename them."
+      : !pin.ok
+        ? `Pinning didn't work: ${pin.error}`
+        : pin.already
+          ? "Port names are already pinned."
+          : `Pinned: ${pin.renames.map((r) => `${r.from} becomes ${r.to}`).join(", ")}, at the next restart.`;
+    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${n.version ? `Proxmox VE ${esc(n.version)}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}</small></div>${!pin?.ok ? `<div class="actions"><button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button></div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
   };
-  return `${verdict}${u.nodes.map(nodeBlock).join("")}<p class="meta">Checked ${esc(new Date(u.checkedAt).toLocaleString())}.</p>`;
+  const lvm = u.fixes?.lvm;
+  const lvmWords = lvm
+    ? `<details class="hbdetails" ${lvm.every((r) => r.ok) ? "" : "open"}><summary>${lvm.every((r) => r.ok) ? "Autoactivation was turned off" : "Turning off autoactivation didn't finish"}</summary><pre class="meta">${esc(lvm.map((r) => `${r.node}\n${r.lines.join("\n")}`).join("\n\n"))}</pre></details>`
+    : "";
+  return `${verdict}${lvmWords}${u.nodes.map(nodeBlock).join("")}<p class="meta">Checked ${esc(new Date(u.checkedAt).toLocaleString())}.</p>`;
 }
 async function openUpgrade() {
   let u;
@@ -794,6 +806,34 @@ async function startUpgradeCheck() {
   }
   drawUpgrade({ running: true, nodes: [], checkedAt: null, to: null });
   followUpgradeCheck();
+}
+function askLvmFix() {
+  dialog(`<h3>Turn off autoactivation for existing disks?</h3>
+    <p>BossMox runs Proxmox's own command on every node, one at a time: <code>pve-lvm-disable-autoactivation</code>. It changes a setting on the guests' LVM disks, so a node only activates a disk when a guest needs it. Disks on shared storage are changed once. Guests keep running, and nothing is erased.</p>
+    <p class="meta">Proxmox strongly recommends this for LVM storage shared between nodes. Proxmox VE 9 makes new disks this way.</p>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-uplvmgo="1">Turn it off</button></div>`);
+}
+function askPin(node) {
+  dialog(`<h3>Pin the port names on ${esc(node)}?</h3>
+    <p>BossMox runs Proxmox's <code>pve-network-interface-pinning</code> on ${esc(node)}. Each network port gets a fixed name (nic0, nic1 and so on), and the network settings, firewall and SDN settings are changed to match. Nothing changes until ${esc(node)} restarts.</p>
+    <p class="meta">BossMox does this anyway before it restarts a node for the upgrade. Doing it now means the restart after the next update already uses the new names, and you can see the result before upgrading.</p>
+    <label class="field restartname"><span>Type ${esc(node)} to confirm</span><input id="rname" data-word="${esc(node.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-uppingo="${esc(node)}" disabled>Pin port names</button></div>`);
+  $("#rname").focus();
+}
+async function runUpgradeFix(action, node, body, words, checkAfter) {
+  dialog(`<h3>${esc(words)}</h3><p>This can take a minute.</p>`);
+  try {
+    const res = await post(`api/action/${action}`, { server: node, ...body });
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) throw new Error((await res.json()).error);
+  } catch (err) {
+    return dialog(
+      `<h3>That didn't finish</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn primary" data-upgrade="1">Back</button></div>`,
+    );
+  }
+  if (checkAfter) return startUpgradeCheck();
+  openUpgrade();
 }
 async function followUpgradeCheck() {
   for (;;) {
@@ -4577,6 +4617,10 @@ document.addEventListener("click", (e) => {
   if (d.pvenote) return d.pvenote === "ended" ? openWin("health") : openRunStart("update");
   if (d.upgrade) return openUpgrade();
   if (d.upgradecheck) return startUpgradeCheck();
+  if (d.upfix === "lvm") return askLvmFix();
+  if (d.uppin) return askPin(d.uppin);
+  if (d.uplvmgo) return runUpgradeFix("upgrade-fix-lvm", onlineNodes()[0], { confirm: "lvm-autoactivation" }, "Turning off autoactivation on every node", true);
+  if (d.uppingo) return runUpgradeFix("upgrade-pin", d.uppingo, { confirm: $("#rname").value.trim() }, `Pinning port names on ${d.uppingo}`, false);
   if (d.runstart) {
     t.disabled = true;
     return startRun();

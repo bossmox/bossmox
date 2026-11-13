@@ -61,6 +61,8 @@ export interface Explained {
   handling: Handling;
   /** Proxmox's own words, for anyone who wants them. */
   original: string;
+  /** The fix BossMox runs for it, when there is one. */
+  fixId?: "lvm-autoactivation";
 }
 
 /** Findings BossMox knows, put in plain words. Anything else is shown as Proxmox wrote it. */
@@ -80,6 +82,7 @@ const KNOWN: { match: RegExp; explain: (f: Finding, m: RegExpExecArray) => Omit<
       detail:
         "Proxmox VE 9 creates new disks on LVM storage with autoactivation off. Disks made before still have it on, and on storage shared between nodes that has known problems, so Proxmox strongly recommends turning it off. BossMox can run Proxmox's own command for it.",
       handling: "fix",
+      fixId: "lvm-autoactivation",
     }),
   },
   {
@@ -88,6 +91,7 @@ const KNOWN: { match: RegExp; explain: (f: Finding, m: RegExpExecArray) => Omit<
       title: "LVM storage: autoactivation can be turned off",
       detail: "Proxmox VE 9 creates new disks with autoactivation off. Turning it off for older disks is optional on storage only this node uses. BossMox can run Proxmox's own command for it.",
       handling: "fix",
+      fixId: "lvm-autoactivation",
     }),
   },
   {

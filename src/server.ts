@@ -59,6 +59,7 @@ import { keyPath, readKey } from "./sealed.js";
 import { createAlertLink, INBOUND_PATH } from "./alert-link.js";
 import { createProxmoxNotice } from "./proxmox-notice.js";
 import { createUpgradeReady } from "./upgrade-ready.js";
+import { createUpgradeFixes } from "./upgrade-fixes.js";
 import { X509Certificate } from "node:crypto";
 import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
@@ -225,7 +226,17 @@ const jobs = createJobs({
 /** Checks GitHub for a newer BossMox every 6 hours while it's on (ADR 0019). A copy with no version never checks. */
 const updates = new UpdateChecker(VERSION, preferences.updateCheck);
 const proxmoxNotice = createProxmoxNotice(pve);
-const upgradeReady = createUpgradeReady({ pve, console: nodeConsole(pve, () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName })) });
+const rootConsole = nodeConsole(pve, () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName }));
+const upgradeReady = createUpgradeReady({ pve, console: rootConsole });
+const upgradeFixes = createUpgradeFixes({
+  console: rootConsole,
+  onlineNodes: async (session) =>
+    (await pve.get<{ node?: string; status?: string }[]>("/cluster/resources?type=node", session.ticket))
+      .filter((r) => r.node && r.status === "online")
+      .map((r) => r.node as string)
+      .sort(),
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
+});
 updates.start();
 const HAS_VERSION = versionNumbers(VERSION) !== null;
 const SHORT_VERSION = VERSION.replace(/^(\d+\.\d+\.\d+(?:-[a-z]+)?).*$/, "$1");
@@ -681,6 +692,7 @@ const actionContext = {
   email,
   alertLink,
   upgradeReady,
+  upgradeFixes,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -971,6 +983,7 @@ const routeContext = {
   updateView,
   proxmoxNotice,
   upgradeReady,
+  upgradeFixes,
   viewerOf,
   epoch: () => preferencesEpoch,
 };

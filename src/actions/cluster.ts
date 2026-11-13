@@ -74,6 +74,14 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       await c.upgradeReady.start(who);
       return null;
     },
+    "upgrade-fix-lvm": async (_name, who, body) => {
+      await c.upgradeFixes.lvm(who, text(body.confirm, 64));
+      return null;
+    },
+    "upgrade-pin": async (name, who, body) => {
+      await c.upgradeFixes.pin(who, name, text(body.confirm, 64));
+      return null;
+    },
     "email-start": async (_name, who) => {
       await c.email.start(who);
       return null;
