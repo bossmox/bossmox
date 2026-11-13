@@ -1848,7 +1848,7 @@ function diskLine(d) {
   // The server's reason, when it gives one, for not offering a drive.
   const blocked = d.blocked || known?.blocked || "";
   return `<div class="stdisk"><div><b>${esc(d.model || d.path)}</b>${d.system ? `<span class="sttag">System disk</span>` : ""}
-      <small>${esc(facts.join(", "))}${d.model ? `, ${esc(d.path)}` : ""}${d.wearLeft === null ? "" : `, ${d.wearLeft}% life left`}</small>
+      <small>${esc(facts.join(", "))}${d.model ? `, ${esc(d.path)}` : ""}${d.wearLeft === null ? "" : `, ${Number(d.wearLeft)}% life left`}</small>
       ${d.givenTo ? `<small>Given to ${esc(d.givenTo)} directly. That VM reads and writes this drive itself, so BossMox won't touch it.</small>` : blocked ? `<small>${esc(blocked)}</small>` : d.otherUses.length ? `<small>Also has ${esc(d.otherUses.join(", "))}, which isn't Proxmox storage.</small>` : ""}</div>
     <div class="actions"><button class="linkbtn healthbtn ${d.failing ? "bad" : ""}" data-diskhealth="${esc(d.path)}"><span class="dot ${d.failing ? "warn" : d.health === "UNKNOWN" ? "" : "running"}"></span>${d.failing ? "Failing" : d.health === "UNKNOWN" ? "Health unknown" : "Healthy"}</button>${wipe ? `<button class="btn" data-diskwipe="${esc(d.path)}">Wipe</button>` : ""}</div></div>`;
 }
@@ -2196,7 +2196,7 @@ function askWipe(path) {
   const node = S.storeNode;
   const d = S.diskData[node].find((x) => x.path === path);
   S.editDisk = path;
-  dialog(`<h3>Wipe ${esc(path)} on ${esc(node)}?</h3><p>Everything on this ${d.sizeGb} GB disk is erased for good. It holds ${esc(d.used)} now.</p>
+  dialog(`<h3>Wipe ${esc(path)} on ${esc(node)}?</h3><p>Everything on this ${Number(d.sizeGb)} GB disk is erased for good. It holds ${esc(d.used)} now.</p>
     <label class="field restartname"><span>Type erase to confirm</span><input id="rname" data-word="erase" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-diskwipego="1" disabled>Wipe disk</button></div>`);
   $("#rname").focus();
