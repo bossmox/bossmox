@@ -60,6 +60,21 @@ Changing notification targets needs Proxmox's notification permission (`Mapping.
 - **Lab, bmx8:** ntfy on VM 906 (its single binary), set up through the page, Send a test, and see the message arrive. A real alert: a backup job to a storage that refuses it fails, and its message arrives. Gotify on 906 the same way. Then Change, and Turn off (only BossMox's two entries go).
 - **Not covered by the lab:** Discord, Slack and Teams need test channels; a real mail provider with TLS.
 
+## Lab results (2026-11-13, bmx8, Proxmox 8.4)
+
+Probed first: Proxmox refuses a template as the whole webhook URL, so only the private path is a secret (`https://discord.com/{{ secrets.path }}`); header values are base64 even when they hold a secret reference; `{{ json title }}` gives valid JSON. A listener on 906 received the path and token as sent, and neither was in the readable config.
+
+Through the page, with ntfy 2.11.0 (checksum-verified) on VM 906:
+1. Health check: "Best practice: get an alert when something fails". Settings → Alerts: Best practice, Set up.
+2. Set up ntfy (topic, `http://10.0.30.248:8080`): Proxmox's test arrived at ntfy. The topic is in Proxmox's private config only.
+3. "It arrived": Settings "Set up", Health check "Proxmox sends alerts to ntfy when something fails" (a pass).
+4. **A real alert:** a container backup into a folder that can't be written failed, and ntfy got "vzdump backup status (bmx8-node1...): backup failed", tagged error.
+5. Change, only the choices: the target and its topic stayed, and the next test arrived.
+6. Turn off: only BossMox's target and matcher went, and Proxmox's built-in ones stayed.
+7. Gotify 2.5.0 on 906, through BossMox's action: the test arrived, and the token wasn't in the readable config.
+
+Not tested end to end: Discord, Slack, Teams (need test channels; the message shapes are unit-tested only). Fixed on the way: the Settings line's list of messages.
+
 ## Not in this
 
 Part (b), BossMox's own health-check alerts. Proxmox has no API for another program to send through its notification targets, and won't hand back the SMTP password, so (b) needs its own sending. Provider presets; Gotify and webhooks; quiet hours (Proxmox's `match-calendar`).
