@@ -33,15 +33,27 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     "alerts-save": async (_name, who, body) => {
       const kind = text(body.kind, 16) as AlertKind;
       if (!KINDS.includes(kind)) throw new HttpError(400, "Pick where alerts go.");
+      const choices = { updates: body.updates === true, allBackups: body.allBackups === true };
+      if (kind === "email") {
+        // Each node gets BossMox's CA first, then Proxmox gets the address and key, then BossMox records the key
+        // (ADR 0040). A failed save leaves the old key working.
+        if (!c.email.status().account) throw new HttpError(400, "Connect an Outlook account first.");
+        const { url, key, keep } = await c.alertLink.connect(who);
+        await c.alerts.save(who, { kind, server: url, token: key, ...choices });
+        keep();
+        return null;
+      }
       await c.alerts.save(who, {
         kind,
         server: text(body.alertServer, 256),
         topic: text(body.topic, 64),
         link: text(body.link, 1024),
         token: text(body.token, 512),
-        updates: body.updates === true,
-        allBackups: body.allBackups === true,
+        ...choices,
       });
+      // Saved somewhere else: the Outlook sign-in and the key for it aren't needed any more.
+      c.alertLink.forget();
+      if (c.email.status().account) await c.email.remove(who);
       return null;
     },
     "alerts-test": async (_name, who) => {
@@ -54,6 +66,28 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     },
     "alerts-remove": async (_name, who) => {
       await c.alerts.remove(who);
+      c.alertLink.forget();
+      if (c.email.status().account) await c.email.remove(who);
+      return null;
+    },
+    "email-start": async (_name, who) => {
+      await c.email.start(who);
+      return null;
+    },
+    "email-cancel": async (_name, who) => {
+      await c.email.cancel(who);
+      return null;
+    },
+    "email-recipients": async (_name, who, body) => {
+      await c.email.recipients(who, text(body.to, 4096));
+      return null;
+    },
+    "email-test": async (_name, who) => {
+      await c.email.test(who);
+      return null;
+    },
+    "email-remove": async (_name, who) => {
+      await c.email.remove(who);
       return null;
     },
     "tiebreaker-prepare": async (_name, who, body) => {

@@ -11,4 +11,6 @@
 
 - `make-release.sh` builds the files a GitHub release carries.
 - `update-alpine.sh` copies the working code into a BossMox VM for testing.
-- `create-alpine-vm.sh`, `create-lxc.sh`, `install-in-lxc.sh`, `update.sh` and `bossmox.service` are the older manual setups (a VM by hand, or a container), kept for people who prefer them.
+- `create-alpine-vm.sh` makes the same Alpine VM by hand, for testing the installer step by step.
+
+The VM is the one supported install (0.2.1). The container scripts and the Docker image were removed then.

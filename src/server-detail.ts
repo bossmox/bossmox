@@ -26,11 +26,22 @@ export interface RawUpdate {
 export interface RawRepository {
   Enabled?: boolean | number;
   URIs?: string[];
+  Suites?: string[];
   Components?: string[];
+}
+/** One finding Proxmox reports about a source: its origin, or a problem with one of its properties. */
+export interface RawRepositoryInfo {
+  path?: string;
+  index?: number;
+  kind?: string;
+  property?: string;
+  message?: string;
 }
 export interface RawRepositories {
   digest?: string;
   files?: { path?: string; repositories?: RawRepository[] }[];
+  errors?: { path?: string; error?: string }[];
+  infos?: RawRepositoryInfo[];
   "standard-repos"?: { handle: string; status?: number }[];
 }
 export interface RawService {
@@ -282,6 +293,8 @@ export interface RollingInput {
   ejectable?: { id: number; name: string; slots: string[]; node: string }[];
   /** Proxmox's reason when this node's last check for updates failed: its list may be stale, so it sits this run out (#73). */
   checkFailed?: string | null;
+  /** Its Debian or Proxmox sources name another release, so an update would be a major upgrade (ADR 0039). */
+  releaseMismatch?: string | null;
 }
 
 /** Why the latest check for updates failed, from Proxmox's task list; null when it passed, is running, or never ran. */
@@ -331,6 +344,8 @@ export function buildRollingPlan(servers: RollingInput[], quorate: Section<boole
   const checked = servers.filter((s) => !(s.online && s.checkFailed));
   const unknown = checked.filter((s) => s.online && s.updates === null).map((s) => s.name);
   if (unknown.length) blocked.push(`BossMox can't read the updates on: ${unknown.join(", ")}.`);
+  // A node half way to another major version stops the whole run: the others shouldn't update around it either.
+  for (const s of servers) if (s.online && s.releaseMismatch) blocked.push(s.releaseMismatch);
   for (const s of checked) if (s.busy.length) blocked.push(`${s.name} is busy. Wait for this to finish: ${s.busy.join(", ")}.`);
   // Guests only have to move off a server that's going to restart.
   for (const s of checked) if (s.rebootNeeded && (s.updates ?? 0) > 0) blocked.push(...s.cantMove);

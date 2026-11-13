@@ -64,7 +64,7 @@ Protect everything in one step with a nightly schedule that covers new guests to
 
 ### Nodes and updates
 
-Switch to the free update channel in one click, check for and install updates in a live terminal, and update a whole cluster one node at a time, moving guests out of the way and back.
+Switch to the free update channel in one click, check for and install updates in a live terminal, and update a whole cluster one node at a time, moving guests out of the way and back. A node whose update sources point at the next major release is refused, so a normal update can never turn into an unattended upgrade to a new version.
 
 ![A node's overview, with its update channel](docs/screenshots/node.png)
 *A node at a glance: how busy it is, what version it runs, which update channel it's on, and what's running on it.*
@@ -83,7 +83,7 @@ The ways a cluster survives a failure, each explained in plain words and set up 
 - **A backup heartbeat link**, when every node has a second network port, so one network problem can't make a healthy node look lost.
 - **Keep this guest running:** Proxmox's high availability restarts a guest on another node when its node fails. BossMox checks the guest can run elsewhere first, and warns about the setups that make HA restart guests that didn't need it.
 - **A tie-breaker for two-node clusters**, so losing one node doesn't stop the other.
-- **Alerts:** Proxmox's own messages about failed backups, fenced nodes and new updates go to ntfy, Discord, Slack, Microsoft Teams or Gotify. Email is coming in 0.2.1.
+- **Alerts:** Proxmox's own messages about failed backups, fenced nodes and new updates go to ntfy, Discord, Slack, Microsoft Teams or Gotify, or by email from an Outlook.com or Microsoft 365 account you sign in with.
 
 ### Setup
 
@@ -110,6 +110,8 @@ Hardware security keys (WebAuthn) and recovery codes don't work in BossMox yet; 
 - Anything that erases or changes something asks you first and names it. BossMox checks for itself instead of trusting Proxmox to refuse, because sometimes Proxmox doesn't.
 - Its VM has no logins. Setup is unlocked by a code shown only on its console, and the root password used during setup isn't kept.
 - **Treat the BossMox VM like a node.** Every admin's password passes through it at sign-in, so only full admins should have any rights on it.
+- BossMox has its own small certificate authority for its HTTPS certificate. It can only vouch for BossMox's own addresses and names, and only for a website, so importing it into your browser to stop the certificate warning is safe. It's at `/etc/bossmox/ca.crt` on the BossMox VM.
+- Email alerts keep the Outlook sign-in encrypted on the BossMox VM. It can send mail as that account and can't read it.
 
 Found a security problem? Please report it privately; see [SECURITY.md](SECURITY.md).
 
@@ -117,7 +119,7 @@ Found a security problem? Please report it privately; see [SECURITY.md](SECURITY
 
 BossMox checks GitHub for a new version every 6 hours and tells you on the desktop and in the health check. Each check tells GitHub this BossMox's internet address; you can turn it off in the health check.
 
-To update, run this as root on the node that holds the BossMox VM. Your settings stay, everyone is signed out while it restarts, and if the new version doesn't start, the old one comes back:
+To update, run this as root on the node that holds the BossMox VM. Your settings stay, everyone is signed out while it restarts, and if the new version doesn't start, the old one comes back. Updating from 0.2.0 or earlier gives BossMox a new certificate, so your browser warns about it once more:
 
 ```sh
 bash -c "$(curl -fsSL https://github.com/bossmox/bossmox/releases/latest/download/update-bossmox.sh)"
@@ -129,11 +131,11 @@ To start setup again with a new code, run this on that node, with the VM's ID. Y
 qm guest exec <VM ID> -- bossmox-reset
 ```
 
-To remove BossMox completely: `qm destroy <VM ID> --purge 1`. Nothing else was changed, so nothing else needs undoing.
+To remove BossMox completely: `qm destroy <VM ID> --purge 1`. If you set up email alerts, each node also trusts BossMox's certificate authority; remove that on each node with `rm /usr/local/share/ca-certificates/bossmox-ca.crt && update-ca-certificates --fresh`, and turn off the alert in Proxmox's Notifications. Nothing else was changed.
 
-## Running it somewhere else
+## Proxies and development
 
-Docker, another machine, reverse proxies and development: see [docs/running-elsewhere.md](docs/running-elsewhere.md).
+Reverse proxies, trying it without Proxmox, and development: see [docs/running-elsewhere.md](docs/running-elsewhere.md). The VM from the one-line install is the one supported way to run BossMox.
 
 ## How it's built
 

@@ -10,6 +10,7 @@ Version numbers: fixes to a released version bump the last number (0.2.0 to 0.2.
 
 - [Alerts by email](https://github.com/bossmox/bossmox/issues/34)
 - [Refuse to update a node whose repositories point at a different release](https://github.com/bossmox/bossmox/issues/94)
+- [A sponsor link inside the app](https://github.com/bossmox/bossmox/issues/40)
 
 ## Then: [Proxmox upgrades](https://github.com/bossmox/bossmox/milestone/8) (0.3.0)
 

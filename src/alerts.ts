@@ -12,9 +12,9 @@ import type { Form, PveClient } from "./pve.js";
 export const TARGET = "bossmox-alerts-target";
 export const MATCHER = "bossmox-alerts";
 
-export type AlertKind = "ntfy" | "discord" | "slack" | "teams" | "gotify";
-export const KINDS: AlertKind[] = ["ntfy", "discord", "slack", "teams", "gotify"];
-export const KIND_NAMES: Record<AlertKind, string> = { ntfy: "ntfy", discord: "Discord", slack: "Slack", teams: "Microsoft Teams", gotify: "Gotify" };
+export type AlertKind = "ntfy" | "discord" | "slack" | "teams" | "gotify" | "email";
+export const KINDS: AlertKind[] = ["ntfy", "discord", "slack", "teams", "gotify", "email"];
+export const KIND_NAMES: Record<AlertKind, string> = { ntfy: "ntfy", discord: "Discord", slack: "Slack", teams: "Microsoft Teams", gotify: "Gotify", email: "email (Outlook)" };
 
 export interface AlertInput {
   kind: AlertKind;
@@ -62,6 +62,22 @@ export function targetForm(input: AlertInput, keepSecrets = false): { type: "web
     const server = parseServer(input.server ?? "", "Gotify address");
     if (!keepSecrets && !input.token) throw new HttpError(400, "Paste the Gotify app token.");
     return { type: "gotify", form: { server: server.origin + server.pathname.replace(/\/$/, ""), comment, ...(keepSecrets ? {} : { token: input.token as string }) } };
+  }
+  // Email goes through BossMox (ADR 0040): Proxmox posts to BossMox's own address with a key, and BossMox sends it on.
+  if (input.kind === "email") {
+    const to = parseServer(input.server ?? "", "BossMox address");
+    if (!keepSecrets && !/^[0-9a-f]{64}$/.test(input.token ?? "")) throw new HttpError(400, "BossMox didn't make a key for Proxmox.");
+    return {
+      type: "webhook",
+      form: {
+        method: "post",
+        url: to.href,
+        header: [header("Content-Type", "application/json"), header("Authorization", "Bearer {{ secrets.key }}")],
+        body: b64('{"title": {{ json title }}, "message": {{ json message }}, "severity": {{ json severity }}}'),
+        comment,
+        ...(keepSecrets ? {} : { secret: [secret("key", input.token as string)] }),
+      },
+    };
   }
   if (input.kind === "ntfy") {
     const server = parseServer(input.server || "https://ntfy.sh", "ntfy server");
@@ -193,13 +209,21 @@ export interface AlertsDeps {
 export function createAlerts(deps: AlertsDeps) {
   const { pve } = deps;
 
+  /** Changing where alerts go needs Proxmox's own right to change notification targets. Email asks the same question. */
+  async function canChange(session: Session): Promise<boolean> {
+    const perms = await pve
+      .get<Record<string, Record<string, number>>>("/access/permissions?path=%2Fmapping%2Fnotifications", session.ticket)
+      .catch((): Record<string, Record<string, number>> => ({}));
+    return perms["/mapping/notifications"]?.["Mapping.Modify"] === 1;
+  }
+
   async function view(session: Session): Promise<AlertsView & { canChange: boolean; viaProxy: boolean }> {
     const t = session.ticket;
-    const [targets, matchers, root, perms] = await Promise.all([
+    const [targets, matchers, root, change] = await Promise.all([
       pve.get<RawTarget[]>("/cluster/notifications/targets", t),
       pve.get<RawMatcher[]>("/cluster/notifications/matchers", t),
       pve.get<{ email?: string }>("/access/users/root@pam", t).catch(() => ({ email: undefined })),
-      pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2Fmapping%2Fnotifications", t).catch((): Record<string, Record<string, number>> => ({})),
+      canChange(session),
     ]);
     const mine = targets.find((x) => x.name === TARGET);
     const detail = mine
@@ -207,7 +231,7 @@ export function createAlerts(deps: AlertsDeps) {
       : { url: undefined, server: undefined };
     return {
       ...readAlerts(targets, matchers, root.email ?? null, detail.url ?? null, detail.server ?? null),
-      canChange: perms["/mapping/notifications"]?.["Mapping.Modify"] === 1,
+      canChange: change,
       viaProxy: deps.viaProxy,
     };
   }
@@ -273,5 +297,5 @@ export function createAlerts(deps: AlertsDeps) {
     deps.audit("alerts-remove", session.username, {});
   }
 
-  return { view, save, test, confirm, remove };
+  return { view, canChange, save, test, confirm, remove };
 }

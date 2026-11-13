@@ -75,6 +75,12 @@ export interface HealthInput {
   heartbeat?: HeartbeatState | null;
   /** Where Proxmox's own alerts go, if anywhere (ADR 0038). */
   alerts?: AlertsView | null;
+  /** Why email alerts stopped, when Microsoft refused BossMox (ADR 0040). */
+  emailFailed?: string | null;
+  /** Nodes that don't have BossMox's CA yet, so their alerts can't reach it for email (ADR 0040). */
+  linkMissing?: string[];
+  /** Days left on BossMox's own certificate. */
+  certDaysLeft?: number | null;
   /** Disks detached from their guests but still on storage (ADR 0031). */
   leftover?: Leftover[];
   channels: { node: string; ok: boolean; headline: string; note: string; offer: string | null }[];
@@ -177,34 +183,6 @@ export function buildHealth(h: HealthInput): Check[] {
           detail: `${n} managed by HA. When a node restarts, HA moves ${them} to another node first. Before shutting every node down at once, stop the HA guests first: otherwise HA can leave one half-moved and locked.`,
         });
     }
-    // Alerts (ADR 0038): best practice while Proxmox's alerts reach no one, a pass once a test was seen to arrive.
-    const al = h.alerts;
-    if (al) {
-      const fix = { kind: "settings" as const, label: "Open Settings" };
-      if (al.kind && al.confirmed)
-        add({ id: "alerts", group: "Nodes", status: "ok", title: `Proxmox sends alerts to ${KIND_NAMES[al.kind]} when something fails`, detail: al.where ? `Through ${al.where}.` : "" });
-      else if (al.kind)
-        add({
-          id: "alerts",
-          group: "Nodes",
-          status: "tip",
-          title: "Best practice: check that alerts arrive",
-          detail: `Alerts go to ${KIND_NAMES[al.kind]}, but no test has been seen to arrive yet. Send a test from Settings, and say whether it came.`,
-          fix,
-        });
-      else if (al.others.length)
-        add({ id: "alerts", group: "Nodes", status: "ok", title: "Proxmox sends alerts when something fails", detail: `Through ${al.others.join(", ")}, set up outside BossMox.` });
-      else if (al.nothingDelivers)
-        add({
-          id: "alerts",
-          group: "Nodes",
-          status: "tip",
-          title: "Best practice: get an alert when something fails",
-          detail:
-            "Right now a fenced node, a failed backup or a failed replication tells no one: Proxmox's built-in alert goes to root's email address, and none is set. Settings can send them to your phone (ntfy), Discord, Slack, Teams or Gotify.",
-          fix,
-        });
-    }
     // A guest HA gave up on (ADR 0036): it won't start again by itself.
     for (const g of h.guests.filter((x) => x.ha === "error")) {
       const lock = g.lock ? ` It's also locked (${g.lock})${g.lock === "migrate" ? ", which usually means a move was cut off, such as by every node shutting down at once" : ""}.` : "";
@@ -241,6 +219,53 @@ export function buildHealth(h: HealthInput): Check[] {
         detail: `${why} That needs a second network port on every node, on a network of its own${hb.nodes.length ? `; ${list(hb.nodes)} ${hb.nodes.length === 1 ? "doesn't have one" : "don't have one"}` : ", shared by all of them"}.`,
       });
   }
+  // Alerts and BossMox's own certificate matter on a single node as much as on a cluster.
+  // Alerts (ADR 0038): best practice while Proxmox's alerts reach no one, a pass once a test was seen to arrive.
+  const al = h.alerts;
+  if (al) {
+    const fix = { kind: "settings" as const, label: "Open Settings" };
+    if (al.kind && al.confirmed)
+      add({ id: "alerts", group: "Nodes", status: "ok", title: `Proxmox sends alerts to ${KIND_NAMES[al.kind]} when something fails`, detail: al.where ? `Through ${al.where}.` : "" });
+    else if (al.kind)
+      add({
+        id: "alerts",
+        group: "Nodes",
+        status: "tip",
+        title: "Best practice: check that alerts arrive",
+        detail: `Alerts go to ${KIND_NAMES[al.kind]}, but no test has been seen to arrive yet. Send a test from Settings, and say whether it came.`,
+        fix,
+      });
+    else if (al.others.length)
+      add({ id: "alerts", group: "Nodes", status: "ok", title: "Proxmox sends alerts when something fails", detail: `Through ${al.others.join(", ")}, set up outside BossMox.` });
+    else if (al.nothingDelivers)
+      add({
+        id: "alerts",
+        group: "Nodes",
+        status: "tip",
+        title: "Best practice: get an alert when something fails",
+        detail:
+          "Right now a fenced node, a failed backup or a failed replication tells no one: Proxmox's built-in alert goes to root's email address, and none is set. Settings can send them to your phone (ntfy), Discord, Slack, Teams or Gotify.",
+        fix,
+      });
+  }
+  if (h.emailFailed) add({ id: "email", group: "Nodes", status: "warn", title: "Email alerts have stopped", detail: h.emailFailed, fix: { kind: "settings" as const, label: "Open Settings" } });
+  if (h.linkMissing?.length)
+    add({
+      id: "email-nodes",
+      group: "Nodes",
+      status: "warn",
+      title: "Some nodes can't send alerts to BossMox for email",
+      detail: `${h.linkMissing.join(", ")} ${h.linkMissing.length === 1 ? "hasn't" : "haven't"} been given BossMox's certificate, so ${h.linkMissing.length === 1 ? "its" : "their"} alerts can't reach it. In Settings, choose Change under Alerts and save again as root@pam.`,
+      fix: { kind: "settings" as const, label: "Open Settings" },
+    });
+  if (h.certDaysLeft !== undefined && h.certDaysLeft !== null && h.certDaysLeft < 30)
+    add({
+      id: "bossmox-cert",
+      group: "Nodes",
+      status: "warn",
+      title: h.certDaysLeft < 0 ? "BossMox's certificate has run out" : `BossMox's certificate runs out in ${h.certDaysLeft} days`,
+      detail: "BossMox renews it every day once under 60 days are left, so this means renewing failed. On the BossMox machine, run bossmox-cert renew as root and read what it says.",
+    });
   const badChannels = h.channels.filter((c) => !c.ok);
   if (badChannels.length)
     for (const c of badChannels)

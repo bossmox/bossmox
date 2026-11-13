@@ -52,6 +52,12 @@ import { guestActions } from "./actions/guests.js";
 import { storageActions } from "./actions/storage.js";
 import { backupActions } from "./actions/backups.js";
 import { createAlerts } from "./alerts.js";
+import { releaseMismatch } from "./release-guard.js";
+import { createEmail, emailPath } from "./email.js";
+import { CLIENT_ID, createOutlook } from "./outlook.js";
+import { keyPath, readKey } from "./sealed.js";
+import { createAlertLink, INBOUND_PATH } from "./alert-link.js";
+import { X509Certificate } from "node:crypto";
 import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
 import { createHeartbeat, nodeConsole } from "./heartbeat.js";
@@ -157,6 +163,37 @@ const tieBreaker = createTieBreaker({
 
 /** Alerts through Proxmox's own notifications (ADR 0038). */
 const alerts = createAlerts({ pve, viaProxy: config.behindProxy, audit: (event, who, detail) => audit(event, who, "settings", detail) });
+const email = createEmail({
+  file: emailPath(process.env),
+  key: readKey(keyPath(process.env)),
+  outlook: createOutlook(process.env.BOSSMOX_OUTLOOK_CLIENT_ID || CLIENT_ID),
+  canChange: alerts.canChange,
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
+});
+setInterval(() => void email.keepAlive(), 6 * 60 * 60 * 1000).unref();
+const certDir = path.dirname(keyPath(process.env));
+const alertLink = createAlertLink({
+  file: path.join(path.dirname(emailPath(process.env)), "alert-link.json"),
+  caFile: path.join(certDir, "ca.crt"),
+  namesFile: path.join(certDir, "cert-names"),
+  port: config.port,
+  hostAllowed: (host) => config.allowedHosts.has(host),
+  pve,
+  console: nodeConsole(pve, () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName })),
+  email,
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
+});
+/** Days until BossMox's own certificate runs out, for Health check: the daily job renews it with 60 left (ADR 0040). */
+function certDaysLeft(): number | null {
+  const file = process.env.TLS_CERT_FILE;
+  if (!file) return null;
+  try {
+    return Math.floor((new Date(new X509Certificate(readFileSync(file)).validTo).getTime() - Date.now()) / 86_400_000);
+  } catch {
+    return null;
+  }
+}
+void email.keepAlive();
 
 /** Keep this guest running (ADR 0036). Where a guest could go comes from the same planning moves use. */
 const ha = createHa({
@@ -487,6 +524,13 @@ async function loadHealth(session: Session) {
     leftover,
     heartbeat: heartbeatView,
     alerts: alertsView,
+    emailFailed:
+      email.status().failed ??
+      (alertsView?.kind === "email" && !email.status().account
+        ? "Proxmox sends alerts to BossMox for email, but no Outlook account is connected, so they go nowhere. Set up email again in Settings."
+        : null),
+    linkMissing: alertsView?.kind === "email" ? alertLink.missing(data.nodes.map((n) => n.name)) : [],
+    certDaysLeft: certDaysLeft(),
     channels: details.flatMap((d) => (d?.channel ? [{ node: d.name, ...d.channel }] : [])),
     updates: details.flatMap((d) => (d?.updates ? [{ node: d.name, total: d.updates.total }] : [])),
     guests: data.vms,
@@ -629,6 +673,8 @@ const actionContext = {
   ha,
   tieBreaker,
   alerts,
+  email,
+  alertLink,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -714,6 +760,11 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
     const name = text(body.server, 64);
     if (action === "install-updates" || action === "node-console") {
       if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+      if (action === "install-updates") {
+        // Proxmox's own updater would carry out a major upgrade just the same (ADR 0039).
+        const mismatch = releaseMismatch(name, await pve.get<RawRepositories>(`/nodes/${encodeURIComponent(name)}/apt/repositories`, session.ticket).catch(() => null));
+        if (mismatch) return json(res, 400, { error: mismatch });
+      }
       audit(action === "install-updates" ? "updater" : "console", session.username, addressOf(req), { node: name });
       return await openNodeTerminal(res, name, session, action === "install-updates" ? { cmd: "upgrade" } : {});
     }
@@ -760,6 +811,16 @@ function audit(event: string, who: string, address: string, fields: Record<strin
   console.log(auditLine(new Date(), event, who, address, fields));
 }
 let lastLockoutLog = 0;
+const INBOUND_MAX_BODY = 64 * 1024;
+const lastInboundLog = new Map<string, number>();
+/** A refused alert, at most one line per address every 10 seconds: anyone can knock on this route. */
+function auditInbound(address: string, status: number) {
+  const at = Date.now();
+  if (at - (lastInboundLog.get(address) ?? 0) < 10_000) return;
+  if (lastInboundLog.size > 1000) lastInboundLog.clear();
+  lastInboundLog.set(address, at);
+  audit("alert-refused", "proxmox", address, { status });
+}
 /** A lockout can be hammered, and one line every 10 seconds says all it needs to without filling a small disk. */
 function auditRefused(event: string, who: string, address: string, status: number) {
   if (status === 429) {
@@ -882,6 +943,7 @@ const routeContext = {
   cache,
   guestPath,
   alerts,
+  email,
   healthCache,
   ha,
   heartbeat,
@@ -915,6 +977,19 @@ const handler: http.RequestListener = async (req, res) => {
     // A target that can't be read as a path ("//") is the client's mistake, not Proxmox's: 400, not 502.
     const route = requestPath(req.url);
     if (route === null) return json(res, 400, { error: "That address isn't valid." });
+    // Proxmox's webhook, not a browser: no cookie and no BossMox header. Its own key and address check it (ADR 0040).
+    if (req.method === "POST" && route === INBOUND_PATH) {
+      const from = addressOf(req);
+      // Proxmox's backup reports can run long, so this route takes more than the pages' 8 KB.
+      const body = await readJsonBody(req, { maxBytes: INBOUND_MAX_BODY, waitMs: BODY_WAIT_MS }).catch((err: Error) => {
+        auditInbound(from, err instanceof HttpError ? err.status : 400);
+        throw err;
+      });
+      const auth = req.headers.authorization;
+      const r = await alertLink.receive(Array.isArray(auth) ? auth[0] : auth, from, body);
+      if (r.status !== 200) auditInbound(from, r.status);
+      return json(res, r.status, r.error ? { error: r.error } : { ok: true });
+    }
     if (req.method === "POST") return await handlePost(req, res, route);
     if (req.method !== "GET") return json(res, 405, { error: "That method isn't allowed." });
     if (route === "/healthz") return json(res, 200, { ok: true });

@@ -242,3 +242,12 @@ test("two votes and no tie-breaker: the warning opens Settings; a disconnected o
   assert.match(two({})?.detail ?? "", /set up in Settings/);
   assert.equal(two({ tieBreakerDown: true })?.fix, undefined);
 });
+
+test("on a single node, email trouble, missing nodes and an expiring certificate still show", () => {
+  const input = { ...base(), emailFailed: "Microsoft stopped letting BossMox send.", linkMissing: ["rockylab"], certDaysLeft: 12 };
+  const checks = buildHealth(input);
+  assert.equal(by(checks, "email")?.status, "warn");
+  assert.equal(by(checks, "email-nodes")?.status, "warn");
+  assert.match(by(checks, "bossmox-cert")?.title ?? "", /12 days/);
+  assert.equal(by(buildHealth({ ...base(), certDaysLeft: 45 }), "bossmox-cert"), undefined, "nothing while renewal still has time");
+});
