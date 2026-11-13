@@ -63,6 +63,7 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
         }
         return json(res, 200, { guests: await c.ha.list(session.ticket) });
     },
+    "/api/alerts": async (_route, session, _params, _req, res) => json(res, 200, await c.alerts.view(session)),
     "/api/tiebreaker": async (_route, session, params, _req, res) => {
         // verify=1 reads pvecm status in a node's console after the person ran the setup there.
         if (params.get("verify") === "1") return json(res, 200, await c.tieBreaker.verify(session));

@@ -23,6 +23,14 @@ export interface Identity {
 const READ_WAIT_MS = 8000;
 const WRITE_WAIT_MS = 60_000;
 
+/** A request body. A list is sent as the same name repeated, which is how Proxmox takes its array settings. */
+export type Form = Record<string, string | string[]>;
+export function encodeForm(form: Form): string {
+  const out = new URLSearchParams();
+  for (const [k, v] of Object.entries(form)) for (const one of Array.isArray(v) ? v : [v]) out.append(k, one);
+  return out.toString();
+}
+
 export class PveClient {
   private current = 0;
 
@@ -169,12 +177,12 @@ export class PveClient {
     return { username: data.username, ticket: data.ticket, csrf: data.CSRFPreventionToken ?? "", needsCode: data.NeedTFA === 1 };
   }
 
-  post<T>(path: string, who: Identity, form: Record<string, string> = {}): Promise<T> {
-    return this.request<T>("POST", path, who.ticket, new URLSearchParams(form).toString(), who.csrf);
+  post<T>(path: string, who: Identity, form: Form = {}): Promise<T> {
+    return this.request<T>("POST", path, who.ticket, encodeForm(form), who.csrf);
   }
 
-  put<T>(path: string, who: Identity, form: Record<string, string> = {}): Promise<T> {
-    return this.request<T>("PUT", path, who.ticket, new URLSearchParams(form).toString(), who.csrf);
+  put<T>(path: string, who: Identity, form: Form = {}): Promise<T> {
+    return this.request<T>("PUT", path, who.ticket, encodeForm(form), who.csrf);
   }
 
   delete<T>(path: string, who: Identity): Promise<T> {

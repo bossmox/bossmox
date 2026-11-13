@@ -4,6 +4,7 @@
  * gathers Proxmox's answers and passes them in.
  */
 import type { HeartbeatState } from "./redundancy.js";
+import { KIND_NAMES, type AlertsView } from "./alerts.js";
 import type { NetCheck } from "./cluster-net.js";
 import type { StorageMap } from "./storage-map.js";
 
@@ -55,6 +56,8 @@ export interface HealthInput {
   ha?: { policy: string; guests: number };
   /** Whether the heartbeat has a backup link, or could (ADR 0035). */
   heartbeat?: HeartbeatState | null;
+  /** Where Proxmox's own alerts go, if anywhere (ADR 0038). */
+  alerts?: AlertsView | null;
   /** Disks detached from their guests but still on storage (ADR 0031). */
   leftover?: Leftover[];
   channels: { node: string; ok: boolean; headline: string; note: string; offer: string | null }[];
@@ -105,6 +108,15 @@ export function buildHealth(h: HealthInput): Check[] {
       const them = ha.guests === 1 ? "it" : "them";
       if (ha.policy !== "migrate") add({ id: "ha-shutdown", group: "Nodes", status: "warn", title: "HA stops its guests when a node restarts outside BossMox", detail: `${n} managed by HA. When a node is restarted from Proxmox or by hand, Proxmox's default stops ${them} until that node is back. With Migrate, HA moves ${them} to another node first and back afterwards. BossMox's own restarts move guests first either way.`, fix: { kind: "ha-policy", label: "Fix this" } });
       else add({ id: "ha-shutdown", group: "Nodes", status: "ok", title: "HA moves its guests before a node restarts", detail: `${n} managed by HA. When a node restarts, HA moves ${them} to another node first. Before shutting every node down at once, stop the HA guests first: otherwise HA can leave one half-moved and locked.` });
+    }
+    // Alerts (ADR 0038): best practice while Proxmox's alerts reach no one, a pass once a test was seen to arrive.
+    const al = h.alerts;
+    if (al) {
+      const fix = { kind: "settings" as const, label: "Open Settings" };
+      if (al.kind && al.confirmed) add({ id: "alerts", group: "Nodes", status: "ok", title: `Proxmox sends alerts to ${KIND_NAMES[al.kind]} when something fails`, detail: al.where ? `Through ${al.where}.` : "" });
+      else if (al.kind) add({ id: "alerts", group: "Nodes", status: "tip", title: "Best practice: check that alerts arrive", detail: `Alerts go to ${KIND_NAMES[al.kind]}, but no test has been seen to arrive yet. Send a test from Settings, and say whether it came.`, fix });
+      else if (al.others.length) add({ id: "alerts", group: "Nodes", status: "ok", title: "Proxmox sends alerts when something fails", detail: `Through ${al.others.join(", ")}, set up outside BossMox.` });
+      else if (al.nothingDelivers) add({ id: "alerts", group: "Nodes", status: "tip", title: "Best practice: get an alert when something fails", detail: "Right now a fenced node, a failed backup or a failed replication tells no one: Proxmox's built-in alert goes to root's email address, and none is set. Settings can send them to your phone (ntfy), Discord, Slack, Teams or Gotify.", fix });
     }
     // A guest HA gave up on (ADR 0036): it won't start again by itself.
     for (const g of h.guests.filter((x) => x.ha === "error")) {

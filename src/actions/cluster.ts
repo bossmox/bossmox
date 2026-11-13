@@ -1,5 +1,6 @@
 
 import { AuthError } from "../auth.js";
+import { KINDS, type AlertKind } from "../alerts.js";
 import { applyChannel, ChannelError } from "../update-channel.js";
 import { canChangeCluster, KEEP_FREE_CHOICES, writePreferences } from "../preferences.js";
 import { runMoveHome, runMoveOff } from "../moves.js";
@@ -28,6 +29,24 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     },
     "ha-recover": async (_name, who, body) => {
       await c.ha.recover(who, guestId(body.id));
+      return null;
+    },
+    "alerts-save": async (_name, who, body) => {
+      const kind = text(body.kind, 16) as AlertKind;
+      if (!KINDS.includes(kind)) throw new HttpError(400, "Pick where alerts go.");
+      await c.alerts.save(who, { kind, server: text(body.alertServer, 256), topic: text(body.topic, 64), link: text(body.link, 1024), token: text(body.token, 512), updates: body.updates === true, allBackups: body.allBackups === true });
+      return null;
+    },
+    "alerts-test": async (_name, who) => {
+      await c.alerts.test(who);
+      return null;
+    },
+    "alerts-confirm": async (_name, who) => {
+      await c.alerts.confirm(who);
+      return null;
+    },
+    "alerts-remove": async (_name, who) => {
+      await c.alerts.remove(who);
       return null;
     },
     "tiebreaker-prepare": async (_name, who, body) => {

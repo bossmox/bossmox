@@ -51,6 +51,7 @@ import { clusterActions } from "./actions/cluster.js";
 import { guestActions } from "./actions/guests.js";
 import { storageActions } from "./actions/storage.js";
 import { backupActions } from "./actions/backups.js";
+import { createAlerts } from "./alerts.js";
 import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
 import { createHeartbeat, nodeConsole } from "./heartbeat.js";
@@ -151,6 +152,9 @@ const tieBreaker = createTieBreaker({
   },
   audit: (event, who, detail) => audit(event, who, "settings", detail),
 });
+
+/** Alerts through Proxmox's own notifications (ADR 0038). */
+const alerts = createAlerts({ pve, viaProxy: config.behindProxy, audit: (event, who, detail) => audit(event, who, "settings", detail) });
 
 /** Keep this guest running (ADR 0036). Where a guest could go comes from the same planning moves use. */
 const ha = createHa({
@@ -434,7 +438,7 @@ async function loadHealth(session: Session) {
   const data = await overview(session);
   const online = data.nodes.filter((n) => n.online).map((n) => n.name);
   const weekAgo = Date.now() / 1000 - 7 * 86400;
-  const [status, nodeConfig, qdevice, backupJobs, tasks, details, maps, network, options, haResources, leftover, heartbeatView] = await Promise.all([
+  const [status, nodeConfig, qdevice, backupJobs, tasks, details, maps, network, options, haResources, leftover, heartbeatView, alertsView] = await Promise.all([
     pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", t).catch(() => []),
     pve.get<{ node?: string; quorum_votes?: string | number }[]>("/cluster/config/nodes", t).catch(() => []),
     pve.get<Record<string, unknown>>("/cluster/config/qdevice", t).catch(() => ({})),
@@ -447,6 +451,7 @@ async function loadHealth(session: Session) {
     pve.get<{ sid?: string }[]>("/cluster/ha/resources", t).catch(() => []),
     leftoverDisks(data.vms, t),
     heartbeat.view(session).catch(() => null),
+    alerts.view(session).catch(() => null),
   ]);
   const cluster = status.find((x) => x.type === "cluster");
   const names = new Map(data.vms.map((v) => [String(v.id), v.name]));
@@ -460,6 +465,7 @@ async function loadHealth(session: Session) {
     ha: { policy: props(options.ha).shutdown_policy ?? "conditional", guests: haResources.filter((r) => /^(vm|ct):/.test(r.sid ?? "")).length },
     leftover,
     heartbeat: heartbeatView,
+    alerts: alertsView,
     channels: details.flatMap((d) => (d?.channel ? [{ node: d.name, ...d.channel }] : [])),
     updates: details.flatMap((d) => (d?.updates ? [{ node: d.name, total: d.updates.total }] : [])),
     guests: data.vms,
@@ -587,6 +593,7 @@ const actionContext = {
   heartbeat,
   ha,
   tieBreaker,
+  alerts,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -818,7 +825,7 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
 
 
 /** What the GET routes get from the server (review #61). */
-const routeContext = { FULL_LOG, HEALTH_CACHE_MS, VERSION, cache, guestPath, healthCache, ha, heartbeat, jobs, tieBreaker, json, loadBackups, loadCreatePlan, loadHealth, loadNetwork, loadRecommended, loadRestorePlan, loadServerDetail, loadStorageMap, nodeDisks, overview, pve, snapshotFixFor, updateView, viewerOf, epoch: () => preferencesEpoch };
+const routeContext = { FULL_LOG, HEALTH_CACHE_MS, VERSION, cache, guestPath, alerts, healthCache, ha, heartbeat, jobs, tieBreaker, json, loadBackups, loadCreatePlan, loadHealth, loadNetwork, loadRecommended, loadRestorePlan, loadServerDetail, loadStorageMap, nodeDisks, overview, pve, snapshotFixFor, updateView, viewerOf, epoch: () => preferencesEpoch };
 export type RouteContext = typeof routeContext;
 const GET_ROUTES = getRoutes(routeContext);
 
