@@ -61,13 +61,17 @@ const kib = (mb: number) => mb * 1024;
 export function props(v: unknown): Record<string, string> {
   if (v && typeof v === "object") return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, String(x)]));
   if (typeof v !== "string" || !v) return {};
-  return Object.fromEntries(v.split(",").map((part) => {
-    const at = part.indexOf("=");
-    return at < 0 ? ["", part] : [part.slice(0, at), part.slice(at + 1)];
-  }));
+  return Object.fromEntries(
+    v.split(",").map((part) => {
+      const at = part.indexOf("=");
+      return at < 0 ? ["", part] : [part.slice(0, at), part.slice(at + 1)];
+    }),
+  );
 }
-const joinProps = (p: Record<string, string>) => Object.entries(p).map(([k, v]) => (k ? `${k}=${v}` : v)).join(",");
-
+const joinProps = (p: Record<string, string>) =>
+  Object.entries(p)
+    .map(([k, v]) => (k ? `${k}=${v}` : v))
+    .join(",");
 
 const list = (names: string[]) => (names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`);
 
@@ -85,10 +89,21 @@ export function buildRecommended(h: RecommendedInput): Recommended[] {
     const storageNow = n.known ? storageOn(n.moveNet, h.storage) : [];
     let move: Recommended;
     if (!n.known) {
-      move = { id: "move-network", title: "VM moves use their own network", on: false, recommend: true, can: false, detail: "BossMox couldn't tell which networks the nodes share. That happens when a node is offline or a heartbeat address is a name rather than a number.", why: "BossMox moves one VM at a time until it can tell." };
+      move = {
+        id: "move-network",
+        title: "VM moves use their own network",
+        on: false,
+        recommend: true,
+        can: false,
+        detail: "BossMox couldn't tell which networks the nodes share. That happens when a node is offline or a heartbeat address is a name rather than a number.",
+        why: "BossMox moves one VM at a time until it can tell.",
+      };
     } else if (own) {
       move = {
-        id: "move-network", title: "VM moves use their own network", on: true, recommend: true,
+        id: "move-network",
+        title: "VM moves use their own network",
+        on: true,
+        recommend: true,
         detail: `Moves run on ${n.moveNet}, so they can't crowd out the heartbeat that tells the nodes the others are alive. BossMox moves up to ${FULL_BATCH} VMs at a time.${storageNow.length ? ` It also carries ${storageNow.join(", ")}, so a speed limit keeps moves from crowding the disks.` : ""}`,
         can: n.current !== null,
         ...(n.current === null ? { why: "The heartbeat has a second link of its own, so there's nothing to change." } : {}),
@@ -97,7 +112,10 @@ export function buildRecommended(h: RecommendedInput): Recommended[] {
       };
     } else {
       move = {
-        id: "move-network", title: "VM moves use their own network", on: false, recommend: true,
+        id: "move-network",
+        title: "VM moves use their own network",
+        on: false,
+        recommend: true,
         detail: `Moves run on ${n.moveNet}, the heartbeat's only network. Heavy moves there can make the nodes lose touch, and HA then restarts a node to protect its guests. Until this is on, BossMox moves one VM at a time.${free.length > 1 ? " If you know which network is faster, pick that one." : ""}`,
         can: free.length > 0,
         ...(free.length ? { choices: free.map(netChoice), choice: free[0] } : { why: "Every node needs an address on a second network first, ideally on a second network card." }),
@@ -111,28 +129,42 @@ export function buildRecommended(h: RecommendedInput): Recommended[] {
     const mb = limitOn ? Math.round((h.moveLimit as number) / 1024) : withStorage ? STORAGE_LIMIT : DEFAULT_LIMIT;
     const speeds = [...new Set([...LIMITS, mb])].sort((a, b) => a - b);
     out.push({
-      id: "move-limit", title: "Limit how fast moves run", on: limitOn, recommend: shared || withStorage ? true : own ? false : null,
+      id: "move-limit",
+      title: "Limit how fast moves run",
+      on: limitOn,
+      recommend: shared || withStorage ? true : own ? false : null,
       detail: shared
         ? "Moves share the heartbeat's only network. A limit leaves it room, at the cost of slower moves. 50 MB/s keeps about half of a 1 Gb port free."
         : withStorage
           ? `Moves share ${n.moveNet} with ${storageNow.join(", ")}. A limit keeps most of it for the disks: ${STORAGE_LIMIT} MB/s is about 2 Gbps, so a 16 GB VM still moves in about a minute.`
           : own
-          ? "Moves have a network of their own, so a limit only makes them slower."
-          : "A limit slows moves down so other traffic on their network keeps room.",
-      can: true, choices: speeds.map((s) => ({ value: String(s), label: `${s} MB/s` })), choice: String(mb), ...cant,
+            ? "Moves have a network of their own, so a limit only makes them slower."
+            : "A limit slows moves down so other traffic on their network keeps room.",
+      can: true,
+      choices: speeds.map((s) => ({ value: String(s), label: `${s} MB/s` })),
+      choice: String(mb),
+      ...cant,
     });
 
     const haOn = h.haPolicy === "migrate";
     const them = h.haGuests === 1 ? "it" : "them";
     out.push({
-      id: "ha-shutdown", title: "HA moves its guests before a node shuts down", on: haOn, recommend: h.haGuests > 0 ? true : null,
+      id: "ha-shutdown",
+      title: "HA moves its guests before a node shuts down",
+      on: haOn,
+      recommend: h.haGuests > 0 ? true : null,
       detail: `${h.haGuests ? `${h.haGuests === 1 ? "One guest is" : `${h.haGuests} guests are`} managed by HA. ` : "No guests are managed by HA yet, so this changes nothing today. "}When a node is restarted outside BossMox, from Proxmox or by hand, ${haOn ? `HA moves ${h.haGuests === 1 ? "that guest" : "those guests"} to another node first and brings ${them} back after.` : `Proxmox's default stops ${them} and leaves ${them} waiting for that node to come back.`} BossMox's own restarts move guests first either way. A guest that can't move holds up the shutdown.`,
-      can: true, ...cant,
+      can: true,
+      ...cant,
     });
   }
   const bootOn = h.noBoot.length === 0;
   out.push({
-    id: "boot", title: "Running guests start again after a node restart", on: bootOn, recommend: true, onlyOn: true,
+    id: "boot",
+    title: "Running guests start again after a node restart",
+    on: bootOn,
+    recommend: true,
+    onlyOn: true,
     detail: bootOn
       ? "Every running guest starts by itself when its node starts. To turn it off for one guest, use that guest's page."
       : `${list(h.noBoot.map((g) => g.name))} ${h.noBoot.length === 1 ? "won't start by itself" : "won't start by themselves"} after a power cut or an update restart.`,

@@ -89,14 +89,17 @@ test("disks in use, and layouts that can't work, are refused", () => {
 });
 
 test("the storage list says what each one is and where it's reachable", () => {
-  const list = buildStorageList([
-    { storage: "nas", type: "nfs", server: "10.0.30.244", export: "/srv/nfs/backups", content: "backup,iso,snippets" },
-    { storage: "fast", type: "zfspool", pool: "fast", content: "images,rootdir" },
-  ], [
-    { name: "nas", node: "a", freeGb: 10, totalGb: 20, online: true },
-    { name: "nas", node: "b", freeGb: 10, totalGb: 20, online: false },
-    { name: "nas", node: "c", freeGb: 10, totalGb: 20, online: true },
-  ]);
+  const list = buildStorageList(
+    [
+      { storage: "nas", type: "nfs", server: "10.0.30.244", export: "/srv/nfs/backups", content: "backup,iso,snippets" },
+      { storage: "fast", type: "zfspool", pool: "fast", content: "images,rootdir" },
+    ],
+    [
+      { name: "nas", node: "a", freeGb: 10, totalGb: 20, online: true },
+      { name: "nas", node: "b", freeGb: 10, totalGb: 20, online: false },
+      { name: "nas", node: "c", freeGb: 10, totalGb: 20, online: true },
+    ],
+  );
   const nas = list.find((s) => s.id === "nas");
   assert.equal(nas?.kind, "Network share (NFS)");
   assert.equal(nas?.where, "10.0.30.244/srv/nfs/backups");
@@ -107,7 +110,10 @@ test("the storage list says what each one is and where it's reachable", () => {
 });
 
 test("storage in use says who's using it", () => {
-  const guests = [{ name: "web", usesStorage: ["nas"] }, { name: "db", usesStorage: ["local"] }];
+  const guests = [
+    { name: "web", usesStorage: ["nas"] },
+    { name: "db", usesStorage: ["local"] },
+  ];
   assert.deepEqual(storageBlockers("nas", guests, [{ storage: "nas" }]), ["web", "a backup schedule"]);
   assert.deepEqual(storageBlockers("other", guests, [{ storage: "nas" }]), []);
 });
@@ -118,15 +124,29 @@ test("changing what a storage holds keeps the uses BossMox doesn't show", () => 
   assert.equal(usesForm("dir", ["iso"]), "iso");
 });
 
-
-const hd = (path: string, sizeGb: number, free = true, canWipe = false) => ({ path, sizeGb, model: "", kind: "", used: free ? "" : "partitions", health: "OK", failing: false, wearLeft: null, free, canWipe, blocked: "" });
+const hd = (path: string, sizeGb: number, free = true, canWipe = false) => ({
+  path,
+  sizeGb,
+  model: "",
+  kind: "",
+  used: free ? "" : "partitions",
+  health: "OK",
+  failing: false,
+  wearLeft: null,
+  free,
+  canWipe,
+  blocked: "",
+});
 
 test("Add storage picks the type from what it's for and how many drives", () => {
   const disks = [hd("/dev/sdb", 500), hd("/dev/sdc", 500), hd("/dev/sdd", 500)];
   assert.equal(setupPlan(disks, ["/dev/sdb"], "vms", "fast").kind, "lvmthin");
   const mirror = setupPlan(disks, ["/dev/sdb", "/dev/sdc"], "vms", "fast");
   assert.deepEqual([mirror.kind, mirror.raid], ["zfs", "mirror"]);
-  assert.equal(mirror.summary, "BossMox will make fast on /dev/sdb and /dev/sdc. It will be a mirror, where both drives hold the same data so one can fail without losing anything, and hold VM and container disks, about 500 GB. Everything on these drives is erased.");
+  assert.equal(
+    mirror.summary,
+    "BossMox will make fast on /dev/sdb and /dev/sdc. It will be a mirror, where both drives hold the same data so one can fail without losing anything, and hold VM and container disks, about 500 GB. Everything on these drives is erased.",
+  );
   assert.equal(setupPlan(disks, ["/dev/sdb", "/dev/sdc", "/dev/sdd"], "vms", "fast").raid, "raidz");
   const files = setupPlan(disks, ["/dev/sdb"], "files", "backups");
   assert.deepEqual([files.kind, files.filesystem, files.uses], ["directory", "ext4", "iso,vztmpl,backup"]);
@@ -175,11 +195,21 @@ test("when a guest's settings didn't load, or the account can't see every guest,
     { devpath: "/dev/sdc", size: 500 * 1024 ** 3 },
   ];
   assert.equal(readHardDisks(raw as never).find((x) => x.path === "/dev/sdb")!.canWipe, true, "without the check it would be wiped");
-  for (const [guests, sees, why] of [[[{ known: true }, { known: false }], true, /couldn't read every guest's settings/], [[{ known: true }], false, /can't see every guest/]] as const) {
+  for (const [guests, sees, why] of [
+    [[{ known: true }, { known: false }], true, /couldn't read every guest's settings/],
+    [[{ known: true }], false, /can't see every guest/],
+  ] as const) {
     const blocked = eraseBlocker(guests, sees);
     assert.match(blocked ?? "", why);
     const disks = readHardDisks(raw as never, [], blocked);
-    assert.deepEqual(disks.map((x) => [x.free, x.canWipe]), [[false, false], [false, false]], "nothing is free or wipeable");
+    assert.deepEqual(
+      disks.map((x) => [x.free, x.canWipe]),
+      [
+        [false, false],
+        [false, false],
+      ],
+      "nothing is free or wipeable",
+    );
     assert.throws(() => assertCanWipe(disks, "/dev/sdb"), why, "Wipe refuses");
     assert.throws(() => setupPlan(disks, ["/dev/sdb"], "vms", "x"), why, "Set up storage refuses");
     assert.throws(() => diskStorageForm("lvmthin", disks, { name: "x", devices: ["/dev/sdc"], raid: "", filesystem: "" }), why, "making a pool on a blank disk refuses");

@@ -43,7 +43,11 @@ function aptNode() {
       const std = Object.entries(URIS).find(([, [, uri]]) => uri === e.URIs?.[0]);
       if (std) r["standard-repos"]!.find((x) => x.handle === std[0])!.status = 0;
     },
-    on: () => r.files!.flatMap((f) => (f.repositories ?? []).filter((x) => x.Enabled).map((x) => x.URIs![0]!)).filter((u) => u.includes("proxmox.com")).sort(),
+    on: () =>
+      r
+        .files!.flatMap((f) => (f.repositories ?? []).filter((x) => x.Enabled).map((x) => x.URIs![0]!))
+        .filter((u) => u.includes("proxmox.com"))
+        .sort(),
   };
 }
 
@@ -122,11 +126,32 @@ function lab(over: Partial<Outside> = {}) {
     verifies: async () => true,
     saveCa: () => "/x/ca.pem",
     saveSettings: (v) => saved.push(v),
-    wait: async (ms) => { clock += ms; },
+    wait: async (ms) => {
+      clock += ms;
+    },
     now: () => clock,
     ...over,
   };
-  return { options, wizard: new Wizard(hash, out), apt, subscriptions, offline, calls, saved, guests, hash, tick: (ms: number) => { clock += ms; }, setCluster: (n: string) => { clusterName = n; }, setMembers: (m: typeof members) => { members.splice(0, members.length, ...m); } };
+  return {
+    options,
+    wizard: new Wizard(hash, out),
+    apt,
+    subscriptions,
+    offline,
+    calls,
+    saved,
+    guests,
+    hash,
+    tick: (ms: number) => {
+      clock += ms;
+    },
+    setCluster: (n: string) => {
+      clusterName = n;
+    },
+    setMembers: (m: typeof members) => {
+      members.splice(0, members.length, ...m);
+    },
+  };
 }
 const signedIn = async (l: ReturnType<typeof lab>) => {
   l.wizard.enterCode(CODE);
@@ -171,7 +196,17 @@ test("a wrong password is plain, and a standalone node reads as standalone", asy
 test("a changed certificate stops sign-in", async () => {
   const l = lab();
   const real = l.wizard;
-  const blocked = new Wizard(l.hash, { probe: async () => ({ fingerprint: FP(1), subject: "" }), call: async () => { throw new PinError("That server's certificate has changed since you confirmed it."); }, verifies: async () => true, saveCa: () => "", saveSettings: () => {}, wait: async () => {}, now: () => 1 });
+  const blocked = new Wizard(l.hash, {
+    probe: async () => ({ fingerprint: FP(1), subject: "" }),
+    call: async () => {
+      throw new PinError("That server's certificate has changed since you confirmed it.");
+    },
+    verifies: async () => true,
+    saveCa: () => "",
+    saveSettings: () => {},
+    wait: async () => {},
+    now: () => 1,
+  });
   assert.ok(real);
   await assert.rejects(blocked.signIn("10.0.0.1", FP(1), "root", "pam", "right"), /has changed/);
 });
@@ -183,7 +218,10 @@ test("three standalone nodes become one cluster, and settings come out right", a
   assert.equal(made.clusterName, "lab-1");
   await l.wizard.addNode("10.0.0.2", FP(2), "right");
   const three = await l.wizard.addNode("10.0.0.3", FP(3), "right");
-  assert.deepEqual(three.nodes.map((n) => n.name), ["n1", "n2", "n3"]);
+  assert.deepEqual(
+    three.nodes.map((n) => n.name),
+    ["n1", "n2", "n3"],
+  );
   await l.wizard.finish("10.0.0.9");
   assert.deepEqual(l.saved[0], { PVE_URL: "https://10.0.0.1:8006,https://10.0.0.2:8006,https://10.0.0.3:8006", PVE_CA_FILE: "/x/ca.pem", BOSSMOX_ALLOWED_HOSTS: "10.0.0.9" });
   assert.equal(existsSync(l.hash), false, "the code can't be used again");
@@ -204,7 +242,10 @@ test("a node with guests can't join, and nothing is sent to it", async () => {
   await l.wizard.createCluster("lab");
   l.guests.n2 = 2;
   await assert.rejects(l.wizard.addNode("10.0.0.2", FP(2), "right"), /has 2 guests/);
-  assert.equal(l.calls.some((c) => c.includes("/cluster/config/join")), false);
+  assert.equal(
+    l.calls.some((c) => c.includes("/cluster/config/join")),
+    false,
+  );
 });
 
 test("a wrong root password for a joining node is plain", async () => {
@@ -244,7 +285,10 @@ test("setup won't finish if a node's certificate doesn't verify", async () => {
 const moved = (over: Partial<Outside> = {}) => {
   const asked: string[] = [];
   const l = lab({
-    verifies: async (h, _p, _c, name) => { asked.push(`${h} ${name ?? "address"}`); return h === "10.0.0.1" && name === "n1"; },
+    verifies: async (h, _p, _c, name) => {
+      asked.push(`${h} ${name ?? "address"}`);
+      return h === "10.0.0.1" && name === "n1";
+    },
     ...over,
   });
   l.setMembers([{ name: "n1", ip: "192.168.99.9" }]);
@@ -256,7 +300,11 @@ test("a node that moved is kept at the address it was reached on, and checked by
   const s = await signedIn(l);
   assert.equal(s.nodes[0]?.address, "10.0.0.1", "the wizard shows the address that works");
   await l.wizard.finish("10.0.0.9");
-  assert.equal(asked.some((a) => a.startsWith("192.168.99.9")), false, "the stale address is never tried");
+  assert.equal(
+    asked.some((a) => a.startsWith("192.168.99.9")),
+    false,
+    "the stale address is never tried",
+  );
   assert.deepEqual(l.saved[0], { PVE_URL: "https://10.0.0.1:8006", PVE_CA_FILE: "/x/ca.pem", PVE_TLS_NAME: "n1", BOSSMOX_ALLOWED_HOSTS: "10.0.0.9" });
 });
 
@@ -291,8 +339,16 @@ test("a node whose address matches needs no name saved", async () => {
 
 test("a cluster doesn't fall back to a name, because one name can't fit every node", async () => {
   const asked: (string | undefined)[] = [];
-  const l = lab({ verifies: async (_h, _p, _c, name) => { asked.push(name); return false; } });
-  l.setMembers([{ name: "n1", ip: "10.0.0.1" }, { name: "n2", ip: "10.0.0.2" }]);
+  const l = lab({
+    verifies: async (_h, _p, _c, name) => {
+      asked.push(name);
+      return false;
+    },
+  });
+  l.setMembers([
+    { name: "n1", ip: "10.0.0.1" },
+    { name: "n2", ip: "10.0.0.2" },
+  ]);
   await signedIn(l);
   await assert.rejects(l.wizard.finish("10.0.0.9"), /couldn't verify 10\.0\.0\.1, 10\.0\.0\.2/);
   assert.equal(asked.some(Boolean), false);
@@ -300,7 +356,12 @@ test("a cluster doesn't fall back to a name, because one name can't fit every no
 
 test("setup waits for a node that only just joined", async () => {
   let tries = 0;
-  const l = lab({ verifies: async () => { tries += 1; return tries > 4; } });
+  const l = lab({
+    verifies: async () => {
+      tries += 1;
+      return tries > 4;
+    },
+  });
   await signedIn(l);
   await l.wizard.finish("10.0.0.9");
   assert.equal(l.saved.length, 1);
@@ -380,7 +441,6 @@ test("only the offered channels are accepted", async () => {
   await assert.rejects(l.wizard.setChannel("test"), status(400));
 });
 
-
 test("junk codes from one machine don't lock out another (security review L1)", () => {
   const { wizard } = lab();
   for (let i = 0; i < 10; i++) assert.throws(() => wizard.enterCode("NOPE", "10.0.0.66"), status(401));
@@ -411,9 +471,16 @@ test("a cluster whose nodes share a second network is offered it for moves, and 
   await signedIn(l);
   assert.equal((await l.wizard.networks()).known, false, "one node, nothing to ask");
   l.setCluster("lab");
-  l.setMembers([{ name: "n1", ip: "10.0.0.1" }, { name: "n2", ip: "10.0.0.2" }, { name: "n3", ip: "10.0.0.3" }]);
+  l.setMembers([
+    { name: "n1", ip: "10.0.0.1" },
+    { name: "n2", ip: "10.0.0.2" },
+    { name: "n3", ip: "10.0.0.3" },
+  ]);
   const before = await l.wizard.networks();
-  assert.deepEqual({ shared: before.shared, moveNet: before.moveNet, others: before.others, current: before.current }, { shared: true, moveNet: "10.0.0.0/24", others: ["10.0.100.0/24"], current: null });
+  assert.deepEqual(
+    { shared: before.shared, moveNet: before.moveNet, others: before.others, current: before.current },
+    { shared: true, moveNet: "10.0.0.0/24", others: ["10.0.100.0/24"], current: null },
+  );
   await assert.rejects(l.wizard.setMoveNetwork("192.168.1.0/24"), status(400));
   const after = await l.wizard.setMoveNetwork("10.0.100.0/24");
   assert.equal(l.options.migration, "type=secure,network=10.0.100.0/24");
@@ -424,7 +491,10 @@ test("an insecure move type someone chose stays insecure when the network is set
   const l = lab();
   await signedIn(l);
   l.setCluster("lab");
-  l.setMembers([{ name: "n1", ip: "10.0.0.1" }, { name: "n2", ip: "10.0.0.2" }]);
+  l.setMembers([
+    { name: "n1", ip: "10.0.0.1" },
+    { name: "n2", ip: "10.0.0.2" },
+  ]);
   l.options.migration = "type=insecure";
   await l.wizard.setMoveNetwork("10.0.100.0/24");
   assert.equal(l.options.migration, "type=insecure,network=10.0.100.0/24");
@@ -439,7 +509,11 @@ test("entering the code again signs the last person out and drops their root pas
     l.wizard.enterCode(CODE);
     // Whoever has the code now can't use the root sign-in that was there before, so nothing carries the password.
     await assert.rejects(l.wizard.addNode("10.0.0.66", FP(6), "anything"), status(403), after);
-    assert.equal(l.calls.some((c) => c.includes("/cluster/config/join")), false, `no join was sent (${after})`);
+    assert.equal(
+      l.calls.some((c) => c.includes("/cluster/config/join")),
+      false,
+      `no join was sent (${after})`,
+    );
     await assert.rejects(l.wizard.finish("10.0.0.9"), /Sign in first/, after);
   }
 });

@@ -18,8 +18,9 @@ test("a login prompt means no root shell", () => {
 });
 
 test("config files dpkg kept are listed once each", () => {
-  const out = "Configuration file '/etc/lvm/lvm.conf'\r\n ==> Modified (by you or by a script) since installation.\r\n ==> Keeping old config file as default.\r\n"
-    + "Configuration file '/etc/lvm/lvm.conf'\r\nConfiguration file '/etc/default/grub'\r\n";
+  const out =
+    "Configuration file '/etc/lvm/lvm.conf'\r\n ==> Modified (by you or by a script) since installation.\r\n ==> Keeping old config file as default.\r\n" +
+    "Configuration file '/etc/lvm/lvm.conf'\r\nConfiguration file '/etc/default/grub'\r\n";
   assert.deepEqual(keptConfigFiles(out), ["/etc/lvm/lvm.conf", "/etc/default/grub"]);
   assert.deepEqual(keptConfigFiles("Setting up curl ...\r\n"), []);
 });

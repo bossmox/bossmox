@@ -2,7 +2,19 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { changesForm, readSettings, waitingChanges } from "../src/guest-settings.js";
 
-const vm = { name: "web", cores: 2, memory: "2048", cpu: "x86-64-v2-AES,flags=+aes", vga: "qxl,memory=32", agent: "1,fstrim_cloned_disks=1", scsihw: "virtio-scsi-single", scsi0: "local:300/vm-300-disk-0.raw,size=32G", startup: "order=3,up=30", machine: "pc-q35-8.1,viommu=virtio", tags: "a;b" };
+const vm = {
+  name: "web",
+  cores: 2,
+  memory: "2048",
+  cpu: "x86-64-v2-AES,flags=+aes",
+  vga: "qxl,memory=32",
+  agent: "1,fstrim_cloned_disks=1",
+  scsihw: "virtio-scsi-single",
+  scsi0: "local:300/vm-300-disk-0.raw,size=32G",
+  startup: "order=3,up=30",
+  machine: "pc-q35-8.1,viommu=virtio",
+  tags: "a;b",
+};
 const ct = { hostname: "app", cores: 1, memory: 512, swap: 256, features: "nesting=1,mount=nfs", unprivileged: 1, ostype: "debian" };
 
 test("a VM's settings are read into plain values", () => {
@@ -92,5 +104,15 @@ test("no change is refused rather than sent", () => {
 });
 
 test("only real differences count as waiting for a restart", () => {
-  assert.deepEqual(waitingChanges([{ key: "memory", value: "2048", pending: "4096" }, { key: "cores", value: 2 }, { key: "tablet", value: 1, delete: 1 }]), [{ key: "memory", next: "4096" }, { key: "tablet", next: "" }]);
+  assert.deepEqual(
+    waitingChanges([
+      { key: "memory", value: "2048", pending: "4096" },
+      { key: "cores", value: 2 },
+      { key: "tablet", value: 1, delete: 1 },
+    ]),
+    [
+      { key: "memory", next: "4096" },
+      { key: "tablet", next: "" },
+    ],
+  );
 });

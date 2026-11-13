@@ -36,10 +36,12 @@ test("ten failures from one address lock it out, others stay open", async () => 
 
 test("2FA needs the code, sends the challenge, and works once", async () => {
   const calls: [string, string | undefined][] = [];
-  const s = new Sessions(client(async (_u, pw, ch) => {
-    calls.push([pw, ch]);
-    return ch ? ok("FULL") : { username: "a@pve", ticket: "CHALLENGE", csrf: "", needsCode: true };
-  }));
+  const s = new Sessions(
+    client(async (_u, pw, ch) => {
+      calls.push([pw, ch]);
+      return ch ? ok("FULL") : { username: "a@pve", ticket: "CHALLENGE", csrf: "", needsCode: true };
+    }),
+  );
   const first = await s.login("a@pve", "pw", "1.1.1.1");
   assert.equal(first.kind, "code");
   assert.equal(await s.get(first.id), undefined, "a challenge is not a session");
@@ -52,10 +54,13 @@ test("2FA needs the code, sends the challenge, and works once", async () => {
 test("tickets renew after an hour and sessions end after 12", async () => {
   let t = 0;
   const seen: string[] = [];
-  const s = new Sessions(client(async (_u, pw) => {
-    seen.push(pw);
-    return ok(`T${seen.length}`);
-  }), () => t);
+  const s = new Sessions(
+    client(async (_u, pw) => {
+      seen.push(pw);
+      return ok(`T${seen.length}`);
+    }),
+    () => t,
+  );
   const out = await s.login("a@pve", "pw", "1.1.1.1");
   t = HOUR + 1;
   const renewed = await s.get(out.id);
@@ -69,11 +74,14 @@ test("tickets renew after an hour and sessions end after 12", async () => {
 test("a refused renewal ends the session, an outage does not", async () => {
   let t = 0;
   let mode: "ok" | "refuse" | "down" = "ok";
-  const s = new Sessions(client(async () => {
-    if (mode === "refuse") throw new PveError(401, "no");
-    if (mode === "down") throw new Error("connect failed");
-    return ok();
-  }), () => t);
+  const s = new Sessions(
+    client(async () => {
+      if (mode === "refuse") throw new PveError(401, "no");
+      if (mode === "down") throw new Error("connect failed");
+      return ok();
+    }),
+    () => t,
+  );
   const out = await s.login("a@pve", "pw", "1.1.1.1");
   t = HOUR + 1;
   mode = "down";
@@ -130,11 +138,16 @@ test("signing out during a ticket renewal still ends the session", async () => {
   let clock = 1000;
   let release = (_: LoginResult) => {};
   let renewals = 0;
-  const sessions = new Sessions(client(async () => {
-    renewals += 1;
-    if (renewals === 1) return ok();
-    return new Promise<LoginResult>((resolve) => { release = resolve; });
-  }), () => clock);
+  const sessions = new Sessions(
+    client(async () => {
+      renewals += 1;
+      if (renewals === 1) return ok();
+      return new Promise<LoginResult>((resolve) => {
+        release = resolve;
+      });
+    }),
+    () => clock,
+  );
   const out = await sessions.login("a", "b", "1.1.1.1");
   clock += 2 * HOUR;
   const pending = sessions.get(out.id);
@@ -145,11 +158,13 @@ test("signing out during a ticket renewal still ends the session", async () => {
 
 test("a burst of guesses sent at once can't get past the limit", async () => {
   let reached = 0;
-  const s = new Sessions(client(async () => {
-    reached += 1;
-    await new Promise((r) => setTimeout(r, 5));
-    throw new PveError(401, "no");
-  }));
+  const s = new Sessions(
+    client(async () => {
+      reached += 1;
+      await new Promise((r) => setTimeout(r, 5));
+      throw new PveError(401, "no");
+    }),
+  );
   const out = await Promise.allSettled(Array.from({ length: 50 }, () => s.login("a@pve", "bad", "1.1.1.1")));
   assert.equal(reached, 10);
   assert.equal(out.filter((o) => o.status === "rejected" && (o.reason as AuthError).status === 429).length, 40);
@@ -158,16 +173,20 @@ test("a burst of guesses sent at once can't get past the limit", async () => {
 test("a success takes its attempt back, and an unreachable Proxmox doesn't count", async () => {
   const s = new Sessions(client(async () => ok()));
   for (let i = 0; i < 25; i++) await s.login("a@pve", "pw", "1.1.1.1");
-  const down = new Sessions(client(async () => {
-    throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
-  }));
+  const down = new Sessions(
+    client(async () => {
+      throw Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+    }),
+  );
   for (let i = 0; i < 25; i++) await assert.rejects(down.login("a@pve", "pw", "1.1.1.1"), /refused/);
 });
 
 test("a timeout still counts as a guess", async () => {
-  const s = new Sessions(client(async () => {
-    throw new Error("Proxmox took too long to answer");
-  }));
+  const s = new Sessions(
+    client(async () => {
+      throw new Error("Proxmox took too long to answer");
+    }),
+  );
   for (let i = 0; i < 10; i++) await assert.rejects(s.login("a@pve", "bad", "1.1.1.1"), /too long/);
   await assert.rejects(s.login("a@pve", "bad", "1.1.1.1"), (e: AuthError) => e.status === 429);
 });
@@ -180,10 +199,12 @@ test("rotating addresses still hits the limit on the account", async () => {
 });
 
 test("a 2FA challenge dies after five wrong codes, even from new addresses", async () => {
-  const s = new Sessions(client(async (_u, _p, ch) => {
-    if (ch) throw new PveError(500, "bad code");
-    return { username: "a@pve", ticket: "CHALLENGE", csrf: "", needsCode: true };
-  }));
+  const s = new Sessions(
+    client(async (_u, _p, ch) => {
+      if (ch) throw new PveError(500, "bad code");
+      return { username: "a@pve", ticket: "CHALLENGE", csrf: "", needsCode: true };
+    }),
+  );
   const first = await s.login("a@pve", "pw", "1.1.1.1");
   for (let i = 0; i < 5; i++) await assert.rejects(s.submitCode(first.id, "000000", `9.9.9.${i}`), /didn't work/);
   await assert.rejects(s.submitCode(first.id, "000000", "9.9.8.1"), /timed out/);
@@ -222,7 +243,10 @@ test("a client can't forge its way past the proxy's own entry", () => {
 test("the timer ends expired sessions with nobody making requests", async () => {
   let clock = 1000;
   const ended: string[] = [];
-  const s = new Sessions(client(async () => ok()), () => clock);
+  const s = new Sessions(
+    client(async () => ok()),
+    () => clock,
+  );
   s.onEnd = (x) => ended.push(x.username);
   await s.login("a@pve", "pw", "1.1.1.1");
   clock += 13 * HOUR;
@@ -234,10 +258,13 @@ test("a session with a console open is re-checked, and a disabled account loses 
   let clock = 1000;
   let disabled = false;
   const ended: string[] = [];
-  const s = new Sessions(client(async () => {
-    if (disabled) throw new PveError(401, "no");
-    return ok();
-  }), () => clock);
+  const s = new Sessions(
+    client(async () => {
+      if (disabled) throw new PveError(401, "no");
+      return ok();
+    }),
+    () => clock,
+  );
   s.onEnd = (x) => ended.push(x.username);
   s.isBusy = () => true;
   await s.login("a@pve", "pw", "1.1.1.1");
@@ -253,10 +280,13 @@ test("a session with a console open is re-checked, and a disabled account loses 
 test("a quiet session with no console isn't checked early", async () => {
   let clock = 1000;
   let logins = 0;
-  const s = new Sessions(client(async () => {
-    logins += 1;
-    return ok();
-  }), () => clock);
+  const s = new Sessions(
+    client(async () => {
+      logins += 1;
+      return ok();
+    }),
+    () => clock,
+  );
   await s.login("a@pve", "pw", "1.1.1.1");
   clock += 30 * 60 * 1000;
   await s.tick();
@@ -293,10 +323,13 @@ test("the updater's end is matched only on a line of its own", () => {
 test("signing out never waits on Proxmox", async () => {
   let clock = 1000;
   let renewals = 0;
-  const s = new Sessions(client(async () => {
-    renewals += 1;
-    return ok();
-  }), () => clock);
+  const s = new Sessions(
+    client(async () => {
+      renewals += 1;
+      return ok();
+    }),
+    () => clock,
+  );
   const out = await s.login("a@pve", "pw", "1.1.1.1");
   clock += 2 * HOUR;
   assert.equal(s.end(out.id), "a@pve");
@@ -308,11 +341,16 @@ test("requests during a renewal wait for its answer", async () => {
   let clock = 1000;
   let answer = (_: Error) => {};
   let calls = 0;
-  const s = new Sessions(client(async () => {
-    calls += 1;
-    if (calls === 1) return ok();
-    return new Promise<LoginResult>((_, no) => { answer = no; });
-  }), () => clock);
+  const s = new Sessions(
+    client(async () => {
+      calls += 1;
+      if (calls === 1) return ok();
+      return new Promise<LoginResult>((_, no) => {
+        answer = no;
+      });
+    }),
+    () => clock,
+  );
   const out = await s.login("a@pve", "pw", "1.1.1.1");
   clock += 2 * HOUR;
   const first = s.get(out.id);
@@ -335,10 +373,12 @@ test("a whole IPv6 /64 counts as one client", async () => {
 
 test("someone's usual address gets in during an attack on their account", async () => {
   let bad = false;
-  const s = new Sessions(client(async () => {
-    if (bad) throw new PveError(401, "no");
-    return ok();
-  }));
+  const s = new Sessions(
+    client(async () => {
+      if (bad) throw new PveError(401, "no");
+      return ok();
+    }),
+  );
   await s.login("root@pam", "pw", "10.0.0.9");
   bad = true;
   for (let i = 0; i < 50; i++) await assert.rejects(s.login("root@pam", "bad", `10.1.0.${i}`), (e: AuthError) => e.status === 401);
@@ -348,13 +388,17 @@ test("someone's usual address gets in during an attack on their account", async 
 });
 
 test("Proxmox being unwell doesn't count against anyone", async () => {
-  const s = new Sessions(client(async () => {
-    throw new PveError(503, "restarting");
-  }));
+  const s = new Sessions(
+    client(async () => {
+      throw new PveError(503, "restarting");
+    }),
+  );
   for (let i = 0; i < 25; i++) await assert.rejects(s.login("a@pve", "pw", "1.1.1.1"), PveError);
-  const t = new Sessions(client(async () => {
-    throw Object.assign(new Error("Proxmox took too long to answer"), { unreached: true });
-  }));
+  const t = new Sessions(
+    client(async () => {
+      throw Object.assign(new Error("Proxmox took too long to answer"), { unreached: true });
+    }),
+  );
   for (let i = 0; i < 25; i++) await assert.rejects(t.login("a@pve", "pw", "1.1.1.1"), /too long/);
 });
 
@@ -362,13 +406,18 @@ test("a taken-back attempt can't erase a newer window's failures", async () => {
   let clock = 1000;
   let finish = () => {};
   let hang = true;
-  const s = new Sessions(client(async () => {
-    if (hang) {
-      await new Promise<void>((r) => { finish = r; });
-      return ok();
-    }
-    throw new PveError(401, "no");
-  }), () => clock);
+  const s = new Sessions(
+    client(async () => {
+      if (hang) {
+        await new Promise<void>((r) => {
+          finish = r;
+        });
+        return ok();
+      }
+      throw new PveError(401, "no");
+    }),
+    () => clock,
+  );
   const slow = s.login("a@pve", "pw", "1.1.1.1");
   clock += FIVE_MIN + 1;
   await s.tick();
@@ -398,11 +447,13 @@ test("Origin has to be this exact site", () => {
 
 test("Proxmox failing (500) at the password step isn't a wrong password and isn't counted (#59)", async () => {
   let calls = 0;
-  const s = new Sessions(client(async () => {
-    calls += 1;
-    if (calls <= 12) throw new PveError(500, "pveproxy failed");
-    return ok();
-  }));
+  const s = new Sessions(
+    client(async () => {
+      calls += 1;
+      if (calls <= 12) throw new PveError(500, "pveproxy failed");
+      return ok();
+    }),
+  );
   for (let i = 0; i < 12; i++) await assert.rejects(s.login("a@pve", "pw", "1.1.1.1"), (e: Error) => !(e instanceof AuthError && /Wrong username/.test(e.message)));
   // Twelve Proxmox failures in a row didn't lock the address out: the real password still gets in.
   assert.equal((await s.login("a@pve", "pw", "1.1.1.1")).kind, "ok");
@@ -415,4 +466,9 @@ test("an ended session says so, so work still holding it stops at its next step 
   assert.equal(session.ended, undefined);
   s.end(out.id);
   assert.equal(session.ended, true);
+});
+
+test("an IPv6 proxied name matches the Origin, which URL keeps in brackets (#71)", () => {
+  assert.equal(sameOrigin("https://[2001:db8::1]", "proxy.lan", true, new Set(["2001:db8::1"])), true);
+  assert.equal(sameOrigin("https://[2001:db8::2]", "proxy.lan", true, new Set(["2001:db8::1"])), false);
 });

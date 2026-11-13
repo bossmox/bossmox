@@ -14,7 +14,21 @@ import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type MovePlan
 import type { Preferences } from "./preferences.js";
 import { PveError, type PveClient } from "./pve.js";
 import { drive, readRun, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
-import { buildRebootPlan, buildRollingPlan, groupUpdates, haQuorumBlock, section, tieBreakerVotes, type RawStatus, type RawTask, type RawTaskStatus, type RawUpdate, type RollingInput, type Section } from "./server-detail.js";
+import {
+  buildRebootPlan,
+  buildRollingPlan,
+  failedCheck,
+  groupUpdates,
+  haQuorumBlock,
+  section,
+  tieBreakerVotes,
+  type RawStatus,
+  type RawTask,
+  type RawTaskStatus,
+  type RawUpdate,
+  type RollingInput,
+  type Section,
+} from "./server-detail.js";
 import type { TermProxy } from "./terminal.js";
 import { HttpError } from "./http-error.js";
 
@@ -35,7 +49,12 @@ export interface JobsContext {
 
 /** The MAC addresses of this BossMox's own network cards: the VM that has one of them is BossMox itself. */
 function ownMacs(): Set<string> {
-  return new Set(Object.values(networkInterfaces()).flat().map((i) => i?.mac?.toLowerCase() ?? "").filter((m) => m && m !== "00:00:00:00:00:00"));
+  return new Set(
+    Object.values(networkInterfaces())
+      .flat()
+      .map((i) => i?.mac?.toLowerCase() ?? "")
+      .filter((m) => m && m !== "00:00:00:00:00:00"),
+  );
 }
 
 /** How long a sign-in must still have left to start a run: long enough for a slow cluster update. */
@@ -55,9 +74,12 @@ export function createJobs(ctx: JobsContext) {
     const resources = await pve.get<RawResource[]>("/cluster/resources", ticket);
     const online = resources.filter((r) => r.type === "node" && r.status === "online" && (!only || r.node === from || r.node === only));
     const statuses = await Promise.all(online.map((n) => pve.get<RawStatus>(`/nodes/${enc(n.node ?? "")}/status`, ticket).catch(() => null)));
-    const storagesOf = (node: string) => Object.fromEntries(resources
-      .filter((r) => r.type === "storage" && r.node === node && r.status === "available")
-      .map((r) => [r.storage ?? "", { free: (r.maxdisk ?? 0) - (r.disk ?? 0), total: r.maxdisk ?? 0, shared: r.shared === 1 }]));
+    const storagesOf = (node: string) =>
+      Object.fromEntries(
+        resources
+          .filter((r) => r.type === "storage" && r.node === node && r.status === "available")
+          .map((r) => [r.storage ?? "", { free: (r.maxdisk ?? 0) - (r.disk ?? 0), total: r.maxdisk ?? 0, shared: r.shared === 1 }]),
+      );
     const nodes: NodeRoom[] = online.map((r, i) => ({
       name: r.node ?? "",
       version: statuses[i]?.pveversion?.split("/")[1] ?? null,
@@ -87,44 +109,61 @@ export function createJobs(ctx: JobsContext) {
     const haNodesOf = (type: string, id: number) => {
       const group = haResources.find((r) => r.sid === `${type === "lxc" ? "ct" : "vm"}:${id}`)?.group;
       const g = group ? haGroups.find((x) => x.group === group && x.restricted === 1) : undefined;
-      return g ? (g.nodes ?? "").split(",").map((n) => n.split(":")[0]?.trim() ?? "").filter(Boolean) : undefined;
+      return g
+        ? (g.nodes ?? "")
+            .split(",")
+            .map((n) => n.split(":")[0]?.trim() ?? "")
+            .filter(Boolean)
+        : undefined;
     };
-    const guests = resources.filter((r) => (r.type === "qemu" || r.type === "lxc") && r.node === from && r.template !== 1 && (ids ? ids.includes(Number(r.vmid)) : r.status === "running" || r.status === "paused"));
-    const needs = await Promise.all(guests.map(async (g) => {
-      const type = g.type === "lxc" ? "lxc" : "qemu";
-      const id = Number(g.vmid);
-      const base = `/nodes/${enc(from)}/${type}/${id}`;
-      const [read, snaps, checked] = await Promise.all([
-        pve.get<RawConfig>(`${base}/config`, ticket),
-        pve.get<RawSnapshot[]>(`${base}/snapshot`, ticket).catch((): RawSnapshot[] => []),
-        // Older Proxmox has no migrate check for containers; BossMox's own storage check still applies.
-        pve.get<RawPrecondition>(`${base}/migrate`, ticket).catch((): RawPrecondition => ({})),
-      ]);
-      // Planned as if its discs were out, when a person chose to eject them; they only come out once every check passes.
-      const assumed = assumeEjected.includes(id);
-      const config = assumed ? (asEjected(read).config as RawConfig) : read;
-      const precondition = assumed ? { ...checked, local_disks: (checked.local_disks ?? []).filter((d) => !d.cdrom) } : checked;
-      return guestNeed({
-        id,
-        type,
-        name: g.name ?? String(config.name ?? config.hostname ?? `VM ${id}`),
-        mem: g.maxmem ?? 0,
-        cores: g.maxcpu ?? 0,
-        cpuLoad: (g.cpu ?? 0) * (g.maxcpu ?? 0),
-        config,
-        hasSnapshots: snaps.some((s) => s.name !== "current"),
-        precondition,
-        sourceStorages: storagesOf(from),
-        ...(haNodesOf(type, id) ? { haNodes: haNodesOf(type, id) as string[] } : {}),
-      });
-    }));
+    const guests = resources.filter(
+      (r) => (r.type === "qemu" || r.type === "lxc") && r.node === from && r.template !== 1 && (ids ? ids.includes(Number(r.vmid)) : r.status === "running" || r.status === "paused"),
+    );
+    const needs = await Promise.all(
+      guests.map(async (g) => {
+        const type = g.type === "lxc" ? "lxc" : "qemu";
+        const id = Number(g.vmid);
+        const base = `/nodes/${enc(from)}/${type}/${id}`;
+        const [read, snaps, checked] = await Promise.all([
+          pve.get<RawConfig>(`${base}/config`, ticket),
+          pve.get<RawSnapshot[]>(`${base}/snapshot`, ticket).catch((): RawSnapshot[] => []),
+          // Older Proxmox has no migrate check for containers; BossMox's own storage check still applies.
+          pve.get<RawPrecondition>(`${base}/migrate`, ticket).catch((): RawPrecondition => ({})),
+        ]);
+        // Planned as if its discs were out, when a person chose to eject them; they only come out once every check passes.
+        const assumed = assumeEjected.includes(id);
+        const config = assumed ? (asEjected(read).config as RawConfig) : read;
+        const precondition = assumed ? { ...checked, local_disks: (checked.local_disks ?? []).filter((d) => !d.cdrom) } : checked;
+        return guestNeed({
+          id,
+          type,
+          name: g.name ?? String(config.name ?? config.hostname ?? `VM ${id}`),
+          mem: g.maxmem ?? 0,
+          cores: g.maxcpu ?? 0,
+          cpuLoad: (g.cpu ?? 0) * (g.maxcpu ?? 0),
+          config,
+          hasSnapshots: snaps.some((s) => s.name !== "current"),
+          precondition,
+          sourceStorages: storagesOf(from),
+          ...(haNodesOf(type, id) ? { haNodes: haNodesOf(type, id) as string[] } : {}),
+        });
+      }),
+    );
     const keep = ctx.preferences().keepFreePct;
     const plan: MovePlan = planMoves(from, needs, nodes, keep);
     // What each other node has now and would have after, so the person sees why it was picked.
-    const room = nodes.filter((n) => n.name !== from).map((n) => {
-      const adds = plan.moves.filter((m) => m.target === n.name).reduce((sum, m) => sum + (needs.find((g) => g.id === m.id)?.mem ?? 0), 0);
-      return { name: n.name, guests: plan.moves.filter((m) => m.target === n.name).length, freeNow: gbText(n.memTotal - n.memUsed), freeAfter: gbText(n.memTotal - n.memUsed - adds), keeps: gbText((n.memTotal * roomFor(keep).memFreePct) / 100) };
-    });
+    const room = nodes
+      .filter((n) => n.name !== from)
+      .map((n) => {
+        const adds = plan.moves.filter((m) => m.target === n.name).reduce((sum, m) => sum + (needs.find((g) => g.id === m.id)?.mem ?? 0), 0);
+        return {
+          name: n.name,
+          guests: plan.moves.filter((m) => m.target === n.name).length,
+          freeNow: gbText(n.memTotal - n.memUsed),
+          freeAfter: gbText(n.memTotal - n.memUsed - adds),
+          keeps: gbText((n.memTotal * roomFor(keep).memFreePct) / 100),
+        };
+      });
     return { ...plan, room, keepFreePct: keep };
   }
 
@@ -136,9 +175,8 @@ export function createJobs(ctx: JobsContext) {
         const base = `/nodes/${enc(from)}/${move.type}/${move.id}`;
         const now = await pve.get<{ status?: string }>(`${base}/status/current`, session.ticket);
         const running = now.status === "running" || now.status === "paused";
-        const form: Record<string, string> = move.type === "qemu"
-          ? { target: move.target, "with-local-disks": "1", ...(running ? { online: "1" } : {}) }
-          : { target: move.target, ...(running ? { restart: "1" } : {}) };
+        const form: Record<string, string> =
+          move.type === "qemu" ? { target: move.target, "with-local-disks": "1", ...(running ? { online: "1" } : {}) } : { target: move.target, ...(running ? { restart: "1" } : {}) };
         // A node that has just come back can refuse a move for a few seconds. A refusal means nothing started.
         for (const until = Date.now() + 60 * 1000; ; await new Promise((r) => setTimeout(r, 5000))) {
           try {
@@ -170,7 +208,11 @@ export function createJobs(ctx: JobsContext) {
   async function startMoveJob(session: Session, prepare: () => Promise<((deps: MoveDeps) => Promise<void>) | null>): Promise<string | null> {
     // A run claims the cluster before its first wait, while it plans; that counts as going too (#45).
     if (currentRun?.running || runState.starting) throw new HttpError(409, "An update or restart run is going. Its moves are part of it.");
-    if (moveJob.starting || moveRecord.job?.running) throw new HttpError(409, `BossMox is already moving guests${moveRecord.job?.running ? ` (${moveRecord.job.kind === "off" ? "off" : "home to"} ${moveRecord.job.node})` : ""}. Wait for that to finish.`);
+    if (moveJob.starting || moveRecord.job?.running)
+      throw new HttpError(
+        409,
+        `BossMox is already moving guests${moveRecord.job?.running ? ` (${moveRecord.job.kind === "off" ? "off" : "home to"} ${moveRecord.job.node})` : ""}. Wait for that to finish.`,
+      );
     moveJob.starting = true;
     try {
       const run = await prepare();
@@ -195,36 +237,41 @@ export function createJobs(ctx: JobsContext) {
     const [cluster, tieBreaker, servers] = await Promise.all([
       section(pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", ticket)),
       section(pve.get<{ State?: string }>("/cluster/config/qdevice", ticket)),
-      Promise.all(data.nodes.map(async (n): Promise<RollingInput> => {
-        if (!n.online) return { name: n.name, online: false, version: null, updates: null, rebootNeeded: false, busy: [], cantMove: [], ejectable: [] };
-        const base = `/nodes/${encodeURIComponent(n.name)}`;
-        const [status, updates, active] = await Promise.all([
-          section(pve.get<RawStatus>(`${base}/status`, ticket)),
-          section(pve.get<RawUpdate[]>(`${base}/apt/update`, ticket)),
-          section(pve.get<RawTask[]>(`${base}/tasks?source=active`, ticket)),
-        ]);
-        const list = updates.available ? groupUpdates(updates.value) : null;
-        // Each node that restarts is planned against the cluster as it is now: guests go home before the next one.
-        const evac = list?.rebootNeeded && list.total > 0
-          ? await planEvacuation(ticket, n.name, undefined, undefined, {}, assumeEjected).catch((err: Error) => ({ problems: [`BossMox couldn't plan the moves: ${err.message}`], ejectable: [] }))
-          : { problems: [], ejectable: [] };
-        const cantMove = evac.problems.map((p) => `${n.name}: ${p}`);
-        const ejectable = (evac.ejectable ?? []).map((g) => ({ ...g, node: n.name }));
-        return {
-          name: n.name,
-          online: true,
-          version: status.available ? status.value.pveversion?.split("/")[1] ?? null : null,
-          updates: list ? list.total : null,
-          rebootNeeded: list?.rebootNeeded ?? false,
-          busy: buildRebootPlan(active, { available: false }).busy,
-          cantMove,
-          ejectable,
-        };
-      })),
+      Promise.all(
+        data.nodes.map(async (n): Promise<RollingInput> => {
+          if (!n.online) return { name: n.name, online: false, version: null, updates: null, rebootNeeded: false, busy: [], cantMove: [], ejectable: [] };
+          const base = `/nodes/${encodeURIComponent(n.name)}`;
+          const [status, updates, active, checks] = await Promise.all([
+            section(pve.get<RawStatus>(`${base}/status`, ticket)),
+            section(pve.get<RawUpdate[]>(`${base}/apt/update`, ticket)),
+            section(pve.get<RawTask[]>(`${base}/tasks?source=active`, ticket)),
+            section(pve.get<RawTask[]>(`${base}/tasks?typefilter=aptupdate&limit=1`, ticket)),
+          ]);
+          // A check that failed leaves a stale list; that node sits the run out instead of looking up to date (#55, #73).
+          const checkFailed = checks.available ? failedCheck(checks.value) : null;
+          const list = updates.available && !checkFailed ? groupUpdates(updates.value) : null;
+          // Each node that restarts is planned against the cluster as it is now: guests go home before the next one.
+          const evac =
+            list?.rebootNeeded && list.total > 0
+              ? await planEvacuation(ticket, n.name, undefined, undefined, {}, assumeEjected).catch((err: Error) => ({ problems: [`BossMox couldn't plan the moves: ${err.message}`], ejectable: [] }))
+              : { problems: [], ejectable: [] };
+          const cantMove = evac.problems.map((p) => `${n.name}: ${p}`);
+          const ejectable = (evac.ejectable ?? []).map((g) => ({ ...g, node: n.name }));
+          return {
+            name: n.name,
+            online: true,
+            version: status.available ? (status.value.pveversion?.split("/")[1] ?? null) : null,
+            updates: list ? list.total : null,
+            rebootNeeded: list?.rebootNeeded ?? false,
+            busy: buildRebootPlan(active, { available: false }).busy,
+            cantMove,
+            ejectable,
+            checkFailed,
+          };
+        }),
+      ),
     ]);
-    const quorate: Section<boolean> = cluster.available
-      ? { available: true, value: cluster.value.find((c) => c.type === "cluster")?.quorate === 1 }
-      : { available: false };
+    const quorate: Section<boolean> = cluster.available ? { available: true, value: cluster.value.find((c) => c.type === "cluster")?.quorate === 1 } : { available: false };
     return buildRollingPlan(servers, quorate, tieBreaker);
   }
 
@@ -253,38 +300,67 @@ export function createJobs(ctx: JobsContext) {
     }
   };
 
-  interface PlanVm { id: number; name: string; type: "qemu" | "lxc"; canMove: boolean; why: string; to: string | null; self: boolean; discSlots: string[]; choice: "move" | "shutdown" }
+  interface PlanVm {
+    id: number;
+    name: string;
+    type: "qemu" | "lxc";
+    canMove: boolean;
+    why: string;
+    to: string | null;
+    self: boolean;
+    discSlots: string[];
+    choice: "move" | "shutdown";
+  }
   /** What a run would do on each node, with a choice per running VM: what it can do, and the safe default. */
   async function runPlan(ticket: string, kind: "update" | "restart", server: string, assumeEjected: number[] = []) {
     const macs = (ctx.macs ?? ownMacs)();
     const rolling = kind === "update" ? await loadRollingPlan(ticket, assumeEjected) : null;
-    const nodes = kind === "update"
-      ? (rolling?.servers ?? []).map((s) => ({ name: s.name, version: s.version, updates: s.updates ?? 0, restart: s.rebootNeeded, install: true }))
-      : [{ name: server, version: null, updates: 0, restart: true, install: false }];
-    const out = await Promise.all(nodes.map(async (n) => {
-      if (!n.restart) return { ...n, vms: [] as PlanVm[] };
-      const evac = await planEvacuation(ticket, n.name, undefined, undefined, {}, assumeEjected);
-      const resources = await pve.get<RawResource[]>("/cluster/resources?type=vm", ticket);
-      const running = resources.filter((r) => r.node === n.name && (r.status === "running" || r.status === "paused") && r.template !== 1);
-      const vms: PlanVm[] = await Promise.all(running.map(async (r) => {
-        const id = Number(r.vmid);
-        const type = r.type === "lxc" ? "lxc" : "qemu";
-        const config = await pve.get<RawConfig>(`/nodes/${enc(n.name)}/${type}/${id}/config`, ticket).catch((): RawConfig => ({}));
-        const unplaced = evac.unplaced?.find((u) => u.id === id);
-        const to = evac.tentative?.find((m) => m.id === id)?.target ?? null;
-        const self = isSelf(config, macs);
-        return { id, name: r.name ?? `VM ${id}`, type, canMove: !unplaced, why: unplaced?.why ?? "", to, self, discSlots: evac.ejectable?.find((e) => e.id === id)?.slots ?? [], choice: unplaced && !self ? "shutdown" : "move" };
-      }));
-      return { ...n, vms: vms.sort((a, b) => a.name.localeCompare(b.name)) };
-    }));
+    const nodes =
+      kind === "update"
+        ? (rolling?.servers ?? []).map((s) => ({ name: s.name, version: s.version, updates: s.updates ?? 0, restart: s.rebootNeeded, install: true }))
+        : [{ name: server, version: null, updates: 0, restart: true, install: false }];
+    const out = await Promise.all(
+      nodes.map(async (n) => {
+        if (!n.restart) return { ...n, vms: [] as PlanVm[] };
+        const evac = await planEvacuation(ticket, n.name, undefined, undefined, {}, assumeEjected);
+        const resources = await pve.get<RawResource[]>("/cluster/resources?type=vm", ticket);
+        const running = resources.filter((r) => r.node === n.name && (r.status === "running" || r.status === "paused") && r.template !== 1);
+        const vms: PlanVm[] = await Promise.all(
+          running.map(async (r) => {
+            const id = Number(r.vmid);
+            const type = r.type === "lxc" ? "lxc" : "qemu";
+            const config = await pve.get<RawConfig>(`/nodes/${enc(n.name)}/${type}/${id}/config`, ticket).catch((): RawConfig => ({}));
+            const unplaced = evac.unplaced?.find((u) => u.id === id);
+            const to = evac.tentative?.find((m) => m.id === id)?.target ?? null;
+            const self = isSelf(config, macs);
+            return {
+              id,
+              name: r.name ?? `VM ${id}`,
+              type,
+              canMove: !unplaced,
+              why: unplaced?.why ?? "",
+              to,
+              self,
+              discSlots: evac.ejectable?.find((e) => e.id === id)?.slots ?? [],
+              choice: unplaced && !self ? "shutdown" : "move",
+            };
+          }),
+        );
+        return { ...n, vms: vms.sort((a, b) => a.name.localeCompare(b.name)) };
+      }),
+    );
     // Rooms counted with every VM moving; a person's Shut down choices only free more.
     const blocked = [...(rolling?.blocked.filter((b) => !rolling.servers.some((s) => b.startsWith(`${s.name}: `))) ?? [])];
-    for (const n of out) for (const v of n.vms) {
-      if (!v.self) continue;
-      // A running container only moves by stopping, which would stop BossMox in the middle of the run (#46).
-      if (v.type === "lxc") blocked.push(`BossMox runs in the container ${v.name} on ${n.name}. A container can't move without stopping, and that would stop BossMox in the middle of the run. Restart ${n.name} from Proxmox instead, after moving its other guests.`);
-      else if (!v.canMove) blocked.push(`BossMox runs in ${v.name} on ${n.name}, and it can't move: ${v.why} BossMox can't shut itself down, so this has to be fixed first.`);
-    }
+    for (const n of out)
+      for (const v of n.vms) {
+        if (!v.self) continue;
+        // A running container only moves by stopping, which would stop BossMox in the middle of the run (#46).
+        if (v.type === "lxc")
+          blocked.push(
+            `BossMox runs in the container ${v.name} on ${n.name}. A container can't move without stopping, and that would stop BossMox in the middle of the run. Restart ${n.name} from Proxmox instead, after moving its other guests.`,
+          );
+        else if (!v.canMove) blocked.push(`BossMox runs in ${v.name} on ${n.name}, and it can't move: ${v.why} BossMox can't shut itself down, so this has to be fixed first.`);
+      }
     // Votes for both kinds of run, counted the same way (#43, #51).
     const [members, qdevice, ha] = await Promise.all([
       pve.get<{ quorum_votes?: string | number }[]>("/cluster/config/nodes", ticket).catch(() => null),
@@ -295,11 +371,22 @@ export function createJobs(ctx: JobsContext) {
     const votes = (members ?? []).reduce((a, m) => a + Number(m.quorum_votes ?? 1), 0) + (tieBreakerVotes(qdevice) ? 1 : 0);
     const restarts = out.some((n) => n.restart);
     // Not knowing is a refusal, not a pass: an account that can't read these, or a failed read, mustn't skip the check (review 2).
-    if (restarts && (!members || !ha)) blocked.push("BossMox couldn't read the cluster's votes or which guests HA looks after, so it won't restart a node. Try again, or sign in with an account that can see the whole cluster.");
+    if (restarts && (!members || !ha))
+      blocked.push("BossMox couldn't read the cluster's votes or which guests HA looks after, so it won't restart a node. Try again, or sign in with an account that can see the whole cluster.");
     const haBlock = restarts && members && ha ? haQuorumBlock(votes, members.length, ha.filter((r) => /^(vm|ct):/.test(r.sid ?? "")).length) : null;
     if (haBlock) blocked.push(haBlock);
     const net = await readNetCheck(ticket);
-    return { kind, nodes: out, blocked, votes, keepsMajority: votes >= 3, keepFreePct: ctx.preferences().keepFreePct, moveBatch: net.batch, moveShared: net.known && net.shared };
+    return {
+      kind,
+      nodes: out,
+      notChecked: rolling?.notChecked ?? [],
+      blocked,
+      votes,
+      keepsMajority: votes >= 3,
+      keepFreePct: ctx.preferences().keepFreePct,
+      moveBatch: net.batch,
+      moveShared: net.known && net.shared,
+    };
   }
 
   /**
@@ -315,18 +402,27 @@ export function createJobs(ctx: JobsContext) {
       ]);
       const online = new Set(resources.filter((r) => r.status === "online").map((r) => r.node));
       if (config.some((c) => !online.has(String(c.node ?? c.name ?? "")))) return checkNetworks([], null);
-      const nodes = await Promise.all(config.map(async (c) => {
-        const name = String(c.node ?? c.name ?? "");
-        const links = Object.keys(c).filter((k) => /^ring\d+_addr$/.test(k)).sort().map((k) => String(c[k]));
-        const ifaces = await pve.get<{ cidr?: string }[]>(`/nodes/${enc(name)}/network`, ticket);
-        return { name, links, addresses: ifaces.flatMap((i) => (i.cidr ? [i.cidr] : [])) };
-      }));
+      const nodes = await Promise.all(
+        config.map(async (c) => {
+          const name = String(c.node ?? c.name ?? "");
+          const links = Object.keys(c)
+            .filter((k) => /^ring\d+_addr$/.test(k))
+            .sort()
+            .map((k) => String(c[k]));
+          const ifaces = await pve.get<{ cidr?: string }[]>(`/nodes/${enc(name)}/network`, ticket);
+          return { name, links, addresses: ifaces.flatMap((i) => (i.cidr ? [i.cidr] : [])) };
+        }),
+      );
       return checkNetworks(nodes, migrationNetwork(options.migration));
     } catch {
       return checkNetworks([], null);
     }
   }
-  const batchFor = (ticket: string) => readNetCheck(ticket).then((c) => c.batch, () => SAFE_BATCH);
+  const batchFor = (ticket: string) =>
+    readNetCheck(ticket).then(
+      (c) => c.batch,
+      () => SAFE_BATCH,
+    );
 
   /** How long bringing guests home waits for a just-restarted node's processor to calm down. */
   const RETURN_SETTLE_MS = 5 * 60 * 1000;
@@ -352,9 +448,10 @@ export function createJobs(ctx: JobsContext) {
         const busy = buildRebootPlan(active, { available: false }).busy;
         return busy.length ? `${node} is busy: ${busy.join(", ")}.` : null;
       },
-      runningOn: async (node) => (await pve.get<RawResource[]>("/cluster/resources?type=vm", t()))
-        .filter((r) => r.node === node && r.template !== 1 && (r.status === "running" || r.status === "paused"))
-        .map((r) => ({ id: Number(r.vmid), name: r.name ?? `VM ${r.vmid}`, type: r.type === "lxc" ? "lxc" as const : "qemu" as const })),
+      runningOn: async (node) =>
+        (await pve.get<RawResource[]>("/cluster/resources?type=vm", t()))
+          .filter((r) => r.node === node && r.template !== 1 && (r.status === "running" || r.status === "paused"))
+          .map((r) => ({ id: Number(r.vmid), name: r.name ?? `VM ${r.vmid}`, type: r.type === "lxc" ? ("lxc" as const) : ("qemu" as const) })),
       shutdown: async (node, vm) => {
         const upid = await pve.post<string>(`/nodes/${enc(node)}/${vm.type}/${vm.id}/status/shutdown`, session, { timeout: "180", forceStop: "1" });
         await waitTask(node, upid, t(), 5 * 60 * 1000);
@@ -372,7 +469,10 @@ export function createJobs(ctx: JobsContext) {
         const proxy = await pve.post<TermProxy>(`/nodes/${enc(node)}/termproxy`, session);
         const r = await runOnNode(ctx.shell(), node, t(), proxy, INSTALL_COMMAND);
         if (r.exitCode === STILL_RUNNING) throw new Error(`An earlier update is still installing on ${node}, so BossMox didn't start another. Wait for it to finish, then run again.`);
-        const left = await pve.get<RawUpdate[]>(`/nodes/${enc(node)}/apt/update`, t()).then((u) => groupUpdates(u).total, () => null);
+        const left = await pve.get<RawUpdate[]>(`/nodes/${enc(node)}/apt/update`, t()).then(
+          (u) => groupUpdates(u).total,
+          () => null,
+        );
         return { exitCode: r.exitCode, keptConfig: r.keptConfig, left };
       },
       restart: async (node) => {
@@ -436,18 +536,27 @@ export function createJobs(ctx: JobsContext) {
     if (!confirmed) throw new HttpError(400, "It wasn't confirmed.");
     // A run stops when the sign-in that started it ends. One that won't last a long update is refused up front (#59).
     const left = session.expiresAt - Date.now();
-    if (left < RUN_NEEDS_MS) throw new HttpError(400, `Your sign-in ends in ${Math.max(1, Math.round(left / 60000))} minutes, and a run stops when it does. Sign out and in again first, then start it.`);
+    if (left < RUN_NEEDS_MS)
+      throw new HttpError(400, `Your sign-in ends in ${Math.max(1, Math.round(left / 60000))} minutes, and a run stops when it does. Sign out and in again first, then start it.`);
     if (currentRun?.running || runState.starting) throw new HttpError(409, "A run is already going. Open it to follow or stop it.");
     if (moveRecord.job?.running || moveJob.starting) throw new HttpError(409, "BossMox is moving guests right now. Wait for that to finish.");
     runState.starting = true;
     try {
       // Discs chosen to come out are planned as already out. Nothing is ejected until every check below passes (#48).
-      const eject = Object.entries(choices).filter(([, c]) => c === "eject").map(([id]) => Number(id));
+      const eject = Object.entries(choices)
+        .filter(([, c]) => c === "eject")
+        .map(([id]) => Number(id));
       const plan = await runPlan(session.ticket, kind, server, eject);
       if (plan.blocked.length) throw new HttpError(400, plan.blocked.join(" "));
       if (kind === "update" && !plan.nodes.length) throw new HttpError(400, "Every node is up to date.");
       const nodes: RunNode[] = plan.nodes.map((n) => ({
-        name: n.name, install: n.install, restart: n.restart, updates: n.updates, phase: "waiting", note: null, keptConfig: [],
+        name: n.name,
+        install: n.install,
+        restart: n.restart,
+        updates: n.updates,
+        phase: "waiting",
+        note: null,
+        keptConfig: [],
         vms: n.vms.map((v) => {
           const asked = choices[String(v.id)];
           const choice: Choice = v.self ? "move" : asked === "shutdown" ? "shutdown" : asked === "move" || asked === "eject" ? "move" : v.choice;
@@ -462,13 +571,14 @@ export function createJobs(ctx: JobsContext) {
         if (check.problems.length) throw new HttpError(400, `${n.name}: ${check.problems.join(" ")} Choose Shut down for it, or lower Keep free.`);
       }
       // Every check passed. Only now do the chosen discs come out.
-      for (const n of plan.nodes) for (const v of n.vms.filter((x) => eject.includes(x.id) && x.type === "qemu")) {
-        const path = `/nodes/${enc(n.name)}/qemu/${v.id}`;
-        const current = await pve.get<RawConfig>(`${path}/config`, session.ticket);
-        const { slots } = asEjected(current);
-        for (const slot of slots) await pve.put<null>(`${path}/config`, session, discForm("", current, slot));
-        if (slots.length) ctx.audit("eject", session.username, "run", { node: n.name, guest: v.id });
-      }
+      for (const n of plan.nodes)
+        for (const v of n.vms.filter((x) => eject.includes(x.id) && x.type === "qemu")) {
+          const path = `/nodes/${enc(n.name)}/qemu/${v.id}`;
+          const current = await pve.get<RawConfig>(`${path}/config`, session.ticket);
+          const { slots } = asEjected(current);
+          for (const slot of slots) await pve.put<null>(`${path}/config`, session, discForm("", current, slot));
+          if (slots.length) ctx.audit("eject", session.username, "run", { node: n.name, guest: v.id });
+        }
       currentRun = { id: `run:${Date.now()}`, kind, by: session.username, startedAt: Date.now(), finishedAt: null, running: true, stop: null, error: null, current: 0, nodes };
       const run = currentRun;
       runState.session = session;

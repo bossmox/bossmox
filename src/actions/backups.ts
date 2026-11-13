@@ -1,4 +1,3 @@
-
 import { isListedBackup, type RawVolume } from "../storage-map.js";
 import { STORAGE, VOLUME, JOB_ID, SCHEDULE, text } from "../checks.js";
 import type { ActionContext } from "../server.js";
@@ -42,7 +41,15 @@ export function backupActions(c: ActionContext): Record<string, Action> {
       const keep = Number(body.keep);
       if (!SCHEDULE.test(schedule) || !STORAGE.test(storage) || !Number.isInteger(keep) || keep < 1 || keep > 99) throw new HttpError(400, "That schedule isn't valid.");
       if (guests !== "all" && !/^\d+(,\d+)*$/.test(guests)) throw new HttpError(400, "That schedule isn't valid.");
-      await pve.post<null>("/cluster/backup", who, { schedule, storage, mode: "snapshot", compress: "zstd", enabled: "1", "prune-backups": `keep-last=${keep}`, ...(guests === "all" ? { all: "1" } : { vmid: guests }) });
+      await pve.post<null>("/cluster/backup", who, {
+        schedule,
+        storage,
+        mode: "snapshot",
+        compress: "zstd",
+        enabled: "1",
+        "prune-backups": `keep-last=${keep}`,
+        ...(guests === "all" ? { all: "1" } : { vmid: guests }),
+      });
       return null;
     },
     "schedule-toggle": async (_name, who, body) => {

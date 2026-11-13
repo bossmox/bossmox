@@ -1,4 +1,3 @@
-
 import { clonesOf, type RawConfig } from "../model.js";
 import { containerForm, CreateError, discDownload, discForm, vmForm, type CreateInput } from "../create.js";
 import { changesForm, SettingsError } from "../guest-settings.js";
@@ -146,7 +145,10 @@ export function guestActions(c: ActionContext): Record<string, Action> {
         // Proxmox doesn't answer for a VM that's only just started, so it gets a few seconds before the reset.
         await wait(BIOS_SETTLE_MS);
         for (let i = 0; ; i++) {
-          const done = await reset().then(() => true, () => false);
+          const done = await reset().then(
+            () => true,
+            () => false,
+          );
           if (done) break;
           if (i === 12) throw new HttpError(400, "It started, but wouldn't restart to the boot menu.");
           await wait(1000);
@@ -233,7 +235,8 @@ export function guestActions(c: ActionContext): Record<string, Action> {
         return addressForm(c, slot, { mode: text(body.mode, 8), address: text(body.address, 20), gateway: text(body.gateway, 16) });
       });
       const live = await pve.get<{ inet?: string }[]>(`${path}/interfaces`, who.ticket).catch(() => []);
-      if (live.some((i) => ownAddresses().has(String(i.inet ?? "").split("/")[0] ?? ""))) throw new HttpError(400, "This container is BossMox itself. Changing its address here would cut you off, so it isn't offered.");
+      if (live.some((i) => ownAddresses().has(String(i.inet ?? "").split("/")[0] ?? "")))
+        throw new HttpError(400, "This container is BossMox itself. Changing its address here would cut you off, so it isn't offered.");
       await pve.put<null>(`${path}/config`, who, form);
       return null;
     },
@@ -269,7 +272,11 @@ export function guestActions(c: ActionContext): Record<string, Action> {
       const { id, path } = guestPath(name, body);
       if (body.confirm !== id) throw new HttpError(400, "That wasn't confirmed.");
       const clones = clonesOf(Number(id), (await loadOverview(who.ticket)).vms);
-      if (clones.length) throw new HttpError(400, `${clones.join(", ")} ${clones.length === 1 ? "was" : "were"} made from this template and still ${clones.length === 1 ? "needs" : "need"} it. Delete ${clones.length === 1 ? "that clone" : "those clones"} first.`);
+      if (clones.length)
+        throw new HttpError(
+          400,
+          `${clones.join(", ")} ${clones.length === 1 ? "was" : "were"} made from this template and still ${clones.length === 1 ? "needs" : "need"} it. Delete ${clones.length === 1 ? "that clone" : "those clones"} first.`,
+        );
       return pve.delete<string>(`${path}?purge=1`, who);
     },
   };

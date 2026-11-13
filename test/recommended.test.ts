@@ -36,7 +36,11 @@ test("moves on their own network: on, can be turned off, and a speed limit isn't
   assert.equal(move.on, true);
   assert.equal(move.can, true);
   assert.equal(move.choice, "10.0.100.0/24");
-  assert.deepEqual(move.choices!.map((c) => c.value), ["10.0.100.0/24"], "the heartbeat's network is never offered for moves");
+  assert.deepEqual(
+    move.choices!.map((c) => c.value),
+    ["10.0.100.0/24"],
+    "the heartbeat's network is never offered for moves",
+  );
   assert.throws(() => optionsForm("move-network", true, "10.0.0.0/24", {}, own), /Pick one of the networks/);
   assert.match(by(list, "ha-shutdown").detail, /moves those guests to another node first and brings them back/);
   assert.equal(by(list, "move-limit").on, true);
@@ -54,7 +58,10 @@ test("an account without Sys.Modify sees every cluster switch locked, with the r
 
 test("a single node gets only the boot switch, which turns on only", () => {
   const list = buildRecommended({ ...base(), nodes: 1, noBoot: [{ id: 100, name: "HomeAssistant" }] });
-  assert.deepEqual(list.map((s) => s.id), ["boot"]);
+  assert.deepEqual(
+    list.map((s) => s.id),
+    ["boot"],
+  );
   assert.equal(list[0]!.on, false);
   assert.equal(list[0]!.can, true);
   assert.deepEqual(list[0]!.guests, [100]);
@@ -87,7 +94,10 @@ test("each switch changes only its own part of Proxmox's cluster options", () =>
 });
 
 test("a move network that also carries storage is named, and a limit of 250 MB/s is recommended once moves use it", () => {
-  const storage = [{ id: "MCS-SynNAS-01", ip: "10.0.100.31" }, { id: "FILE", ip: "10.0.0.6" }];
+  const storage = [
+    { id: "MCS-SynNAS-01", ip: "10.0.100.31" },
+    { id: "FILE", ip: "10.0.0.6" },
+  ];
   const before = by(buildRecommended({ ...base(), storage, net: { ...shared, heartbeat: ["10.0.0.0/24"] } }), "move-network");
   assert.deepEqual(before.choices, [{ value: "10.0.100.0/24", label: "10.0.100.0/24, also used by MCS-SynNAS-01", storage: ["MCS-SynNAS-01"] }]);
   const own = { known: true, shared: false, moveNet: "10.0.100.0/24", others: ["10.0.0.0/24"], batch: 3, current: "10.0.100.0/24", heartbeat: ["10.0.0.0/24"] };

@@ -69,7 +69,10 @@ export class Sessions {
   /** Whether a session has a console open, so it gets checked even with no requests arriving. */
   isBusy: (session: Session) => boolean = () => false;
 
-  constructor(private readonly client: LoginClient, private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly client: LoginClient,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   private drop(id: string) {
     const s = this.sessions.get(id);

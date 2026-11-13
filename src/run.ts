@@ -2,7 +2,7 @@
  * An update or restart run, driven by the BossMox server (ADR 0027). Kept in runs.json beside the settings, so any
  * browser can follow it and closing the page changes nothing. One node at a time; every step is saved as it ends.
  */
-import { readFileSync, } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { writeJsonAtomic } from "./json-file.js";
 
@@ -189,7 +189,10 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
             deps.save(run);
             let result: MoveOffResult;
             try {
-              result = await deps.moveOff(node.name, moving.map((v) => v.id));
+              result = await deps.moveOff(
+                node.name,
+                moving.map((v) => v.id),
+              );
             } catch (err) {
               for (const vm of moving) vm.state = "failed";
               throw err;
@@ -229,7 +232,10 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
               const lateVms = node.vms.filter((v) => late.some((g) => g.id === v.id));
               for (const vm of lateVms) vm.state = "moving";
               deps.save(run);
-              const result = await deps.moveOff(node.name, lateVms.map((v) => v.id));
+              const result = await deps.moveOff(
+                node.name,
+                lateVms.map((v) => v.id),
+              );
               for (const vm of lateVms) {
                 const on = result.went[vm.id];
                 if (on) {
@@ -247,24 +253,34 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
             await deps.restart(node.name);
           });
           // Starting what was shut down finishes this node's restart, so Stop doesn't skip it (#44).
-          await step(run, deps, node, "starting", async () => {
-            for (const vm of node.vms.filter((v) => v.state === "off")) {
-              vm.state = "starting";
-              deps.save(run);
-              try {
-                await deps.start(node.name, vm);
-                vm.state = "started";
-              } catch (err) {
-                vm.state = "failed";
-                vm.note = `didn't start: ${plain(err)}`;
+          await step(
+            run,
+            deps,
+            node,
+            "starting",
+            async () => {
+              for (const vm of node.vms.filter((v) => v.state === "off")) {
+                vm.state = "starting";
+                deps.save(run);
+                try {
+                  await deps.start(node.name, vm);
+                  vm.state = "started";
+                } catch (err) {
+                  vm.state = "failed";
+                  vm.note = `didn't start: ${plain(err)}`;
+                }
+                deps.save(run);
               }
-              deps.save(run);
-            }
-          }, true);
+            },
+            true,
+          );
           if (node.vms.some((v) => v.state === "moved")) {
             await step(run, deps, node, "returning", async () => {
               const moved = node.vms.filter((v) => v.state === "moved");
-              const stayed = await deps.moveHome(node.name, moved.map((v) => v.id));
+              const stayed = await deps.moveHome(
+                node.name,
+                moved.map((v) => v.id),
+              );
               for (const vm of moved) {
                 const away = stayed[vm.id];
                 if (away) {
@@ -280,7 +296,12 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
           }
         }
         node.phase = "done";
-        node.note = node.vms.some((v) => v.state === "failed") ? `Done, but not everything started: ${node.vms.filter((v) => v.state === "failed").map((v) => v.name).join(", ")}.` : null;
+        node.note = node.vms.some((v) => v.state === "failed")
+          ? `Done, but not everything started: ${node.vms
+              .filter((v) => v.state === "failed")
+              .map((v) => v.name)
+              .join(", ")}.`
+          : null;
         deps.save(run);
       } catch (err) {
         // Ended before the restart: start again what was shut down for it, so nothing stays off for a restart

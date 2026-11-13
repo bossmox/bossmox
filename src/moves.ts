@@ -2,7 +2,7 @@
  * Guests moved off a node, and the job that moves them (ADR 0025). The record lives on the BossMox server beside
  * its settings, so any browser and any person can see what's away and send it home.
  */
-import { readFileSync, } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { Move, MovePlan, Pending } from "./placement.js";
 import { writeJsonAtomic } from "./json-file.js";
@@ -141,7 +141,16 @@ const plainError = (err: unknown) => (err instanceof Error && err.message ? err.
  * that filled up meanwhile isn't used. Every finished move is written to the record at once.
  */
 export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: string, by: string, first: Move[], batch = BATCH): Promise<void> {
-  const job: JobView = { kind: "off", node, by, startedAt: Date.now(), finishedAt: null, running: true, error: null, guests: first.map((m) => ({ id: m.id, name: m.name, target: m.target, state: "waiting" })) };
+  const job: JobView = {
+    kind: "off",
+    node,
+    by,
+    startedAt: Date.now(),
+    finishedAt: null,
+    running: true,
+    error: null,
+    guests: first.map((m) => ({ id: m.id, name: m.name, target: m.target, state: "waiting" })),
+  };
   record.job = job;
   deps.save(record);
   try {
@@ -151,7 +160,10 @@ export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: strin
       const stop = deps.stopped();
       if (stop) throw new Error(`BossMox stopped before the next move: ${stop}`);
       // One plan for everything still to go, so the batch's room is counted together.
-      const fresh = await deps.plan(node, left.map((x) => x.id));
+      const fresh = await deps.plan(
+        node,
+        left.map((x) => x.id),
+      );
       if (fresh.problems.length) throw new Error(`The room changed while moving: ${fresh.problems.join(" ")}`);
       const gone = left.find((x) => !fresh.moves.some((m) => m.id === x.id));
       if (gone) throw new Error(`${gone.name} is no longer on ${node}, so BossMox stopped to let you check.`);
@@ -233,7 +245,16 @@ export const onlyBusy = (plan: MovePlan) => (plan.unplaced ?? []).length > 0 && 
  */
 export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: string, by: string, batch = BATCH, patienceMs = 0): Promise<void> {
   // The job is on the record before anything waits, so whoever started it can follow it at once.
-  const job: JobView = { kind: "home", node, by, startedAt: Date.now(), finishedAt: null, running: true, error: null, guests: (record.away[node]?.guests ?? []).map((g) => ({ id: g.id, name: g.name, target: node, state: "waiting" })) };
+  const job: JobView = {
+    kind: "home",
+    node,
+    by,
+    startedAt: Date.now(),
+    finishedAt: null,
+    running: true,
+    error: null,
+    guests: (record.away[node]?.guests ?? []).map((g) => ({ id: g.id, name: g.name, target: node, state: "waiting" })),
+  };
   record.job = job;
   deps.save(record);
   const away = record.away[node];

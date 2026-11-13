@@ -1,5 +1,6 @@
 import http from "node:http";
 import tls from "node:tls";
+import net from "node:net";
 
 const TIMEOUT_MS = 10000;
 
@@ -9,14 +10,20 @@ export interface Peer {
 }
 export class PinError extends Error {}
 export class PveReply extends Error {
-  constructor(readonly status: number, readonly reason: string) {
+  constructor(
+    readonly status: number,
+    readonly reason: string,
+  ) {
     super(reason);
   }
 }
 
 /** "10.0.0.5", "pve1.lan:8006" or "https://10.0.0.5:8006/" all come down to a host and port, or null. */
 export function parseAddress(input: string): { host: string; port: number } | null {
-  const s = input.trim().replace(/^https:\/\//i, "").replace(/\/+$/, "");
+  const s = input
+    .trim()
+    .replace(/^https:\/\//i, "")
+    .replace(/\/+$/, "");
   const m = s.match(/^(\[[0-9a-f:]+\]|[a-z0-9][a-z0-9.-]{0,252})(?::(\d{1,5}))?$/i);
   if (!m) return null;
   const port = Number(m[2] ?? 8006);
@@ -25,6 +32,12 @@ export function parseAddress(input: string): { host: string; port: number } | nu
 }
 
 const bare = (host: string) => host.replace(/^\[|\]$/g, "");
+
+/** Where a verified TLS connection goes: tls.connect wants an IPv6 address without brackets, and no SNI for an address (#71). */
+export function tlsTarget(host: string): { host: string; servername: string | undefined } {
+  const h = bare(host);
+  return { host: h, servername: net.isIP(h) ? undefined : h };
+}
 
 function connect(host: string, port: number): Promise<tls.TLSSocket> {
   return new Promise((resolve, reject) => {
@@ -43,7 +56,7 @@ export async function probe(host: string, port: number): Promise<Peer> {
   if (!cert?.fingerprint256) throw new Error("That address didn't show a certificate.");
   // A certificate can carry more than one common name, which newer Node type definitions spell out.
   const cn: string | string[] | undefined = cert.subject?.CN;
-  return { fingerprint: cert.fingerprint256, subject: Array.isArray(cn) ? cn.join(", ") : cn ?? "" };
+  return { fingerprint: cert.fingerprint256, subject: Array.isArray(cn) ? cn.join(", ") : (cn ?? "") };
 }
 
 export interface Pinned {

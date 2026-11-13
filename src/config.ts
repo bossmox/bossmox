@@ -39,7 +39,8 @@ export function sameOrigin(origin: string, host: string | undefined, https: bool
   try {
     const o = new URL(origin);
     if (o.protocol !== (https ? "https:" : "http:")) return false;
-    return o.host.toLowerCase() === (host ?? "").toLowerCase() || proxiedNames.has(o.hostname.toLowerCase());
+    // URL keeps an IPv6 hostname in brackets; the proxied names are stored without (#71).
+    return o.host.toLowerCase() === (host ?? "").toLowerCase() || proxiedNames.has(hostName(o.hostname));
   } catch {
     return false;
   }
@@ -120,9 +121,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     config.tls = { cert: readFileSync(env.TLS_CERT_FILE), key: readFileSync(env.TLS_KEY_FILE) };
   }
   if (!isLoopback(config.host) && !config.tls && !config.behindProxy && !config.allowHttp) {
-    throw new Error(
-      "BossMox won't serve passwords over plain HTTP on a network. Set TLS_CERT_FILE and TLS_KEY_FILE, or put it behind an HTTPS proxy and set BOSSMOX_BEHIND_HTTPS_PROXY=1.",
-    );
+    throw new Error("BossMox won't serve passwords over plain HTTP on a network. Set TLS_CERT_FILE and TLS_KEY_FILE, or put it behind an HTTPS proxy and set BOSSMOX_BEHIND_HTTPS_PROXY=1.");
   }
   return config;
 }

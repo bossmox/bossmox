@@ -23,6 +23,14 @@ export interface Identity {
 const READ_WAIT_MS = 8000;
 const WRITE_WAIT_MS = 60_000;
 
+/** A request body. A list is sent as the same name repeated, which is how Proxmox takes its array settings. */
+export type Form = Record<string, string | string[]>;
+export function encodeForm(form: Form): string {
+  const out = new URLSearchParams();
+  for (const [k, v] of Object.entries(form)) for (const one of Array.isArray(v) ? v : [v]) out.append(k, one);
+  return out.toString();
+}
+
 export class PveClient {
   private current = 0;
 
@@ -103,10 +111,15 @@ export class PveClient {
       const req = secure ? https.request(url, options, onResponse) : http.request(url, options, onResponse);
       let connected = false;
       req.on("socket", (socket) => {
-        if (socket.connecting) socket.once("connect", () => { connected = true; });
+        if (socket.connecting)
+          socket.once("connect", () => {
+            connected = true;
+          });
         else connected = true;
       });
-      req.on("timeout", () => req.destroy(new Error(method === "GET" ? "Proxmox took too long to answer" : "Proxmox took too long to answer, and it may still have made the change. Check before trying again.")));
+      req.on("timeout", () =>
+        req.destroy(new Error(method === "GET" ? "Proxmox took too long to answer" : "Proxmox took too long to answer, and it may still have made the change. Check before trying again.")),
+      );
       req.on("error", (err) => reject(Object.assign(err, { unreached: !connected })));
       req.end(body);
     });
@@ -118,8 +131,10 @@ export class PveClient {
    */
   upload(path: string, who: Identity, fields: Record<string, string>, file: { name: string; size: number; stream: NodeJS.ReadableStream }): Promise<string> {
     const boundary = `----BossMox${randomBytes(16).toString("hex")}`;
-    const head = Object.entries(fields).map(([k, v]) => `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`).join("")
-      + `--${boundary}\r\nContent-Disposition: form-data; name="filename"; filename="${file.name}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+    const parts = Object.entries(fields)
+      .map(([k, v]) => `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`)
+      .join("");
+    const head = `${parts}--${boundary}\r\nContent-Disposition: form-data; name="filename"; filename="${file.name}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
     const tail = `\r\n--${boundary}--\r\n`;
     const url = new URL(`/api2/json${path}`, this.activeUrl);
     const headers = {
@@ -169,12 +184,12 @@ export class PveClient {
     return { username: data.username, ticket: data.ticket, csrf: data.CSRFPreventionToken ?? "", needsCode: data.NeedTFA === 1 };
   }
 
-  post<T>(path: string, who: Identity, form: Record<string, string> = {}): Promise<T> {
-    return this.request<T>("POST", path, who.ticket, new URLSearchParams(form).toString(), who.csrf);
+  post<T>(path: string, who: Identity, form: Form = {}): Promise<T> {
+    return this.request<T>("POST", path, who.ticket, encodeForm(form), who.csrf);
   }
 
-  put<T>(path: string, who: Identity, form: Record<string, string> = {}): Promise<T> {
-    return this.request<T>("PUT", path, who.ticket, new URLSearchParams(form).toString(), who.csrf);
+  put<T>(path: string, who: Identity, form: Form = {}): Promise<T> {
+    return this.request<T>("PUT", path, who.ticket, encodeForm(form), who.csrf);
   }
 
   delete<T>(path: string, who: Identity): Promise<T> {
@@ -184,7 +199,11 @@ export class PveClient {
 
 export class PveError extends Error {
   /** `reason` is Proxmox's own explanation, which is worth showing when it refuses an action. */
-  constructor(readonly status: number, message: string, readonly reason?: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly reason?: string,
+  ) {
     super(message);
   }
 }

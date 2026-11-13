@@ -63,6 +63,8 @@ export interface ShellResult {
   exitCode: number;
   /** The last part of what it printed, without colours. */
   tail: string;
+  /** Everything it printed that was kept (the last 64 KB), without colours. */
+  output: string;
   keptConfig: string[];
 }
 
@@ -94,12 +96,17 @@ export function runOnNode(config: ShellConfig, node: string, ticket: string, pro
       // Only a finished command gets "exit": while the install still runs, what's typed would go to it.
       try {
         if (!err && ws.readyState === WebSocket.OPEN) send("exit\n");
-      } catch { /* closing anyway */ }
+      } catch {
+        /* closing anyway */
+      }
       ws.close();
       if (err) reject(err);
       else resolve(result as ShellResult);
     };
-    const timer = setTimeout(() => end(new Error(`The install on ${node} didn't finish within ${Math.round(timeoutMs / 60000)} minutes. It carries on there by itself; check the node before restarting it.`)), timeoutMs);
+    const timer = setTimeout(
+      () => end(new Error(`The install on ${node} didn't finish within ${Math.round(timeoutMs / 60000)} minutes. It carries on there by itself; check the node before restarting it.`)),
+      timeoutMs,
+    );
     // The shell needs a moment after the login line; a login prompt in that time means no root shell.
     let typeAfter: NodeJS.Timeout | undefined;
     const typeCommand = () => {
@@ -118,7 +125,7 @@ export function runOnNode(config: ShellConfig, node: string, ticket: string, pro
         return;
       }
       const code = finished(output);
-      if (code !== null) end(null, { exitCode: code, tail: plainText(output).slice(-4000), keptConfig: keptConfigFiles(output) });
+      if (code !== null) end(null, { exitCode: code, tail: plainText(output).slice(-4000), output: plainText(output), keptConfig: keptConfigFiles(output) });
     });
     ws.on("error", (err) => end(new Error(`BossMox lost the console on ${node}: ${err.message}`)));
     ws.on("close", () => end(new Error(`The console on ${node} closed before the install finished.`)));

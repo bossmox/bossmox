@@ -16,6 +16,25 @@
 #   --yes             Don't ask before creating the VM.
 set -euo pipefail
 
+# The same text as the top of this file. Kept here because run as a one-liner there's no file to read it from (#76).
+usage() {
+  cat <<'USAGE'
+BossMox: management app for Proxmox Virtual Environment. Not affiliated with Proxmox.
+
+Run as root on a Proxmox node. Creates one small VM running BossMox and changes nothing else on the node.
+Options go after the one-liner as: bash -c "$(curl ...)" -- --ip 192.168.1.20/24 --gateway 192.168.1.1
+
+Usage: install.sh [options]
+  --vmid N          VM ID. Default: the next free one.
+  --storage NAME    Where its disk goes. Default: the storage with the most free space that holds VM disks.
+  --bridge NAME     Network bridge. Default: vmbr0.
+  --vlan N          VLAN tag. Default: none.
+  --ip A.B.C.D/NN   Fixed address. Needs --gateway. Default: asks when run by hand, DHCP when not.
+  --gateway A.B.C.D Gateway for --ip.
+  --yes             Don't ask before creating the VM.
+USAGE
+}
+
 # Where this script sits, only when it was run as a file. Run as a one-liner (bash -c "$(curl ...)") there's no
 # file, so HERE stays empty and the package is always downloaded: a bossmox.tgz that happens to be in the current
 # folder is never used (pre-public review 2026-11-09). BASH_SOURCE, not $0: with options, bash -c sets $0 to "--".
@@ -47,7 +66,7 @@ while [ $# -gt 0 ]; do
     --ip) needs_value "$@"; ADDRESS=$2; shift 2 ;;
     --gateway) needs_value "$@"; GATEWAY=$2; shift 2 ;;
     --yes) ASSUME_YES=1; shift ;;
-    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) usage; exit 0 ;;
     *) die "I don't know the option $1. Try --help." ;;
   esac
 done
@@ -73,11 +92,6 @@ elif [ -n "$PKG" ]; then
 fi
 [ -z "$ADDRESS" ] || [ -n "$GATEWAY" ] || die "--ip needs --gateway too."
 [[ "$VLAN" =~ ^[0-9]*$ ]] || die "--vlan has to be a number."
-[[ "$ADDRESS" =~ ^[0-9./]*$ ]] && [[ "$GATEWAY" =~ ^[0-9.]*$ ]] || die "that address isn't valid."
-[ -d "/sys/class/net/$BRIDGE" ] || die "there's no network bridge called $BRIDGE. Pick one with --bridge."
-
-# BossMox's own address (ADR 0023). Run by hand without --ip, it asks: an automatic address can change after a
-# restart, which breaks the bookmark and the certificate. Scripts, --yes and --ip behave as before.
 ip2int() { local IFS=.; set -- $1; echo $(( ($1 << 24) + ($2 << 16) + ($3 << 8) + $4 )); }
 valid_ip() {
   [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
@@ -87,6 +101,18 @@ same_network() { # address prefix gateway
   local mask=$(( (0xFFFFFFFF << (32 - $2)) & 0xFFFFFFFF ))
   [ $(( $(ip2int "$1") & mask )) -eq $(( $(ip2int "$3") & mask )) ]
 }
+# All of --ip checked before anything is built: an address without its /NN used to fail only after the VM existed (#76).
+if [ -n "$ADDRESS" ]; then
+  [[ "$ADDRESS" =~ ^([0-9.]+)/([0-9]+)$ ]] || die "--ip needs the network size too, like 192.168.1.20/24."
+  A=${BASH_REMATCH[1]}; P=${BASH_REMATCH[2]}
+  valid_ip "$A" && [ "$P" -ge 8 ] && [ "$P" -le 30 ] || die "--ip $ADDRESS isn't a valid address."
+  valid_ip "$GATEWAY" || die "--gateway $GATEWAY isn't a valid address."
+  same_network "$A" "$P" "$GATEWAY" || die "--gateway $GATEWAY isn't on the same network as $ADDRESS."
+fi
+[ -d "/sys/class/net/$BRIDGE" ] || die "there's no network bridge called $BRIDGE. Pick one with --bridge."
+
+# BossMox's own address (ADR 0023). Run by hand without --ip, it asks: an automatic address can change after a
+# restart, which breaks the bookmark and the certificate. Scripts, --yes and --ip behave as before.
 if [ -z "$ADDRESS" ] && [ "$ASSUME_YES" != 1 ] && [ -t 0 ]; then
   HOST_NET=$(ip -4 -o addr show dev "$BRIDGE" 2>/dev/null | awk '{print $4; exit}')
   NODE_IP=${HOST_NET%/*}
@@ -102,7 +128,7 @@ if [ -z "$ADDRESS" ] && [ "$ASSUME_YES" != 1 ] && [ -t 0 ]; then
   echo "  A fixed address stays the same, so your bookmark keeps working. Recommended."
   echo "  An automatic one comes from your router and can change after a restart."
   [ -z "$NODE_IP" ] || echo "  This node is $NODE_IP. Pick an address on the same network that nothing else uses."
-  for TRY in 1 2 3 4 5; do
+  for _ in 1 2 3 4 5; do
     read -r -p "Fixed address for BossMox (like 192.168.1.20), or press Enter for automatic: " IN || IN=""
     [ -n "$IN" ] || break
     A=${IN%/*}

@@ -132,7 +132,7 @@ export function readHardDisks(raw: RawDisk[], passedThrough: { device: string; g
         sizeGb: Math.round(((d.size ?? 0) / 1024 ** 3) * 10) / 10,
         model: d.model && d.model !== "unknown" ? d.model.replace(/_/g, " ") : "",
         kind: d.type && d.type !== "unknown" ? d.type.toUpperCase() : "",
-        used: vm ? `given to ${vm}` : d.used ?? "",
+        used: vm ? `given to ${vm}` : (d.used ?? ""),
         health: d.health ?? "UNKNOWN",
         failing: healthBad(d.health),
         wearLeft: typeof d.wearout === "number" ? d.wearout : null,
@@ -210,19 +210,24 @@ export function setupPlan(disks: HardDisk[], devices: string[], purpose: string,
     return found!;
   });
   const n = picked.length;
-  if (purpose !== "vms") needs(n === 1, purpose === "files" ? "Pick one drive for backups and installer discs." : "To use several drives together, pick VMs and containers. Backups belong on a different drive from the guests anyway.");
+  if (purpose !== "vms")
+    needs(
+      n === 1,
+      purpose === "files" ? "Pick one drive for backups and installer discs." : "To use several drives together, pick VMs and containers. Backups belong on a different drive from the guests anyway.",
+    );
   const smallest = Math.min(...picked.map((d) => d.sizeGb));
   const kind = purpose === "vms" ? (n === 1 ? "lvmthin" : "zfs") : "directory";
   const raid = kind === "zfs" ? (n === 2 ? "mirror" : "raidz") : "";
   const names = picked.map((d) => (d.model ? `${d.model} (${d.path})` : d.path)).join(" and ");
   const what = { vms: "VM and container disks", files: "backups, installer discs and templates", both: "VM and container disks, backups, installer discs and templates" }[purpose];
-  const how = kind === "lvmthin"
-    ? "a pool where disks take space only as they fill, with snapshots"
-    : kind === "directory"
-      ? `a folder${purpose === "both" ? ", where VM disks are kept as files that can be snapshotted" : ""}`
-      : raid === "mirror"
-        ? "a mirror, where both drives hold the same data so one can fail without losing anything"
-        : `a RAID-Z pool across ${n} drives, where one can fail without losing anything`;
+  const how =
+    kind === "lvmthin"
+      ? "a pool where disks take space only as they fill, with snapshots"
+      : kind === "directory"
+        ? `a folder${purpose === "both" ? ", where VM disks are kept as files that can be snapshotted" : ""}`
+        : raid === "mirror"
+          ? "a mirror, where both drives hold the same data so one can fail without losing anything"
+          : `a RAID-Z pool across ${n} drives, where one can fail without losing anything`;
   const usable = kind === "zfs" ? (raid === "mirror" ? smallest : smallest * (n - 1)) : smallest;
   const uneven = n > 1 && picked.some((d) => d.sizeGb > smallest * 1.1) ? " The drives aren't the same size, so each only gives as much as the smallest." : "";
   const erased = picked.filter((d) => !d.free);
@@ -266,8 +271,8 @@ export function buildStorageList(config: RawStorageConfig[], usage: Usage[]) {
       const type = s.type ?? "";
       // A share looks the same from every node, so its space only counts once.
       const shared = s.shared === 1 || type === "nfs" || type === "cifs" || type === "cephfs" || type === "rbd" || type === "pbs";
-      const counted = (shared ? here.filter((u) => u.online).slice(0, 1) : here.filter((u) => u.online));
-      const where = s.server ? `${s.server}${s.export ?? (s.share ? `/${s.share}` : "")}` : s.path ?? s.pool ?? s.vgname ?? "";
+      const counted = shared ? here.filter((u) => u.online).slice(0, 1) : here.filter((u) => u.online);
+      const where = s.server ? `${s.server}${s.export ?? (s.share ? `/${s.share}` : "")}` : (s.path ?? s.pool ?? s.vgname ?? "");
       return {
         id: s.storage,
         type,

@@ -57,9 +57,7 @@ export function buildUsage(raw: RawPoint[], kind: "node" | "guest", range: Range
     // Proxmox keeps bytes a second; networks are spoken of in bits.
     netIn: num(p.netin) === null ? null : (num(p.netin)! * 8) / 1e6,
     netOut: num(p.netout) === null ? null : (num(p.netout)! * 8) / 1e6,
-    ...(kind === "guest"
-      ? { diskRead: num(p.diskread) === null ? null : num(p.diskread)! / 1e6, diskWrite: num(p.diskwrite) === null ? null : num(p.diskwrite)! / 1e6 }
-      : {}),
+    ...(kind === "guest" ? { diskRead: num(p.diskread) === null ? null : num(p.diskread)! / 1e6, diskWrite: num(p.diskwrite) === null ? null : num(p.diskwrite)! / 1e6 } : {}),
   });
   const each = sorted.map(one);
   const size = Math.max(1, Math.ceil(each.length / MAX_POINTS));

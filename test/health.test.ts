@@ -29,13 +29,23 @@ test("a healthy single node passes everything and says so", () => {
   // The schedule saves to a NAS, so it has to be network storage in the map.
   input.maps[0]!.network.push({ ...input.maps[0]!.groups[0]!.pools[0]!, id: "nas", shared: true });
   const checks = buildHealth(input);
-  assert.deepEqual(checks.filter((c) => c.status !== "ok").map((c) => c.title), []);
+  assert.deepEqual(
+    checks.filter((c) => c.status !== "ok").map((c) => c.title),
+    [],
+  );
   assert.equal(by(checks, "votes"), undefined, "a single node isn't told about votes");
   assert.ok(checks.length >= 8);
 });
 
 test("two nodes without a tie-breaker are warned, three are fine, a lost majority is bad", () => {
-  const two = { ...base(), cluster: { quorate: true }, votes: [{ node: "a", votes: 1 }, { node: "b", votes: 1 }] };
+  const two = {
+    ...base(),
+    cluster: { quorate: true },
+    votes: [
+      { node: "a", votes: 1 },
+      { node: "b", votes: 1 },
+    ],
+  };
   assert.equal(by(buildHealth(two), "votes")!.status, "warn");
   assert.equal(by(buildHealth({ ...two, tieBreaker: true }), "votes")!.status, "ok");
   assert.equal(by(buildHealth({ ...two, cluster: { quorate: false } }), "votes")!.status, "bad");
@@ -147,10 +157,88 @@ test("leftover disks are listed with their guest and size, and offered for remov
 });
 
 test("a tie-breaker that's set up but not connected gives no vote, and says why (#51)", () => {
-  const two = { ...base(), cluster: { quorate: true }, votes: [{ node: "a", votes: 1 }, { node: "b", votes: 1 }] };
+  const two = {
+    ...base(),
+    cluster: { quorate: true },
+    votes: [
+      { node: "a", votes: 1 },
+      { node: "b", votes: 1 },
+    ],
+  };
   const down = by(buildHealth({ ...two, tieBreaker: false, tieBreakerDown: true }), "votes")!;
   assert.equal(down.status, "warn");
   assert.equal(down.title, "The tie-breaker isn't connected");
   assert.match(down.detail, /2 votes.*port 5403/);
   assert.equal(by(buildHealth({ ...two, tieBreaker: true }), "votes")!.status, "ok");
+});
+
+test("the heartbeat: a best-practice tip with a way to Settings, a tip without one, or a pass (ADR 0035)", () => {
+  const cluster = (heartbeat: HealthInput["heartbeat"]) =>
+    buildHealth({
+      ...base(),
+      nodes: [
+        { name: "a", online: true },
+        { name: "b", online: true },
+        { name: "c", online: true },
+      ],
+      cluster: { quorate: true },
+      votes: [
+        { node: "a", votes: 1 },
+        { node: "b", votes: 1 },
+        { node: "c", votes: 1 },
+      ],
+      heartbeat,
+    });
+  const offer = by(cluster({ state: "offer", network: "10.0.31.0/24", addresses: {}, sharesMoves: false, link: 1 }), "heartbeat");
+  assert.equal(offer?.status, "tip");
+  assert.match(offer?.title ?? "", /^Best practice/);
+  assert.equal(offer?.fix?.kind, "settings");
+  const noPort = by(cluster({ state: "no-port", nodes: ["c"] }), "heartbeat");
+  assert.equal(noPort?.status, "tip");
+  assert.match(noPort?.detail ?? "", /c doesn't have one/);
+  assert.equal(noPort?.fix, undefined, "nothing to set up without a second port");
+  assert.equal(by(cluster({ state: "backed-up", links: 2 }), "heartbeat")?.status, "ok");
+  assert.equal(by(cluster({ state: "unknown", why: "x" }), "heartbeat"), undefined, "nothing claimed when it can't be told");
+  assert.equal(by(buildHealth(base()), "heartbeat"), undefined, "a single node says nothing");
+});
+
+test("HA gave up on a guest: bad, with the lock named and Fix this (ADR 0036)", () => {
+  const input = {
+    ...base(),
+    nodes: [
+      { name: "a", online: true },
+      { name: "b", online: true },
+      { name: "c", online: true },
+    ],
+    cluster: { quorate: true },
+  };
+  input.guests = [{ ...input.guests[0]!, name: "db", id: 102, node: "a", ha: "error", lock: "migrate" }];
+  const item = by(buildHealth(input), "ha-error-102");
+  assert.equal(item?.status, "bad");
+  assert.equal(item?.title, "HA gave up on db");
+  assert.match(item?.detail ?? "", /locked \(migrate\).*every node shutting down at once/);
+  assert.deepEqual(item?.fix, { kind: "ha-recover", label: "Fix this", vmids: [102], node: "a" });
+});
+
+test("two votes and no tie-breaker: the warning opens Settings; a disconnected one or an odd count gets no button (ADR 0037)", () => {
+  const two = (over: Partial<HealthInput>) =>
+    by(
+      buildHealth({
+        ...base(),
+        nodes: [
+          { name: "a", online: true },
+          { name: "b", online: true },
+        ],
+        cluster: { quorate: true },
+        votes: [
+          { node: "a", votes: 1 },
+          { node: "b", votes: 1 },
+        ],
+        ...over,
+      }),
+      "votes",
+    );
+  assert.deepEqual(two({})?.fix, { kind: "settings", label: "Open Settings" });
+  assert.match(two({})?.detail ?? "", /set up in Settings/);
+  assert.equal(two({ tieBreakerDown: true })?.fix, undefined);
 });

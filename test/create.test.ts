@@ -3,7 +3,18 @@ import { test } from "node:test";
 import { containerForm, CreateError, discDownload, discForm, installerLabel, vmForm, type CreateInput } from "../src/create.js";
 
 const input = (more: Partial<CreateInput> = {}): CreateInput => ({
-  id: "500", name: "web", cores: 2, memoryMb: 2048, diskGb: 32, storage: "local", bridge: "vmbr0", installer: "local:iso/a.iso", os: "linux", start: false, password: "", ...more,
+  id: "500",
+  name: "web",
+  cores: 2,
+  memoryMb: 2048,
+  diskGb: 32,
+  storage: "local",
+  bridge: "vmbr0",
+  installer: "local:iso/a.iso",
+  os: "linux",
+  start: false,
+  password: "",
+  ...more,
 });
 
 test("a Linux VM boots from its disk, then the installer", () => {
@@ -54,7 +65,6 @@ test("bad settings are refused in plain words, and can't smuggle in extra option
   assert.throws(() => containerForm(input({ password: "short" })), /at least 8/);
   assert.throws(() => containerForm(input({ installer: "", password: "longenough" })), /template/);
 });
-
 
 test("adding a disc also adds it to the boot list, once", () => {
   const f = discForm("local:iso/a.iso", { boot: "order=scsi0" });

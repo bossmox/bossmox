@@ -19,7 +19,11 @@ function sizeGb(value: string): number {
   const scale = { "": 1 / 1024 ** 3, K: 1 / 1024 ** 2, M: 1 / 1024, G: 1, T: 1024 }[m[2] as "" | "K" | "M" | "G" | "T"];
   return Math.round(n * scale * 10) / 10;
 }
-const part = (value: string, key: string) => value.split(",").find((p) => p.startsWith(`${key}=`))?.slice(key.length + 1) ?? "";
+const part = (value: string, key: string) =>
+  value
+    .split(",")
+    .find((p) => p.startsWith(`${key}=`))
+    ?.slice(key.length + 1) ?? "";
 
 /**
  * The disk it starts from, which can't be taken away: the first disk in the boot order. Older VMs name it with
@@ -28,12 +32,21 @@ const part = (value: string, key: string) => value.split(",").find((p) => p.star
 export function bootDisk(type: "qemu" | "lxc", config: Config): string {
   if (type === "lxc") return "rootfs";
   const isDisk = (d: string) => QEMU_DISK.test(d) && Object.hasOwn(config, d) && !String(config[d] ?? "").includes("media=cdrom");
-  const order = String(config.boot ?? "").match(/order=([^,]+)/)?.[1]?.split(";") ?? [];
+  const order =
+    String(config.boot ?? "")
+      .match(/order=([^,]+)/)?.[1]
+      ?.split(";") ?? [];
   const fromOrder = order.find(isDisk);
   if (order.length) return fromOrder ?? "";
   const legacy = String(config.bootdisk ?? "");
   if (isDisk(legacy)) return legacy;
-  return ["scsi", "virtio", "sata", "ide"].flatMap((bus) => Object.keys(config).filter((k) => k.startsWith(bus) && isDisk(k)).sort((x, y) => Number(x.slice(bus.length)) - Number(y.slice(bus.length))))[0] ?? "";
+  return (
+    ["scsi", "virtio", "sata", "ide"].flatMap((bus) =>
+      Object.keys(config)
+        .filter((k) => k.startsWith(bus) && isDisk(k))
+        .sort((x, y) => Number(x.slice(bus.length)) - Number(y.slice(bus.length))),
+    )[0] ?? ""
+  );
 }
 
 export function readDisks(type: "qemu" | "lxc", config: Config) {
@@ -58,7 +71,9 @@ const FILE_TYPES = new Set(["dir", "nfs", "cifs", "glusterfs"]);
  * when not asked for qcow2. Only offered when converting them would be enough, so every other disk already can.
  */
 export function snapshotFix(config: Config, storageTypes: Record<string, string>): string[] {
-  const slots = Object.entries(config).filter(([k, v]) => (QEMU_DISK.test(k) || k === "efidisk0" || k === "tpmstate0") && !String(v).includes("media=cdrom") && String(v) !== "none" && String(v).includes(":"));
+  const slots = Object.entries(config).filter(
+    ([k, v]) => (QEMU_DISK.test(k) || k === "efidisk0" || k === "tpmstate0") && !String(v).includes("media=cdrom") && String(v) !== "none" && String(v).includes(":"),
+  );
   const convert: string[] = [];
   for (const [slot, v] of slots) {
     const volume = String(v).split(",")[0] ?? "";
@@ -78,8 +93,8 @@ export function readNics(type: "qemu" | "lxc", config: Config) {
       const first = value.split(",")[0] ?? "";
       return {
         slot,
-        model: type === "qemu" ? first.split("=")[0] ?? "" : part(value, "name"),
-        mac: type === "qemu" ? first.split("=")[1] ?? "" : part(value, "hwaddr"),
+        model: type === "qemu" ? (first.split("=")[0] ?? "") : part(value, "name"),
+        mac: type === "qemu" ? (first.split("=")[1] ?? "") : part(value, "hwaddr"),
         bridge: part(value, "bridge"),
         vlan: part(value, "tag"),
         // A container's address is in its own settings; a VM's is inside the VM, where Proxmox can't set it.
@@ -139,7 +154,8 @@ const ipv4 = (s: string) => {
 };
 /** True when the gateway sits on the address's own network, the usual mistake being a typo in either. */
 export function sameNetwork(address: string, prefix: number, gateway: string) {
-  const a = ipv4(address), g = ipv4(gateway);
+  const a = ipv4(address),
+    g = ipv4(gateway);
   if (a === null || g === null) return false;
   const size = 2 ** (32 - prefix);
   return Math.floor(a / size) === Math.floor(g / size);
@@ -168,7 +184,9 @@ export function addressForm(config: Config, slot: string, v: { mode: string; add
     ip = `${addr}/${prefix}`;
     gw = gateway;
   } else throw new HardwareError("Pick automatic or fixed.");
-  const parts = String(config[slot]).split(",").filter((p) => !p.startsWith("ip=") && !p.startsWith("gw="));
+  const parts = String(config[slot])
+    .split(",")
+    .filter((p) => !p.startsWith("ip=") && !p.startsWith("gw="));
   return { [slot]: [...parts, `ip=${ip}`, ...(gw ? [`gw=${gw}`] : [])].join(",") };
 }
 
@@ -191,8 +209,15 @@ interface AgentInterface {
 export function pickAddresses(type: "qemu" | "lxc", raw: unknown): string[] {
   const usable = (a: string) => a && !/^(127\.|::1|fe80:|169\.254\.)/i.test(a);
   if (type === "lxc") {
-    return (raw as LxcInterface[]).filter((i) => i.name !== "lo").flatMap((i) => [i.inet, i.inet6]).map((a) => (a ?? "").split("/")[0] as string).filter(usable);
+    return (raw as LxcInterface[])
+      .filter((i) => i.name !== "lo")
+      .flatMap((i) => [i.inet, i.inet6])
+      .map((a) => (a ?? "").split("/")[0] as string)
+      .filter(usable);
   }
   const list = (raw as { result?: AgentInterface[] }).result ?? [];
-  return list.filter((i) => i.name !== "lo").flatMap((i) => (i["ip-addresses"] ?? []).map((a) => a["ip-address"] ?? "")).filter(usable);
+  return list
+    .filter((i) => i.name !== "lo")
+    .flatMap((i) => (i["ip-addresses"] ?? []).map((a) => a["ip-address"] ?? ""))
+    .filter(usable);
 }

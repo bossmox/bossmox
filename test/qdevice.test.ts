@@ -1,0 +1,104 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import type { Session } from "../src/auth.js";
+import type { PveClient } from "../src/pve.js";
+import { addressProblem, createTieBreaker, readVotes, tieBreakerState } from "../src/qdevice.js";
+
+test("offered only on an even number of nodes with no tie-breaker (ADR 0037, Proxmox's advice)", () => {
+  assert.deepEqual(tieBreakerState(2, {}), { state: "offer", nodes: 2 });
+  assert.deepEqual(tieBreakerState(3, {}), { state: "odd", nodes: 3 });
+  assert.deepEqual(tieBreakerState(1, null), { state: "single" });
+  assert.deepEqual(tieBreakerState(2, { State: "Connected" }), { state: "set", connected: true });
+  assert.deepEqual(tieBreakerState(2, { State: "Disconnected" }), { state: "set", connected: false });
+});
+
+test("the vote machine must be outside the cluster: not a node, not a guest", () => {
+  const nodes = { "bmx2-node1": ["10.0.30.251"], "bmx2-node2": ["10.0.30.252"] };
+  assert.equal(addressProblem("10.0.30.248", nodes, { tiny: ["10.0.30.99"] }), null);
+  assert.match(addressProblem("10.0.30.251", nodes, {}) ?? "", /bmx2-node1, one of the cluster's own nodes/);
+  assert.match(addressProblem("10.0.30.99", nodes, { tiny: ["10.0.30.99"] }) ?? "", /tiny, a guest on this cluster/);
+  assert.match(addressProblem("vote.lan", nodes, {}) ?? "", /IPv4 address/);
+  assert.match(addressProblem("10.0.30.300", nodes, {}) ?? "", /IPv4 address/);
+});
+
+const STATUS = `Votequorum information
+----------------------
+Expected votes:   3
+Highest expected: 3
+Total votes:      3
+Quorum:           2
+Flags:            Quorate Qdevice
+
+Membership information
+----------------------
+    Nodeid      Votes    Qdevice Name
+0x00000001          1    A,V,NMW 10.0.30.251 (local)
+0x00000002          1    A,V,NMW 10.0.30.252
+0x00000000          1            Qdevice`;
+
+test("reads the tie-breaker's vote from pvecm status", () => {
+  assert.deepEqual(readVotes(STATUS), { qdevice: 1, total: 3, expected: 3 });
+  assert.deepEqual(readVotes(STATUS.replace(/\n0x00000000.*$/, "").replace("Total votes:      3", "Total votes:      2")), { qdevice: 0, total: 2, expected: 3 });
+});
+
+function fake(opts: { portClosed?: boolean; installFails?: boolean } = {}) {
+  const lines: string[] = [];
+  const pve = {
+    get: async (path: string) => {
+      if (path === "/cluster/status")
+        return [
+          { type: "cluster", name: "bmx2lab", quorate: 1 },
+          { type: "node", name: "bmx2-node1", online: 1 },
+          { type: "node", name: "bmx2-node2", online: 1 },
+        ];
+      if (path === "/cluster/config/qdevice") return {};
+      if (path === "/cluster/config/nodes")
+        return [
+          { node: "bmx2-node1", ring0_addr: "10.0.30.251" },
+          { node: "bmx2-node2", ring0_addr: "10.0.30.252" },
+        ];
+      if (/\/network$/.test(path)) return [];
+      throw new Error(`unexpected ${path}`);
+    },
+  } as unknown as PveClient;
+  const tb = createTieBreaker({
+    pve,
+    console: async (node, _s, line) => {
+      lines.push(`${node}: ${line.slice(0, 30)}`);
+      if (line.includes("__BMX_PING__")) return { exitCode: 0, output: `\n__BMX_PING__:yes\n__BMX_PORT__:${opts.portClosed ? "no" : "yes"}\n` };
+      if (line.includes("__BMX_QD__")) return { exitCode: 0, output: `\n__BMX_QD__:${opts.installFails ? "no" : "yes"}\n` };
+      if (line.includes("__BMX_ST__")) return { exitCode: 0, output: `\n__BMX_ST__\n${STATUS}\n__BMX_END__\n` };
+      throw new Error(`unexpected ${line}`);
+    },
+    guestAddresses: async () => ({}),
+    audit: () => {},
+  });
+  const done = async () => {
+    for (let i = 0; i < 200 && tb.job()?.running; i++) await new Promise((r) => setImmediate(r));
+    return tb.job()!;
+  };
+  return { tb, done, lines };
+}
+const root = { username: "root@pam", ticket: "T" } as Session;
+
+test("prepare checks the way from every node, installs on every node, and hands over to the console", async () => {
+  const { tb, done } = fake();
+  await tb.prepare(root, "10.0.30.248", "bmx2lab");
+  const j = await done();
+  assert.equal(j.result, "ready", j.error ?? "");
+  assert.equal(j.node, "bmx2-node1");
+  assert.deepEqual((await tb.verify(root)).voting, true);
+});
+
+test("a closed vote port or a failed install stops it, saying which; refusals for name, user and address", async () => {
+  const closed = fake({ portClosed: true });
+  await closed.tb.prepare(root, "10.0.30.248", "bmx2lab");
+  assert.match((await closed.done()).error ?? "", /port 5403.*Run the lines above/);
+  const noPkg = fake({ installFails: true });
+  await noPkg.tb.prepare(root, "10.0.30.248", "bmx2lab");
+  assert.match((await noPkg.done()).error ?? "", /didn't install on bmx2-node1/);
+  const { tb } = fake();
+  await assert.rejects(tb.prepare(root, "10.0.30.248", "nope"), (e: { status: number }) => e.status === 400);
+  await assert.rejects(tb.prepare({ ...root, username: "admin@pve" } as Session, "10.0.30.248", "bmx2lab"), (e: { status: number }) => e.status === 403);
+  await assert.rejects(tb.prepare(root, "10.0.30.251", "bmx2lab"), (e: { status: number; message: string }) => e.status === 400 && /own nodes/.test(e.message));
+});

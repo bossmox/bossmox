@@ -20,15 +20,34 @@ function fake(opts: Partial<RunDeps> & { stopAfter?: string; at?: Run } = {}) {
     stopped: () => stop,
     save: () => {},
     wait: async () => {},
-    notReady: async (n) => { note(`check ${n}`); return null; },
+    notReady: async (n) => {
+      note(`check ${n}`);
+      return null;
+    },
     // By default each node runs what the run listed for it, minus what has since moved off or been shut down.
-    runningOn: async (n) => (opts.at?.nodes.find((x) => x.name === n)?.vms ?? []).filter((v) => !["moved", "off", "stayed", "home"].includes(v.state)).map(({ id, name, type }) => ({ id, name, type })),
-    shutdown: async (_n, v) => { note(`shutdown ${v.name}`); },
-    moveOff: async (n, ids) => { note(`moveOff ${n} ${ids.join(",")}`); return { went: Object.fromEntries(ids.map((id) => [id, "elsewhere"])), error: null }; },
-    install: async (n) => { note(`install ${n}`); return { exitCode: 0, keptConfig: [], left: 0 }; },
-    restart: async (n) => { note(`restart ${n}`); },
-    start: async (_n, v) => { note(`start ${v.name}`); },
-    moveHome: async (n) => { note(`home ${n}`); return {}; },
+    runningOn: async (n) =>
+      (opts.at?.nodes.find((x) => x.name === n)?.vms ?? []).filter((v) => !["moved", "off", "stayed", "home"].includes(v.state)).map(({ id, name, type }) => ({ id, name, type })),
+    shutdown: async (_n, v) => {
+      note(`shutdown ${v.name}`);
+    },
+    moveOff: async (n, ids) => {
+      note(`moveOff ${n} ${ids.join(",")}`);
+      return { went: Object.fromEntries(ids.map((id) => [id, "elsewhere"])), error: null };
+    },
+    install: async (n) => {
+      note(`install ${n}`);
+      return { exitCode: 0, keptConfig: [], left: 0 };
+    },
+    restart: async (n) => {
+      note(`restart ${n}`);
+    },
+    start: async (_n, v) => {
+      note(`start ${v.name}`);
+    },
+    moveHome: async (n) => {
+      note(`home ${n}`);
+      return {};
+    },
     ...opts,
   };
   return { deps, log };
@@ -41,8 +60,14 @@ test("a node: shut down what was chosen, move the rest, install, restart, start,
   assert.deepEqual(log, ["check n1", "shutdown app", "moveOff n1 1,3", "install n1", "restart n1", "start app", "home n1", "check n2", "moveOff n2 4", "install n2", "restart n2", "home n2"]);
   assert.equal(r.error, null);
   assert.equal(r.running, false);
-  assert.deepEqual(r.nodes.map((n) => n.phase), ["done", "done"]);
-  assert.deepEqual(r.nodes[0]?.vms.map((v) => v.state), ["home", "started", "home"]);
+  assert.deepEqual(
+    r.nodes.map((n) => n.phase),
+    ["done", "done"],
+  );
+  assert.deepEqual(
+    r.nodes[0]?.vms.map((v) => v.state),
+    ["home", "started", "home"],
+  );
 });
 
 test("no kernel means no restart and nothing moves", async () => {
@@ -62,11 +87,20 @@ test("a restart run doesn't install", async () => {
 
 test("a failed install stops before the restart, leaves later nodes untouched, and says why", async () => {
   const r = run([node("n1", [vm(1, "web")]), node("n2", [])]);
-  const { deps, log } = fake({ at: r, install: async (n) => { log.push(`install ${n}`); return { exitCode: 100, keptConfig: [], left: 2 }; } });
+  const { deps, log } = fake({
+    at: r,
+    install: async (n) => {
+      log.push(`install ${n}`);
+      return { exitCode: 100, keptConfig: [], left: 2 };
+    },
+  });
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "moveOff n1 1", "install n1"]);
   assert.match(r.error ?? "", /n1: The install on n1 ended with an error \(apt exit code 100\), so it wasn't restarted/);
-  assert.deepEqual(r.nodes.map((n) => n.phase), ["failed", "waiting"]);
+  assert.deepEqual(
+    r.nodes.map((n) => n.phase),
+    ["failed", "waiting"],
+  );
   assert.equal(r.nodes[0]?.vms[0]?.state, "moved", "what moved is shown where it is, for Move everything back");
 });
 
@@ -89,7 +123,12 @@ test("Stop finishes the step under way and starts nothing new", async () => {
 
 test("a VM that won't start doesn't stop the run, but the node says so", async () => {
   const r = run([node("n1", [vm(1, "app", "shutdown")]), node("n2", [])]);
-  const { deps, log } = fake({ at: r, start: async () => { throw new Error("timeout"); } });
+  const { deps, log } = fake({
+    at: r,
+    start: async () => {
+      throw new Error("timeout");
+    },
+  });
   await drive(r, deps);
   assert.equal(r.error, null);
   assert.equal(r.nodes[0]?.vms[0]?.state, "failed");
@@ -100,10 +139,19 @@ test("a VM that won't start doesn't stop the run, but the node says so", async (
 test("guests that didn't fit at home are shown as stayed, with why", async () => {
   const r = run([node("n1", [vm(1, "web"), vm(2, "db")])]);
   let asked: number[] = [];
-  const { deps } = fake({ at: r, moveHome: async (_n, ids) => { asked = ids; return { 2: { on: "n2", why: "db (8 GB memory) has nowhere to go" } }; } });
+  const { deps } = fake({
+    at: r,
+    moveHome: async (_n, ids) => {
+      asked = ids;
+      return { 2: { on: "n2", why: "db (8 GB memory) has nowhere to go" } };
+    },
+  });
   await drive(r, deps);
   assert.deepEqual(asked, [1, 2]);
-  assert.deepEqual(r.nodes[0]?.vms.map((v) => `${v.name}:${v.state}`), ["web:home", "db:stayed"]);
+  assert.deepEqual(
+    r.nodes[0]?.vms.map((v) => `${v.name}:${v.state}`),
+    ["web:home", "db:stayed"],
+  );
   assert.equal(r.nodes[0]?.vms[1]?.on, "n2");
   assert.match(r.nodes[0]?.vms[1]?.note ?? "", /nowhere to go/);
 });
@@ -111,11 +159,20 @@ test("guests that didn't fit at home are shown as stayed, with why", async () =>
 test("a VM chosen to move that's still on the node stops the run before the install", async () => {
   // Live 2026-11-11: an empty move plan came back and the run went on to install and restart the node.
   const r = run([node("n1", [vm(1, "web"), vm(2, "db")]), node("n2", [])]);
-  const { deps, log } = fake({ at: r, moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { went: { 1: "n2" }, error: null }; } });
+  const { deps, log } = fake({
+    at: r,
+    moveOff: async (n, ids) => {
+      log.push(`moveOff ${n} ${ids.join(",")}`);
+      return { went: { 1: "n2" }, error: null };
+    },
+  });
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "moveOff n1 1,2"], "no install, no restart, no next node");
   assert.match(r.error ?? "", /db didn't move off n1, so it wasn't updated or restarted/);
-  assert.deepEqual(r.nodes[0]?.vms.map((v) => `${v.name}:${v.state}`), ["web:moved", "db:failed"]);
+  assert.deepEqual(
+    r.nodes[0]?.vms.map((v) => `${v.name}:${v.state}`),
+    ["web:moved", "db:failed"],
+  );
 });
 
 test("a VM already gone from the node (moved home elsewhere earlier in the run) counts as off it", async () => {
@@ -123,8 +180,14 @@ test("a VM already gone from the node (moved home elsewhere earlier in the run) 
   const r = run([node("n2", [vm(3, "cache")])]);
   const { deps, log } = fake({
     runningOn: async () => [],
-    moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { went: { 3: "n1" }, error: null }; },
-    moveHome: async (n, ids) => { log.push(`home ${n} ${ids.join(",")}`); return { 3: { on: "n1", why: "BossMox's record has another node as its home" } }; },
+    moveOff: async (n, ids) => {
+      log.push(`moveOff ${n} ${ids.join(",")}`);
+      return { went: { 3: "n1" }, error: null };
+    },
+    moveHome: async (n, ids) => {
+      log.push(`home ${n} ${ids.join(",")}`);
+      return { 3: { on: "n1", why: "BossMox's record has another node as its home" } };
+    },
   });
   await drive(r, deps);
   assert.equal(r.error, null);
@@ -143,7 +206,10 @@ test("a guest that arrived on a later node during the run is moved off it before
   const { deps, log } = fake({ at: r, runningOn: async (n) => ((n === "n1" ? !movedFrom(0) : !movedFrom(1)) ? [web] : []) });
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "moveOff n1 1", "install n1", "restart n1", "home n1", "check n3", "moveOff n3 1", "install n3", "restart n3", "home n3"]);
-  assert.deepEqual(r.nodes[1]?.vms.map((v) => `${v.name}:${v.choice}:${v.note}`), ["web:move:arrived during the run"]);
+  assert.deepEqual(
+    r.nodes[1]?.vms.map((v) => `${v.name}:${v.choice}:${v.note}`),
+    ["web:move:arrived during the run"],
+  );
 });
 
 test("a VM chosen to shut down that isn't running there at its turn is left alone", async () => {
@@ -160,7 +226,13 @@ test("a node that isn't ready is waited for, then given up on with the reason", 
   let now = 0;
   Date.now = () => now;
   try {
-    const { deps } = fake({ at: r, notReady: async () => "n1 is busy: Backup on 101.", wait: async (ms) => { now += ms; } });
+    const { deps } = fake({
+      at: r,
+      notReady: async () => "n1 is busy: Backup on 101.",
+      wait: async (ms) => {
+        now += ms;
+      },
+    });
     await drive(r, deps);
   } finally {
     Date.now = real;
@@ -189,12 +261,22 @@ test("a run cut off by a BossMox restart reads as stopped, with where it was, an
 test("Stop during the moves: what wasn't moved reads as still here, and what was shut down starts again", async () => {
   // Live 2026-11-11: Stop during emptying left cache off for a restart that never came, and the rest read "Problem".
   const r = run([node("n1", [vm(1, "web"), vm(2, "app", "shutdown"), vm(3, "db")])]);
-  const { deps, log } = fake({ at: r, moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); r.stop = "root@pam pressed Stop."; return { went: { 1: "n2" }, error: "BossMox stopped before the next move: root@pam pressed Stop." }; } });
+  const { deps, log } = fake({
+    at: r,
+    moveOff: async (n, ids) => {
+      log.push(`moveOff ${n} ${ids.join(",")}`);
+      r.stop = "root@pam pressed Stop.";
+      return { went: { 1: "n2" }, error: "BossMox stopped before the next move: root@pam pressed Stop." };
+    },
+  });
   deps.stopped = () => r.stop;
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "shutdown app", "moveOff n1 1,3", "start app"], "no install, no restart");
   assert.match(r.error ?? "", /^Stopped: root@pam pressed Stop\. n1 stopped after emptying/);
-  assert.deepEqual(r.nodes[0]?.vms.map((v) => `${v.name}:${v.state}`), ["web:moved", "app:started", "db:waiting"]);
+  assert.deepEqual(
+    r.nodes[0]?.vms.map((v) => `${v.name}:${v.state}`),
+    ["web:moved", "app:started", "db:waiting"],
+  );
   assert.match(r.nodes[0]?.vms[1]?.note ?? "", /started again: n1 wasn't restarted/);
 });
 
@@ -204,7 +286,12 @@ test("a failed install starts again what was shut down; a failed restart doesn't
   await drive(a, fa.deps);
   assert.deepEqual(fa.log, ["check n1", "shutdown app", "start app"]);
   const b = run([node("n1", [vm(2, "app", "shutdown")])]);
-  const fb = fake({ at: b, restart: async () => { throw new Error("n1 hasn't come back after 20 minutes."); } });
+  const fb = fake({
+    at: b,
+    restart: async () => {
+      throw new Error("n1 hasn't come back after 20 minutes.");
+    },
+  });
   await drive(b, fb.deps);
   assert.deepEqual(fb.log, ["check n1", "shutdown app", "install n1"]);
   assert.equal(b.nodes[0]?.vms[0]?.state, "off");
@@ -212,17 +299,42 @@ test("a failed install starts again what was shut down; a failed restart doesn't
 
 test("someone who can't see the whole cluster sees only their own nodes and guests of a run (review S6)", () => {
   const run: Run = {
-    id: "r1", kind: "update", by: "root@pam", startedAt: 1, finishedAt: null, running: true, stop: "alice@pve pressed Stop.", current: 0,
+    id: "r1",
+    kind: "update",
+    by: "root@pam",
+    startedAt: 1,
+    finishedAt: null,
+    running: true,
+    stop: "alice@pve pressed Stop.",
+    current: 0,
     error: "secret-vm didn't move off n2, so it wasn't updated or restarted.",
     nodes: [
-      { name: "n1", install: true, restart: true, updates: 3, phase: "emptying", note: "secret-vm arrived", keptConfig: [], vms: [{ id: 100, name: "mine", type: "qemu", choice: "move", state: "moving" }, { id: 200, name: "secret-vm", type: "qemu", choice: "move", state: "moving" }] },
+      {
+        name: "n1",
+        install: true,
+        restart: true,
+        updates: 3,
+        phase: "emptying",
+        note: "secret-vm arrived",
+        keptConfig: [],
+        vms: [
+          { id: 100, name: "mine", type: "qemu", choice: "move", state: "moving" },
+          { id: 200, name: "secret-vm", type: "qemu", choice: "move", state: "moving" },
+        ],
+      },
       { name: "n2", install: true, restart: true, updates: 1, phase: "waiting", note: null, keptConfig: [], vms: [] },
     ],
   };
   const limited = { full: false, nodes: new Set(["n1"]), guests: new Set([100]) };
   const seen = runFor(run, limited)!;
-  assert.deepEqual(seen.nodes.map((n) => n.name), ["n1"]);
-  assert.deepEqual(seen.nodes[0]!.vms.map((v) => v.name), ["mine"]);
+  assert.deepEqual(
+    seen.nodes.map((n) => n.name),
+    ["n1"],
+  );
+  assert.deepEqual(
+    seen.nodes[0]!.vms.map((v) => v.name),
+    ["mine"],
+  );
   assert.equal(JSON.stringify(seen).includes("secret-vm"), false, "no hidden guest's name anywhere");
   assert.equal(JSON.stringify(seen).includes("root@pam"), false, "not who started it");
   assert.equal(JSON.stringify(seen).includes("alice@pve"), false, "not who pressed Stop (review 2, S6)");
@@ -249,7 +361,11 @@ test("a guest that lands on the node during its moves or install is moved off be
   let installed = false;
   const { deps, log } = fake({
     at: r,
-    install: async (n) => { log.push(`install ${n}`); installed = true; return { exitCode: 0, keptConfig: [], left: 0 }; },
+    install: async (n) => {
+      log.push(`install ${n}`);
+      installed = true;
+      return { exitCode: 0, keptConfig: [], left: 0 };
+    },
     // Before the install n1 runs web; after it, someone has started "late" there.
     runningOn: async () => (installed ? [{ id: 9, name: "late", type: "qemu" as const }] : [{ id: 1, name: "web", type: "qemu" as const }]),
   });
@@ -264,9 +380,16 @@ test("one that arrives and can't move off stops the run before the restart (#49)
   let installed = false;
   const { deps, log } = fake({
     at: r,
-    install: async (n) => { log.push(`install ${n}`); installed = true; return { exitCode: 0, keptConfig: [], left: 0 }; },
+    install: async (n) => {
+      log.push(`install ${n}`);
+      installed = true;
+      return { exitCode: 0, keptConfig: [], left: 0 };
+    },
     runningOn: async () => (installed ? [{ id: 9, name: "late", type: "qemu" as const }] : []),
-    moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return { went: {}, error: null }; },
+    moveOff: async (n, ids) => {
+      log.push(`moveOff ${n} ${ids.join(",")}`);
+      return { went: {}, error: null };
+    },
   });
   await drive(r, deps);
   assert.equal(log.includes("restart n1"), false, "never restarted with a guest still on it");
@@ -279,9 +402,22 @@ test("a node that ends before its reboot is asked for starts again what was shut
   let installed = false;
   const { deps, log } = fake({
     at: r,
-    install: async (n) => { log.push(`install ${n}`); installed = true; return { exitCode: 0, keptConfig: [], left: 0 }; },
-    runningOn: async () => (installed ? [{ id: 9, name: "late", type: "qemu" as const }] : [{ id: 1, name: "web", type: "qemu" as const }, { id: 2, name: "app", type: "qemu" as const }]),
-    moveOff: async (n, ids) => { log.push(`moveOff ${n} ${ids.join(",")}`); return ids.includes(9) ? { went: {}, error: null } : { went: Object.fromEntries(ids.map((id) => [id, "elsewhere"])), error: null }; },
+    install: async (n) => {
+      log.push(`install ${n}`);
+      installed = true;
+      return { exitCode: 0, keptConfig: [], left: 0 };
+    },
+    runningOn: async () =>
+      installed
+        ? [{ id: 9, name: "late", type: "qemu" as const }]
+        : [
+            { id: 1, name: "web", type: "qemu" as const },
+            { id: 2, name: "app", type: "qemu" as const },
+          ],
+    moveOff: async (n, ids) => {
+      log.push(`moveOff ${n} ${ids.join(",")}`);
+      return ids.includes(9) ? { went: {}, error: null } : { went: Object.fromEntries(ids.map((id) => [id, "elsewhere"])), error: null };
+    },
   });
   await drive(r, deps);
   assert.equal(log.includes("restart n1"), false);

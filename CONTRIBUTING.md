@@ -7,7 +7,7 @@ Thanks for wanting to help. Bug reports, ideas and pull requests are all welcome
 ## Before you send code
 
 - Open an issue first for anything bigger than a small fix, so we can agree on the approach before you spend time on it.
-- Run `npm run lint` and `npm test`. Every change that affects behaviour comes with a test that fails without it.
+- Run `npm run format`, `npm run lint` and `npm test`. If you change a script in `deploy/`, run `shellcheck --severity=warning deploy/*.sh` too. Every change that affects behaviour comes with a test that fails without it.
 - Keep the words on screen plain. BossMox is for people who know Windows, Hyper-V or ESXi, not Linux. Proxmox terms belong in details, not headlines.
 - Anything that can erase or change something needs a confirmation that names the thing, and BossMox checks for itself rather than trusting Proxmox to refuse.
 - Bigger decisions get a short record in `docs/adr/`.

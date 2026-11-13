@@ -1,6 +1,6 @@
 {
   "name": "bossmox",
-  "version": "0.1.10",
+  "version": "0.2.0",
   "private": true,
   "description": "BossMox: management app for Proxmox Virtual Environment",
   "license": "AGPL-3.0-only",
@@ -11,6 +11,7 @@
   "scripts": {
     "build": "tsc",
     "lint": "biome lint",
+    "format": "biome format --write",
     "start": "node --env-file-if-exists=.env dist/src/index.js",
     "test": "tsc && node --test \"dist/test/*.test.js\"",
     "mock": "node dev/mock-pve.mjs"

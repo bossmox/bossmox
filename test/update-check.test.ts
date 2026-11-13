@@ -45,13 +45,18 @@ test("a check asks GitHub's latest release, names itself, and keeps what it foun
 test("a failed check says why in plain words and never throws", async () => {
   const limited = await new UpdateChecker(running, true, answer(403, {})).check();
   assert.equal(limited.failed, "GitHub asked BossMox to slow down");
-  const offline = await new UpdateChecker(running, true, async () => { throw new TypeError("fetch failed"); }).check();
+  const offline = await new UpdateChecker(running, true, async () => {
+    throw new TypeError("fetch failed");
+  }).check();
   assert.equal(offline.failed, "BossMox couldn't reach GitHub");
 });
 
 test("turned off, or with no version, it never contacts GitHub; turning it off forgets the notice", async () => {
   let calls = 0;
-  const count = async () => { calls++; return answer(200, rel("v0.1.1-preview"))(); };
+  const count = async () => {
+    calls++;
+    return answer(200, rel("v0.1.1-preview"))();
+  };
   await new UpdateChecker(running, false, count).check();
   await new UpdateChecker("", true, count).check();
   assert.equal(calls, 0);
@@ -67,7 +72,10 @@ test("turned off, or with no version, it never contacts GitHub; turning it off f
 
 test("Check now asks GitHub at once, but not twice inside a minute", async () => {
   let calls = 0;
-  const checker = new UpdateChecker(running, true, async () => { calls++; return answer(200, rel("v0.1.1-preview"))(); });
+  const checker = new UpdateChecker(running, true, async () => {
+    calls++;
+    return answer(200, rel("v0.1.1-preview"))();
+  });
   await checker.checkNow();
   assert.equal(calls, 1, "the first ask goes to GitHub");
   const at = checker.state.checkedAt as number;
@@ -75,6 +83,9 @@ test("Check now asks GitHub at once, but not twice inside a minute", async () =>
   assert.equal(calls, 1, "30 seconds later it answers from what it has");
   await checker.checkNow(60_000, at + 61_000);
   assert.equal(calls, 2, "after a minute it asks again");
-  await new UpdateChecker(running, false, async () => { calls++; return answer(200, {})(); }).checkNow();
+  await new UpdateChecker(running, false, async () => {
+    calls++;
+    return answer(200, {})();
+  }).checkNow();
   assert.equal(calls, 2, "turned off, it never asks");
 });

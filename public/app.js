@@ -25,12 +25,35 @@ const APPS = {
   console: { title: "Console", color: "#20262A", w: 980, h: 680, noIcon: true },
 };
 
-const S = { setChoice: {}, watching: false, data: null, sel: null, tab: "overview", filter: "all", q: "", z: 100, failed: false, server: null, serverTab: "overview", detail: null, detailError: "", details: {}, nets: {}, loadRun: 0, ticks: 0 };
+const S = {
+  setChoice: {},
+  watching: false,
+  data: null,
+  sel: null,
+  tab: "overview",
+  filter: "all",
+  q: "",
+  z: 100,
+  failed: false,
+  server: null,
+  serverTab: "overview",
+  detail: null,
+  detailError: "",
+  details: {},
+  nets: {},
+  loadRun: 0,
+  ticks: 0,
+};
 const wins = {};
 
 /* Desktop */
-$("#icons").innerHTML = Object.entries(APPS).filter(([, a]) => !a.noIcon).map(([k, a]) => `
-  <button class="icon" data-open="${k}"><span class="tile" style="background:${a.color}"><svg viewBox="0 0 32 32">${GLYPHS[k]}</svg></span>${a.title}</button>`).join("");
+$("#icons").innerHTML = Object.entries(APPS)
+  .filter(([, a]) => !a.noIcon)
+  .map(
+    ([k, a]) => `
+  <button class="icon" data-open="${k}"><span class="tile" style="background:${a.color}"><svg viewBox="0 0 32 32">${GLYPHS[k]}</svg></span>${a.title}</button>`,
+  )
+  .join("");
 
 /*
  * Icons can be dragged to any spot on the desktop (ADR 0021). They snap to a grid, a drop on another icon swaps
@@ -38,7 +61,9 @@ $("#icons").innerHTML = Object.entries(APPS).filter(([, a]) => !a.noIcon).map(([
  * focused icon; right-clicking the desktop offers Line up icons.
  */
 const ICON_KEY = "bossmox.icons";
-const CELL_W = 110, CELL_H = 124, EDGE = 26;
+const CELL_W = 110,
+  CELL_H = 124,
+  EDGE = 26;
 /** The fixed app order: the default layout, never the order the icons happen to sit in the page. */
 const iconApps = () => Object.keys(APPS).filter((k) => !APPS[k].noIcon);
 const freeIcons = () => !matchMedia("(max-width:760px)").matches;
@@ -111,9 +136,11 @@ function layoutIcons() {
     b.style.top = `${EDGE + r * CELL_H}px`;
   }
   // Tab order follows reading order: across each row, then down.
-  buttons.sort((a, b) => plan[a.dataset.open][1] - plan[b.dataset.open][1] || plan[a.dataset.open][0] - plan[b.dataset.open][0]).forEach((b) => {
-    box.append(b);
-  });
+  buttons
+    .sort((a, b) => plan[a.dataset.open][1] - plan[b.dataset.open][1] || plan[a.dataset.open][0] - plan[b.dataset.open][0])
+    .forEach((b) => {
+      box.append(b);
+    });
 }
 /** Puts an app's icon in a cell. Another icon already there swaps into the cell this one left. */
 function moveIcon(app, cell) {
@@ -135,7 +162,8 @@ $("#icons").addEventListener("pointerdown", (e) => {
 document.addEventListener("pointermove", (e) => {
   const d = iconDrag;
   if (!d) return;
-  const dx = e.clientX - d.x, dy = e.clientY - d.y;
+  const dx = e.clientX - d.x,
+    dy = e.clientY - d.y;
   if (!d.moving) {
     if (Math.hypot(dx, dy) < 6) return;
     d.moving = true;
@@ -164,11 +192,15 @@ document.addEventListener("pointercancel", () => {
   layoutIcons();
 });
 // A drag ends with a click on the icon; that click mustn't open the app.
-$("#icons").addEventListener("click", (e) => {
-  if (!swallowClick) return;
-  e.stopPropagation();
-  e.preventDefault();
-}, true);
+$("#icons").addEventListener(
+  "click",
+  (e) => {
+    if (!swallowClick) return;
+    e.stopPropagation();
+    e.preventDefault();
+  },
+  true,
+);
 $("#icons").addEventListener("keydown", (e) => {
   const b = e.target.closest(".icon");
   const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
@@ -205,12 +237,20 @@ new ResizeObserver(() => layoutIcons()).observe($("#desk"));
 
 const count = (n) => ["No things", "One thing", "Two things", "Three things"][n] ?? `${n} things`;
 function overallBars(c, nodeCount) {
-  const size = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} TB` : `${Math.round(n * 10) / 10} GB`);
-  const bar = (label, value, pct) => `<div><span>${label}<small>${value}</small></span><div class="meter"><i style="width:${Math.min(pct, 100)}%"></i></div></div>`;
+  // Whole numbers from 10 GB up, so the amount fits on one line under a gauge.
+  const size = (n) => (n >= 1024 ? `${(n / 1024).toFixed(1)} TB` : n >= 10 ? `${Math.round(n)} GB` : `${Math.round(n * 10) / 10} GB`);
+  // A half-circle gauge each. The arc turns the look's warning colour from 80% and its alert colour from 95%.
+  const gauge = (label, value, pct) => {
+    const p = Math.max(0, Math.min(Math.round(pct), 100));
+    const level = p >= 95 ? "bad" : p >= 80 ? "warn" : "";
+    return `<div class="gauge ${level}" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p}" aria-label="${label}, ${p}%, ${value}">
+      <svg viewBox="0 0 100 56" aria-hidden="true"><path class="track" d="M8 50 A42 42 0 0 1 92 50" pathLength="100"/><path class="fill" d="M8 50 A42 42 0 0 1 92 50" pathLength="100" stroke-dasharray="${p} 100"/></svg>
+      <b>${p}%</b><span>${label}</span><small>${value}</small></div>`;
+  };
   return `<div class="overall" aria-label="${nodeCount === 1 ? "This node" : "Whole cluster"}">
-    ${bar(nodeCount === 1 ? "Processor" : "Cluster processor", `${c.cpuPct}% of ${c.cores} cores`, c.cpuPct)}
-    ${bar(nodeCount === 1 ? "Memory" : "Cluster memory", `${size(c.memUsedGb)} of ${size(c.memTotalGb)}`, c.memPct)}
-    ${bar(nodeCount === 1 ? "Storage" : "Cluster storage", `${size(c.diskUsedGb)} of ${size(c.diskTotalGb)}`, c.diskPct)}
+    ${gauge("Processor", `${c.cores} cores`, c.cpuPct)}
+    ${gauge("Memory", `${size(c.memUsedGb)} of ${size(c.memTotalGb)}`, c.memPct)}
+    ${gauge("Storage", `${size(c.diskUsedGb)} of ${size(c.diskTotalGb)}`, c.diskPct)}
   </div>`;
 }
 function ago(t) {
@@ -227,7 +267,8 @@ function renderTaskFeed() {
   if (!feed) return;
   const dot = { running: "busy", ok: "running", warning: "warn", failed: "warn" };
   const word = { running: "Running", ok: "Finished", warning: "Finished with warnings", failed: "Failed" };
-  const row = (t) => `<button class="taskrow ${t.result === "failed" ? "bad" : ""}" data-taskview="${esc(t.upid)}" data-tasknode="${esc(t.node)}"><span class="dot ${dot[t.result]}"></span><span><b>${esc(t.what)}${t.target ? `: ${esc(t.target)}` : ""}</b><small>${word[t.result]} on ${esc(t.node)}, ${esc(ago(t.result === "running" ? t.startedAt : t.endedAt ?? t.startedAt))}</small></span></button>`;
+  const row = (t) =>
+    `<button class="taskrow ${t.result === "failed" ? "bad" : ""}" data-taskview="${esc(t.upid)}" data-tasknode="${esc(t.node)}"><span class="dot ${dot[t.result]}"></span><span><b>${esc(t.what)}${t.target ? `: ${esc(t.target)}` : ""}</b><small>${word[t.result]} on ${esc(t.node)}, ${esc(ago(t.result === "running" ? t.startedAt : (t.endedAt ?? t.startedAt)))}</small></span></button>`;
   box.innerHTML = `<h2>Tasks</h2><p class="sub">${feed.running ? `${feed.running} running now` : "Nothing running now"}</p>
     ${feed.items.length ? `<div class="taskrows">${feed.items.map(row).join("")}</div>` : `<p class="meta">Nothing has run recently.</p>`}
     <p class="seeall"><button class="linkbtn" data-tasklog="all">See all tasks</button></p>`;
@@ -251,16 +292,18 @@ function drawTaskLog() {
     return `<small>${n}${log.more ? "+" : ""} ${n === 1 ? "task" : "tasks"}</small>`;
   };
   const dotFor = (n) => `<span class="dot ${n.online ? "running" : "warn"}"></span>`;
-  list.innerHTML = [`<button class="row ${on === "all" ? "on" : ""}" data-tlnode="all"><span></span><b>All nodes</b>${count("all")}</button>`,
-    ...nodes.map((n) => `<button class="row ${n.name === on ? "on" : ""}" data-tlnode="${esc(n.name)}">${dotFor(n)}<b>${esc(n.name)}</b>${count(n.name)}</button>`)].join("");
+  list.innerHTML = [
+    `<button class="row ${on === "all" ? "on" : ""}" data-tlnode="all"><span></span><b>All nodes</b>${count("all")}</button>`,
+    ...nodes.map((n) => `<button class="row ${n.name === on ? "on" : ""}" data-tlnode="${esc(n.name)}">${dotFor(n)}<b>${esc(n.name)}</b>${count(n.name)}</button>`),
+  ].join("");
   if (!log) {
     rows.innerHTML = `<p class="empty">${esc(S.taskLogError || "Looking for tasks on every node.")}</p>`;
     return;
   }
   const q = (S.tlQ ?? "").toLowerCase();
-  const shown = log.items.filter((t) => (on === "all" || t.node === on)
-    && (S.tlShow !== "problems" || t.result === "failed" || t.result === "warning")
-    && `${t.what} ${t.target} ${t.who}`.toLowerCase().includes(q));
+  const shown = log.items.filter(
+    (t) => (on === "all" || t.node === on) && (S.tlShow !== "problems" || t.result === "failed" || t.result === "warning") && `${t.what} ${t.target} ${t.who}`.toLowerCase().includes(q),
+  );
   const paged = shown.slice(0, S.tlRows ?? 200);
   const missing = log.unreachable.filter((n) => on === "all" || n === on);
   rows.innerHTML = `${missing.length ? `<p class="meta">Couldn't reach ${esc(missing.join(", "))}, so its tasks aren't here.</p>` : ""}
@@ -309,9 +352,7 @@ function renderHealth() {
   renderTaskFeed();
   const h = $("#health");
   if (!S.data) {
-    h.innerHTML = S.failed
-      ? `<h1>Can't reach Proxmox</h1><p class="sub">${esc(S.failed)}</p><p class="meta">Trying again every 10 seconds.</p>`
-      : `<h1>Connecting to Proxmox</h1>`;
+    h.innerHTML = S.failed ? `<h1>Can't reach Proxmox</h1><p class="sub">${esc(S.failed)}</p><p class="meta">Trying again every 10 seconds.</p>` : `<h1>Connecting to Proxmox</h1>`;
     return;
   }
   const { nodes, vms, storage } = S.data;
@@ -333,46 +374,90 @@ function renderHealth() {
     `<button class="linkbtn" data-open="health">Open the health check</button>`,
     shown.length ? `<button class="linkbtn" data-noticetoggle="1" aria-expanded="${!notes.collapsed}">${notes.collapsed ? "Show notices" : "Hide notices"}</button>` : "",
     kept.length ? `<button class="linkbtn" data-noticerestore="1">Bring back ${kept.length} dismissed</button>` : "",
-  ].filter(Boolean).join("");
+  ]
+    .filter(Boolean)
+    .join("");
   h.innerHTML = `
     <h1>${heading}</h1>
     <p class="sub">${up} of ${nodes.length} ${nodes.length === 1 ? "node" : "nodes"} online. ${run} of ${guests.length} ${guests.length === 1 ? "VM" : "VMs"} running, and ${freeText} free.</p>
     ${overallBars(S.data.cluster, nodes.length)}
     ${runLine()}
-    <div class="rack">${nodes.map((n) => {
-      const on = vms.filter((v) => v.node === n.name);
-      return `<button class="ru" data-server="${esc(n.name)}"><span>${esc(n.name)}</span>
+    <div class="rack">${nodes
+      .map((n) => {
+        const on = vms.filter((v) => v.node === n.name);
+        return `<button class="ru" data-server="${esc(n.name)}"><span>${esc(n.name)}</span>
         <span class="leds">${on.map((v) => `<i class="${!v.running ? "off" : v.issues.length ? "w" : ""}"></i>`).join("")}</span>
         <small>${n.online ? `${n.cpuPct}% busy` : "Offline"}</small></button>`;
-    }).join("")}</div>
+      })
+      .join("")}</div>
     ${shown.length && !notes.collapsed ? `<div class="look-items">${shown.map((i) => `<div class="look-row"><button class="look-item" ${i.vmId ? `data-vm="${i.vmId}"` : i.kind === "bossmox-update" ? 'data-bmupdate="1"' : 'data-open="storage"'}><span class="dot warn"></span><span>${esc(i.title)}</span></button><button class="look-x" data-noticex="${esc(noticeKey(i))}" aria-label="Dismiss ${esc(i.title)}" title="Dismiss">&times;</button></div>`).join("")}</div>` : ""}
     ${controls ? `<div class="look-controls">${controls}</div>` : ""}`;
 }
 
 /* Health check (ADR 0017): every check, the passes included, each problem with its fix. */
-const HC_ORDER = { bad: 0, warn: 1, ok: 2, off: 3 };
-const HC_WORDS = { bad: "Needs attention", warn: "Worth a look", ok: "Looks good", off: "Turned off" };
+const HC_ORDER = { bad: 0, warn: 1, tip: 2, ok: 3, off: 4 };
+const HC_WORDS = { bad: "Needs attention", warn: "Worth a look", tip: "Best practice", ok: "Looks good", off: "Turned off" };
+/*
+ * Best-practice items can be dismissed in this browser (ADR 0035). The key includes the detail, so one whose situation
+ * changes shows again.
+ */
+const HC_DISMISSED = "bossmox-hc-dismissed";
+const hcKey = (c) => `${c.id}:${c.detail}`;
+function hcDismissed() {
+  try {
+    const list = JSON.parse(localStorage.getItem(HC_DISMISSED) ?? "[]");
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+function hcSaveDismissed(list) {
+  try {
+    localStorage.setItem(HC_DISMISSED, JSON.stringify(list));
+  } catch {
+    /* kept for this page only */
+  }
+}
 function healthFix(f) {
   if (!f) return "";
   const b = (attrs) => `<button class="btn" ${attrs}>${esc(f.label)}</button>`;
   switch (f.kind) {
-    case "channel": return b(`data-channel="${esc(f.channel)}" data-channelserver="${esc(f.node)}"`);
-    case "updates": return b(`data-hcupdates="${esc(f.node)}"`);
-    case "protect": return b(`data-protect="1"`);
-    case "add-storage": return b(`data-hcadd="1"`);
-    case "open-storage": return b(`data-hcstore="${esc(f.node ?? "")}"`);
-    case "tasks": return b(`data-tasklog="${esc(f.node)}"`);
-    case "boot-on": return b(`data-hcboot="${esc(f.vmids.join(","))}"`);
-    case "open-vm": return b(`data-vm="${f.vmids[0]}"`);
-    case "backups-elsewhere": return b(`data-backupselsewhere="off"`);
-    case "bossmox-update": return b(`data-bmupdate="1"`);
-    case "update-check": return b(`data-updatecheck="${S.data?.update?.on === false ? "on" : "off"}"`);
-    case "check-now": return b(`data-checknow="1"`);
-    case "settings": return b(`data-open="settings"`);
-    case "move-network": return b(`data-movefix="1"`);
-    case "ha-policy": return b(`data-hapolicy="1"`);
-    case "leftover": return b(`data-leftover="1"`);
-    default: return "";
+    case "channel":
+      return b(`data-channel="${esc(f.channel)}" data-channelserver="${esc(f.node)}"`);
+    case "updates":
+      return b(`data-hcupdates="${esc(f.node)}"`);
+    case "protect":
+      return b(`data-protect="1"`);
+    case "add-storage":
+      return b(`data-hcadd="1"`);
+    case "open-storage":
+      return b(`data-hcstore="${esc(f.node ?? "")}"`);
+    case "tasks":
+      return b(`data-tasklog="${esc(f.node)}"`);
+    case "boot-on":
+      return b(`data-hcboot="${esc(f.vmids.join(","))}"`);
+    case "open-vm":
+      return b(`data-vm="${f.vmids[0]}"`);
+    case "backups-elsewhere":
+      return b(`data-backupselsewhere="off"`);
+    case "bossmox-update":
+      return b(`data-bmupdate="1"`);
+    case "update-check":
+      return b(`data-updatecheck="${S.data?.update?.on === false ? "on" : "off"}"`);
+    case "check-now":
+      return b(`data-checknow="1"`);
+    case "settings":
+      return b(`data-open="settings"`);
+    case "move-network":
+      return b(`data-movefix="1"`);
+    case "ha-policy":
+      return b(`data-hapolicy="1"`);
+    case "leftover":
+      return b(`data-leftover="1"`);
+    case "ha-recover":
+      return b(`data-harecover="${f.vmids[0]}" data-hanode="${esc(f.node)}"`);
+    default:
+      return "";
   }
 }
 function drawHealthCheck() {
@@ -386,10 +471,28 @@ function drawHealthCheck() {
   const bad = checks.filter((c) => c.status === "bad").length;
   const warn = checks.filter((c) => c.status === "warn").length;
   const head = bad ? `${bad === 1 ? "One thing needs" : `${bad} things need`} attention` : warn ? `${warn === 1 ? "One thing is" : `${warn} things are`} worth a look` : "Everything looks good";
-  const groups = ["Nodes", "Backups", "Storage", "Guests", "BossMox"].map((g) => [g, checks.filter((c) => c.group === g).sort((a, b) => HC_ORDER[a.status] - HC_ORDER[b.status])]).filter(([, l]) => l.length);
-  box.innerHTML = `<div class="sttop"><div><h2 class="hchead">${esc(head)}</h2><p class="meta" style="margin:2px 0 0">${checks.length} checks, ${checks.filter((c) => c.status === "ok").length} passed${checks.some((c) => c.status === "off") ? `, ${checks.filter((c) => c.status === "off").length} turned off` : ""}.</p></div><div class="actions"><button class="btn" data-hcagain="1">Check again</button></div></div>
-    ${groups.map(([g, list]) => `<h3 class="sthd">${esc(g)}</h3><div class="stgroup hcgroup">${list.map((c) => `<div class="hcrow ${c.status}"><span class="dot ${c.status === "ok" ? "running" : c.status === "off" ? "" : "warn"}" aria-hidden="true"></span>
-      <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" && c.fix?.kind !== "check-now" ? "" : healthFix(c.fix)}${c.id === "scheduled" && c.status === "warn" ? `<button class="btn" data-backupselsewhere="on">We back up another way</button>` : ""}${c.id === "bossmox-version" && (c.status === "ok" || c.fix?.kind === "bossmox-update") ? `<button class="btn" data-updatecheck="off">Stop checking</button>` : ""}</div></div>`).join("")}</div>`).join("")}`;
+  const gone = hcDismissed();
+  const hidden = checks.filter((c) => c.status === "tip" && gone.includes(hcKey(c)));
+  // A dismissed key that no longer matches anything is forgotten, so it shows if it ever comes back.
+  const live = gone.filter((k) => checks.some((c) => hcKey(c) === k));
+  if (live.length !== gone.length) hcSaveDismissed(live);
+  const shown = checks.filter((c) => !hidden.includes(c));
+  const groups = ["Nodes", "Backups", "Storage", "Guests", "BossMox"]
+    .map((g) => [g, shown.filter((c) => c.group === g).sort((a, b) => HC_ORDER[a.status] - HC_ORDER[b.status])])
+    .filter(([, l]) => l.length);
+  box.innerHTML = `<div class="sttop"><div><h2 class="hchead">${esc(head)}</h2><p class="meta" style="margin:2px 0 0">${checks.length} checks, ${checks.filter((c) => c.status === "ok").length} passed${checks.some((c) => c.status === "off") ? `, ${checks.filter((c) => c.status === "off").length} turned off` : ""}.${hidden.length ? ` <button class="linkbtn" data-hcback="1">Bring back ${hidden.length} dismissed</button>` : ""}</p></div><div class="actions"><button class="btn" data-hcagain="1">Check again</button></div></div>
+    ${S.data?.cluster ? overallBars(S.data.cluster, S.data.nodes.length) : ""}
+    ${groups
+      .map(
+        ([g, list]) =>
+          `<h3 class="sthd">${esc(g)}</h3><div class="stgroup hcgroup">${list
+            .map(
+              (c) => `<div class="hcrow ${c.status}"><span class="dot ${c.status === "ok" ? "running" : c.status === "off" ? "" : c.status === "tip" ? "tip" : "warn"}" aria-hidden="true"></span>
+      <div class="hctext"><b>${esc(c.title)}</b><span class="sr">${HC_WORDS[c.status]}.</span>${c.detail ? `<small>${esc(c.detail)}</small>` : ""}</div><div class="actions">${c.status === "ok" && c.fix?.kind !== "check-now" ? "" : healthFix(c.fix)}${c.id === "scheduled" && c.status === "warn" ? `<button class="btn" data-backupselsewhere="on">We back up another way</button>` : ""}${c.id === "bossmox-version" && (c.status === "ok" || c.fix?.kind === "bossmox-update") ? `<button class="btn" data-updatecheck="off">Stop checking</button>` : ""}${c.status === "tip" ? `<button class="look-x" data-hcx="${esc(hcKey(c))}" aria-label="Dismiss ${esc(c.title)}" title="Dismiss">&times;</button>` : ""}</div></div>`,
+            )
+            .join("")}</div>`,
+      )
+      .join("")}`;
 }
 async function loadHealthCheck() {
   const run = S.loadRun;
@@ -421,19 +524,389 @@ function drawSettings() {
   const leaning = list.filter((s) => s.recommend !== null);
   const matching = leaning.filter((s) => s.on === s.recommend).length;
   const advice = (s) => (s.recommend === null ? "" : s.on === s.recommend ? `<span class="rec ok">As recommended</span>` : `<span class="rec">Recommended ${s.recommend ? "on" : "off"}</span>`);
-  const pick = (s) => (s.choices?.length > 1 || (s.choices?.length && !s.on) ? `<select class="setpick" data-setpick="${esc(s.id)}" aria-label="${esc(s.title)}: choice" ${s.can ? "" : "disabled"}>${s.choices.map((c) => `<option value="${esc(c.value)}" ${c.value === (S.setChoice[s.id] ?? s.choice) ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>` : "");
+  const pick = (s) =>
+    s.choices?.length > 1 || (s.choices?.length && !s.on)
+      ? `<select class="setpick" data-setpick="${esc(s.id)}" aria-label="${esc(s.title)}: choice" ${s.can ? "" : "disabled"}>${s.choices.map((c) => `<option value="${esc(c.value)}" ${c.value === (S.setChoice[s.id] ?? s.choice) ? "selected" : ""}>${esc(c.label)}</option>`).join("")}</select>`
+      : "";
   const locked = (s) => !s.can || (s.onlyOn && s.on);
   box.innerHTML = `<div class="sttop"><div><h2 class="hchead">Recommended settings</h2><p class="meta" style="margin:2px 0 0">${matching} of ${leaning.length} set the way BossMox recommends. These are Proxmox's own settings, so they apply however you manage the cluster.</p></div><div class="actions"><button class="btn" data-setagain="1">Read again</button></div></div>
-    <div class="stgroup">${list.map((s) => `<div class="setrow">
+    <div class="stgroup">${list
+      .map(
+        (s) => `<div class="setrow">
       <div class="hctext"><b>${esc(s.title)}</b>${advice(s)}<small>${esc(s.detail)}</small>${s.why && !s.can ? `<small class="setwhy">${esc(s.why)}</small>` : ""}${pick(s)}</div>
-      <button class="sw" role="switch" aria-checked="${s.on}" aria-label="${esc(s.title)}" data-setsw="${esc(s.id)}" ${locked(s) ? "disabled" : ""}><i></i></button></div>`).join("")}</div>`;
+      <button class="sw" role="switch" aria-checked="${s.on}" aria-label="${esc(s.title)}" data-setsw="${esc(s.id)}" ${locked(s) ? "disabled" : ""}><i></i></button></div>`,
+      )
+      .join("")}</div>
+    ${alertsSection()}
+    ${redundancySection()}`;
+}
+
+/* Alerts (ADR 0038): Proxmox's own notifications, sent to a phone or a chat. Secrets go to Proxmox and are kept nowhere here. */
+const AL_NAMES = { ntfy: "ntfy (phone push)", discord: "Discord", slack: "Slack", teams: "Microsoft Teams", gotify: "Gotify" };
+const AL_HELP = {
+  ntfy: "Free phone push. Install the ntfy app, subscribe to a topic name only you know, and type the same name here. Use your own ntfy server if you have one.",
+  discord: "In the Discord channel: Edit channel, Integrations, Webhooks, New webhook, Copy webhook URL. Paste it here.",
+  slack: "In Slack: create an incoming webhook for the channel (Slack's Incoming Webhooks app) and paste its link here.",
+  teams: 'In the Teams channel: Workflows, "Post to a channel when a webhook request is received", then copy the link it gives and paste it here.',
+  gotify: "Your Gotify server's address and an app token from its Apps page.",
+};
+function alertsSection() {
+  const a = S.alerts;
+  if (!a) return "";
+  let detail;
+  let tag;
+  let action = "";
+  if (a.kind) {
+    tag = a.confirmed ? `<span class="rec ok">Set up</span>` : `<span class="rec">Not checked yet</span>`;
+    const what = ["failures and warnings", ...(a.updates ? ["new updates"] : []), ...(a.allBackups ? ["every backup"] : [])];
+    const said = what.length > 1 ? `${what.slice(0, -1).join(", ")} and ${what.at(-1)}` : what[0];
+    detail = `Proxmox sends ${said} to ${AL_NAMES[a.kind]}${a.where ? ` (${a.where})` : ""}.${a.confirmed ? "" : " Send a test, and say whether it came."}`;
+    if (a.canChange) action = `<button class="btn" data-altest="1">Send a test</button><button class="btn" data-alsetup="1">Change</button><button class="btn" data-aloff="1">Turn off</button>`;
+  } else if (a.others.length) {
+    tag = `<span class="rec ok">Set up</span>`;
+    detail = `Proxmox sends alerts through ${a.others.join(", ")}, set up outside BossMox.`;
+  } else {
+    tag = `<span class="rec">Best practice</span>`;
+    detail = "Right now a fenced node, a failed backup or a failed replication tells no one. Proxmox can send them to your phone or a chat channel, even when BossMox is down.";
+    if (a.canChange) action = `<button class="btn primary" data-alsetup="1">Set up</button>`;
+  }
+  if (!a.canChange) detail += " Changing alerts needs the Mapping.Modify permission on /mapping/notifications in Proxmox.";
+  return `<h3 class="sthd">Alerts</h3><div class="stgroup"><div class="setrow"><div class="hctext"><b>When something fails</b>${tag}<small>${esc(detail)}</small></div><div class="actions">${action}</div></div></div>`;
+}
+function openAlertsSetup(kind = null) {
+  const a = S.alerts;
+  if (!a) return;
+  const k = kind ?? a.kind ?? "ntfy";
+  const changing = a.kind === k;
+  const keepNote = changing ? `<p class="meta">Leave this empty to keep the one Proxmox has. To send somewhere new, paste it again.</p>` : "";
+  const fields =
+    k === "ntfy"
+      ? `<label class="field restartname"><span>Topic</span><input id="altopic" autocomplete="off" spellcheck="false" placeholder="a name only you know"></label>
+       <label class="field restartname"><span>ntfy server (optional)</span><input id="alserver" autocomplete="off" spellcheck="false" placeholder="https://ntfy.sh"></label>
+       <label class="field restartname"><span>Access token (optional)</span><input id="altoken" type="password" autocomplete="off"></label>`
+      : k === "gotify"
+        ? `<label class="field restartname"><span>Gotify address</span><input id="alserver" autocomplete="off" spellcheck="false" placeholder="https://push.example.org"></label>
+       <label class="field restartname"><span>App token</span><input id="altoken" type="password" autocomplete="off"></label>`
+        : `<label class="field restartname"><span>Webhook link</span><input id="allink" type="password" autocomplete="off" spellcheck="false"></label>`;
+  dialog(`<h3>${changing ? "Change alerts" : "Send Proxmox's alerts somewhere"}</h3>
+    <p>Proxmox itself sends these, so they arrive even when BossMox is down.</p>
+    <label class="field restartname"><span>Send them to</span><select id="alkind">${Object.entries(AL_NAMES)
+      .map(([v, l]) => `<option value="${v}" ${v === k ? "selected" : ""}>${esc(l)}</option>`)
+      .join("")}</select></label>
+    <p class="meta">${esc(AL_HELP[k])}</p>
+    ${fields}
+    ${keepNote}
+    <p class="meta">${a.viaProxy ? "BossMox runs behind your own proxy here: what you type is encrypted to that proxy, and the step from it to BossMox is yours to secure. " : "What you type goes to Proxmox encrypted. "}Proxmox keeps it in its own private settings to send the alerts; BossMox doesn't keep it anywhere.</p>
+    <label class="check"><input type="checkbox" checked disabled> Failures and warnings: fenced nodes, failed backups, failed replication</label>
+    <label class="check"><input type="checkbox" id="alupdates" ${a.kind ? (a.updates ? "checked" : "") : "checked"}> New updates are available</label>
+    <label class="check"><input type="checkbox" id="albackups" ${a.allBackups ? "checked" : ""}> Every backup, including the ones that worked</label>
+    <p id="formerr" class="loginerr" hidden></p>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-algo="1">Save and send a test</button></div>`);
+}
+async function saveAlerts() {
+  const v = (id) => $(id)?.value?.trim() ?? "";
+  const body = {
+    server: onlineNodes()[0],
+    kind: $("#alkind").value,
+    alertServer: v("#alserver"),
+    topic: v("#altopic"),
+    link: v("#allink"),
+    token: v("#altoken"),
+    updates: $("#alupdates").checked,
+    allBackups: $("#albackups").checked,
+  };
+  try {
+    const res = await post("api/action/alerts-save", body);
+    const out = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) return formError(out.error);
+  } catch (err) {
+    return formError(err.message || "BossMox lost contact with Proxmox.");
+  }
+  sendAlertTest();
+}
+async function sendAlertTest() {
+  dialog(`<h3>Sending a test</h3><p>Proxmox is sending a test alert.</p>`);
+  try {
+    const res = await post("api/action/alerts-test", { server: onlineNodes()[0] });
+    const out = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) throw new Error(out.error);
+  } catch (err) {
+    S.afterTask = () => loadSettings();
+    return dialog(
+      `<h3>The test didn't send</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><p class="meta">Check the link or token, and that the node can reach the service.</p>${closeRow}`,
+    );
+  }
+  dialog(`<h3>Did the test arrive?</h3><p>Proxmox sent a test alert. It should show up within a minute.</p>
+    <div class="row-end"><button class="btn" data-alno="1">It didn't</button><button class="btn primary" data-alyes="1">It arrived</button></div>`);
+}
+async function confirmAlerts(arrived) {
+  if (!arrived) {
+    S.afterTask = () => loadSettings();
+    return dialog(
+      `<h3>It didn't arrive</h3><p>Usual causes: a typo in the link, topic or token; the ntfy app subscribed to a different topic; or the nodes can't reach the service (a firewall, or no internet). Change fixes the first two.</p>${closeRow}`,
+    );
+  }
+  try {
+    const res = await post("api/action/alerts-confirm", { server: onlineNodes()[0] });
+    if (!res.ok) throw new Error((await res.json()).error);
+  } catch (err) {
+    return dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  S.healthChecks = null;
+  S.healthAgain = true;
+  closeDialog();
+  loadSettings();
+}
+
+/* Redundancy (ADR 0035): a backup network for the cluster heartbeat, set up here when every node has a second port. */
+const HB_WHY =
+  "The nodes check on each other over one network. If it has trouble, they lose touch, and HA can restart a node to protect its guests. A second network on its own port keeps them in touch.";
+function redundancySection() {
+  const v = S.heartbeat?.view;
+  if (!v || v.state === "single") return "";
+  const guests = S.haList ?? [];
+  const haRows = `<div class="setrow"><div class="hctext"><b>Guests HA keeps running</b><small>${guests.length ? "If a node fails, HA starts these on another node. Turn it on for a guest from its page." : "None yet. Turn it on for a guest from its page, under Keep this guest running."}</small>${guests.map((g) => `<div class="snap"><div>${esc(g.name)}<small>On ${esc(g.node)}. ${esc(HA_WORDS[g.state] ?? g.state)}</small></div><div class="actions"><button class="btn" data-haoff="${g.id}">Stop protecting</button></div></div>`).join("")}</div></div>`;
+  const job = S.heartbeat.job;
+  let detail = "";
+  let action = "";
+  if (job?.running) {
+    detail = "Being set up now.";
+    action = `<button class="btn" data-hbwatch="1">Show progress</button>`;
+  } else if (v.state === "backed-up") detail = `Set up. The nodes check on each other over ${v.links} networks.`;
+  else if (v.state === "offer") {
+    detail = `${HB_WHY} Every node has ${v.network} on a second port.${v.sharesMoves ? " VM moves use that network too, which is fine for a backup: the heartbeat only falls back to it when the main network fails." : ""}`;
+    action = v.canSetUp ? `<button class="btn primary" data-hbsetup="1">Set up</button>` : "";
+    if (!v.canSetUp) detail += " Setting it up changes a file in a node's console, so it needs a root@pam sign-in.";
+  } else if (v.state === "no-port")
+    detail = `${HB_WHY} That needs a second network port on every node, on a network of its own${v.nodes.length ? `. ${v.nodes.join(", ")} ${v.nodes.length === 1 ? "doesn't have one" : "don't have one"}` : ", shared by all of them"}.`;
+  else detail = v.why;
+  return `<h3 class="sthd">Redundancy</h3><div class="stgroup">${tieBreakerRow()}<div class="setrow"><div class="hctext"><b>Backup network for the heartbeat</b>${v.state === "backed-up" ? `<span class="rec ok">Set up</span>` : `<span class="rec">Best practice</span>`}<small>${esc(detail)}</small></div><div class="actions">${action}</div></div>${haRows}</div>`;
+}
+/* A tie-breaker vote for a two-node cluster (ADR 0037). The person sets up the vote machine and types its password in a node's console. */
+const TB_WHY =
+  "With two nodes there are two votes, so when one is down the other has half, not a majority: guests keep running, but nothing can be started, stopped or changed until it's back, and HA can't help. A small third machine outside the cluster gives the deciding vote.";
+function tieBreakerRow() {
+  const t = S.tieBreaker;
+  const v = t?.view;
+  if (!v || v.state === "single") return "";
+  const j = t.job;
+  let detail;
+  let action = "";
+  let tag = `<span class="rec">Best practice</span>`;
+  if (v.state === "set") {
+    tag = v.connected ? `<span class="rec ok">Set up</span>` : `<span class="rec">Not connected</span>`;
+    detail = v.connected
+      ? "The cluster has a third vote, so it keeps its majority when one node is down."
+      : "A tie-breaker is set up, but it isn't connected, so its vote doesn't count. Check that the vote machine is on and reachable on port 5403.";
+    // Just set up from this BossMox: the step that's left is on the vote machine.
+    if (v.connected && j?.result === "ready") {
+      detail += " Password sign-in for root on the vote machine can go again now.";
+      action = `<button class="btn" data-tbverify="1">Check the vote</button>`;
+    }
+  } else if (v.state === "odd") {
+    tag = `<span class="rec ok">Not needed</span>`;
+    detail = `A tie-breaker only helps with an even number of nodes. With ${v.nodes}, the cluster already keeps its majority when one is down.`;
+  } else {
+    detail = TB_WHY;
+    if (j?.running) action = `<button class="btn" data-tbwatch="1">Show progress</button>`;
+    else if (j?.result === "ready") {
+      detail += ` The nodes are ready. Next: run the setup in ${j.node}'s console, then check the vote.`;
+      action = `<button class="btn" data-tbconsole="1">Open the console</button><button class="btn primary" data-tbverify="1">Check the vote</button>`;
+    } else if (v.canSetUp) action = `<button class="btn primary" data-tbsetup="1">Set up</button>`;
+    else detail += " Setting it up needs a root@pam sign-in.";
+  }
+  return `<div class="setrow"><div class="hctext"><b>Tie-breaker vote</b>${tag}<small>${esc(detail)}</small></div><div class="actions">${action}</div></div>`;
+}
+function openTieBreakerSetup() {
+  const v = S.tieBreaker?.view;
+  if (v?.state !== "offer") return;
+  const lines = v.lines.join("\n");
+  dialog(`<h3>Set up a tie-breaker vote?</h3>
+    <p>${esc(TB_WHY)}</p>
+    <p><b>1. The vote machine.</b> Any Debian or Ubuntu machine outside this cluster that stays on: a Raspberry Pi, a small VM on another host, a NAS that runs containers. Not a guest on this cluster: its vote would go down with the node. As root there, run:</p>
+    <pre class="tblines">${esc(lines)}</pre>
+    <div class="row-end" style="margin-top:-4px"><button class="btn" data-tbcopy="1">Copy</button></div>
+    <p class="meta">The second line lets root sign in with a password, which the setup needs once. If root has no password there, set one with passwd. You type it into a node's console in step 3, which BossMox passes on to the node without keeping it, and afterwards you can turn password sign-in off again.</p>
+    <label class="field restartname"><span>2. The vote machine's address</span><input id="tbaddr" autocomplete="off" spellcheck="false" placeholder="192.168.1.50"></label>
+    <p class="meta">BossMox then checks every node reaches it, and installs the tie-breaker software on the nodes. 3. A node's console opens with the setup command typed in; you press Enter and type the vote machine's root password there.</p>
+    <label class="field restartname"><span>Type the cluster's name, ${esc(v.clusterName)}, to confirm</span><input id="tbname" autocomplete="off" spellcheck="false"></label>
+    <p id="formerr" class="loginerr" hidden></p>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-tbgo="1">Check and prepare</button></div>`);
+  $("#tbaddr").focus();
+}
+async function startTieBreaker() {
+  const v = S.tieBreaker?.view;
+  if (v?.state !== "offer") return;
+  const address = $("#tbaddr").value.trim();
+  const confirm = $("#tbname").value.trim();
+  if (!address) return formError("Type the vote machine's address.");
+  if (confirm !== v.clusterName) return formError(`Type ${v.clusterName} to confirm.`);
+  try {
+    const res = await post("api/action/tiebreaker-prepare", { server: onlineNodes()[0], address, confirm });
+    const body = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) return formError(body.error);
+  } catch (err) {
+    return formError(err.message || "BossMox lost contact with Proxmox.");
+  }
+  watchTieBreaker();
+}
+async function watchTieBreaker() {
+  S.taskRunning = true;
+  S.tbWatch = (S.tbWatch ?? 0) + 1;
+  const me = S.tbWatch;
+  for (;;) {
+    let t;
+    try {
+      t = await signal("api/tiebreaker");
+    } catch (err) {
+      S.taskRunning = false;
+      if (err.message === "signed out") return;
+      return dialog(`<h3>Lost sight of it</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+    }
+    if (me !== S.tbWatch) return;
+    const j = t.job;
+    const steps = (j?.steps ?? [])
+      .map((s) => `<div class="hbstep"><span class="dot ${s.state === "ok" ? "running" : s.state === "failed" ? "warn" : "busy"}" aria-hidden="true"></span><span>${esc(s.text)}</span></div>`)
+      .join("");
+    const done = j && !j.running;
+    S.tieBreaker = t;
+    if (done && j.result === "ready") {
+      S.taskRunning = false;
+      return dialog(`<h3>The nodes are ready</h3><div class="hbsteps">${steps}</div>
+        <p><b>3. In ${esc(j.node)}'s console</b>, the command <code>pvecm qdevice setup ${esc(j.address)}</code> is typed in for you. Press Enter, type <b>yes</b> if it asks about the vote machine's key, then type the vote machine's root password. When it finishes, come back to Settings and press Check the vote.</p>
+        <div class="row-end"><button class="btn" data-dlg="cancel">Later</button><button class="btn primary" data-tbconsole="1">Open the console</button></div>`);
+    }
+    dialog(
+      `<h3>${done ? "It stopped" : "Preparing the tie-breaker"}</h3><div class="hbsteps" aria-live="polite">${steps || "<p>Starting.</p>"}</div>${done && j.error ? `<p class="loginerr">${esc(j.error)}</p>` : ""}${done ? closeRow : ""}`,
+    );
+    if (done) {
+      S.taskRunning = false;
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+function openTieBreakerConsole() {
+  const j = S.tieBreaker?.job;
+  if (!j) return;
+  closeDialog();
+  openNodeConsole(
+    j.node,
+    `pvecm qdevice setup ${j.address}`,
+    `The tie-breaker setup is typed in. Press Enter, type yes if it asks about the vote machine's key, then the vote machine's root password. Then close this and press Check the vote in Settings.`,
+    `Tie-breaker: ${j.node}`,
+  );
+}
+async function verifyTieBreaker() {
+  dialog(`<h3>Checking the vote</h3><p>Reading the cluster's votes on a node.</p>`);
+  try {
+    const r = await signal("api/tiebreaker?verify=1");
+    const after = S.tieBreaker?.view?.after;
+    dialog(
+      r.voting
+        ? `<h3>The tie-breaker is voting</h3><p>The cluster has ${r.total} votes, so it keeps its majority when one node is down.</p>${after ? `<p class="meta">Password sign-in for root on the vote machine can go again. As root there, run:</p><pre class="tblines">${esc(after)}</pre>` : ""}${closeRow}`
+        : `<h3>Not voting yet</h3><p class="loginerr">The cluster has ${r.total ?? "?"} votes and no tie-breaker vote. If the setup in the console didn't finish, run it again there; if it did, give it a minute and check again.</p>${closeRow}`,
+    );
+    S.afterTask = () => loadSettings();
+  } catch (err) {
+    if (err.message === "signed out") return;
+    dialog(`<h3>Couldn't check</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+}
+function openHeartbeatSetup() {
+  const v = S.heartbeat?.view;
+  if (v?.state !== "offer") return;
+  const lines = Object.entries(v.addresses)
+    .map(([node, a]) => `<li>${esc(node)} gets ${esc(a)} as its backup heartbeat address</li>`)
+    .join("");
+  dialog(`<h3>Set up a backup network for the heartbeat?</h3>
+    <p>${esc(HB_WHY)} BossMox adds ${esc(v.network)} as a second heartbeat network. The current one stays the main one; the nodes only use the new one if the main one fails.</p>
+    <ul class="hblist">${lines}</ul>
+    ${v.sharesMoves ? `<p class="meta">VM moves use ${esc(v.network)} too. That's fine for a backup.</p>` : ""}
+    <details class="hbdetails"><summary>What changes, exactly</summary><p class="meta">In /etc/pve/corosync.conf, which Proxmox copies to every node: each node gets a ring${v.link}_addr line with the address above, the totem section gets an interface for link ${v.link}, and config_version goes up by one. First, BossMox checks every node can reach the others on ${esc(v.network)}. The old file is kept as corosync.conf.bak. If the new link isn't connected on every node within a minute, BossMox puts the old file back.</p></details>
+    <label class="field restartname"><span>Type the cluster's name, ${esc(v.clusterName)}, to confirm</span><input id="hbname" autocomplete="off" spellcheck="false"></label>
+    <p id="formerr" class="loginerr" hidden></p>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-hbgo="1">Set up</button></div>`);
+  $("#hbname").focus();
+}
+async function startHeartbeat() {
+  const v = S.heartbeat?.view;
+  if (v?.state !== "offer") return;
+  const confirm = $("#hbname").value.trim();
+  if (confirm !== v.clusterName) return formError(`Type ${v.clusterName} to confirm.`);
+  try {
+    const res = await post("api/action/heartbeat-link-add", { server: onlineNodes()[0], network: v.network, confirm });
+    const body = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) return dialog(`<h3>It didn't start</h3><p class="loginerr">${esc(body.error)}</p>${closeRow}`);
+  } catch (err) {
+    return dialog(`<h3>It didn't start</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  watchHeartbeat();
+}
+/** Follows the setup: one line per step, until it ends. */
+async function watchHeartbeat() {
+  S.taskRunning = true;
+  S.hbWatch = (S.hbWatch ?? 0) + 1;
+  const me = S.hbWatch;
+  for (;;) {
+    let h;
+    try {
+      h = await signal("api/heartbeat");
+    } catch (err) {
+      S.taskRunning = false;
+      if (err.message === "signed out") return;
+      return dialog(
+        `<h3>Lost sight of it</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")} The change carries on; open Settings again to see how it ended.</p>${closeRow}`,
+      );
+    }
+    if (me !== S.hbWatch) return;
+    const j = h.job;
+    const steps = (j?.steps ?? [])
+      .map((s) => `<div class="hbstep"><span class="dot ${s.state === "ok" ? "running" : s.state === "failed" ? "warn" : "busy"}" aria-hidden="true"></span><span>${esc(s.text)}</span></div>`)
+      .join("");
+    const done = j && !j.running;
+    const head = !done
+      ? "Setting up the backup heartbeat network"
+      : j.result === "added"
+        ? "The heartbeat has a backup network"
+        : j.result === "restored"
+          ? "It didn't connect, so nothing changed"
+          : "It stopped";
+    dialog(
+      `<h3>${esc(head)}</h3><div class="hbsteps" aria-live="polite">${steps || "<p>Starting.</p>"}</div>${done && j.error && j.result !== "restored" ? `<p class="loginerr">${esc(j.error)}</p>` : ""}${done ? closeRow : ""}`,
+    );
+    if (done) {
+      S.taskRunning = false;
+      S.heartbeat = h;
+      S.afterTask = () => {
+        S.healthChecks = null;
+        loadSettings();
+      };
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
 }
 async function loadSettings() {
   const run = S.loadRun;
   try {
-    const { settings } = await signal("api/recommended");
+    const [{ settings }, heartbeat, ha, tb, alerts] = await Promise.all([
+      signal("api/recommended"),
+      signal("api/heartbeat").catch(() => null),
+      signal("api/ha").catch(() => null),
+      signal("api/tiebreaker").catch(() => null),
+      signal("api/alerts").catch(() => null),
+    ]);
     if (run !== S.loadRun) return;
     S.recommended = settings;
+    S.heartbeat = heartbeat;
+    S.haList = ha?.guests ?? null;
+    S.tieBreaker = tb;
+    S.alerts = alerts;
     S.recommendedError = "";
   } catch (err) {
     if (err.message === "signed out" || run !== S.loadRun) return;
@@ -454,17 +927,34 @@ function askSetting(id, on, choice) {
   const save = (extra) => () => runAction(id === "boot" ? "boot-on" : "recommended-set", onlineNodes()[0], "Saving", extra, after);
   if (id === "boot") {
     const names = S.data?.vms.filter((v) => s.guests.includes(v.id)).map((v) => v.name) ?? [];
-    return confirmAction(`Start ${names.length === 1 ? names[0] : `${names.length} guests`} at boot?`, `${names.join(", ")} will start by themselves whenever ${names.length === 1 ? "its node" : "their nodes"} start. Nothing changes while ${names.length === 1 ? "it's" : "they're"} running now.`, "Start at boot", save({ guests: s.guests.join(",") }));
+    return confirmAction(
+      `Start ${names.length === 1 ? names[0] : `${names.length} guests`} at boot?`,
+      `${names.join(", ")} will start by themselves whenever ${names.length === 1 ? "its node" : "their nodes"} start. Nothing changes while ${names.length === 1 ? "it's" : "they're"} running now.`,
+      "Start at boot",
+      save({ guests: s.guests.join(",") }),
+    );
   }
   const words = {
     "move-network": on
-      ? [`Move VMs over ${choice}?`, `Proxmox's Migration setting changes to ${choice} for the whole cluster. Moves started after this, from BossMox or Proxmox, use that network, and BossMox moves up to 3 at a time. Moves already running finish where they are.`, `Use ${choice}`]
-      : ["Move VMs over the heartbeat's network again?", "Proxmox's Migration setting is cleared, so moves go back to the network the cluster heartbeat uses, and BossMox moves one VM at a time.", "Clear it"],
+      ? [
+          `Move VMs over ${choice}?`,
+          `Proxmox's Migration setting changes to ${choice} for the whole cluster. Moves started after this, from BossMox or Proxmox, use that network, and BossMox moves up to 3 at a time. Moves already running finish where they are.`,
+          `Use ${choice}`,
+        ]
+      : [
+          "Move VMs over the heartbeat's network again?",
+          "Proxmox's Migration setting is cleared, so moves go back to the network the cluster heartbeat uses, and BossMox moves one VM at a time.",
+          "Clear it",
+        ],
     "move-limit": on
       ? [`Limit moves to ${choice} MB/s?`, `Every move in the cluster, from BossMox or Proxmox, runs at ${choice} MB/s or less. Bigger VMs take longer to move.`, `Limit to ${choice} MB/s`]
       : ["Remove the move speed limit?", "Moves run as fast as their network allows.", "Remove the limit"],
     "ha-shutdown": on
-      ? ["Have HA move its guests before a node shuts down?", "Proxmox's HA shutdown policy changes to Migrate for the whole cluster. When a node shuts down or restarts, the guests HA manages move to another node first, and come back after.", "Turn it on"]
+      ? [
+          "Have HA move its guests before a node shuts down?",
+          "Proxmox's HA shutdown policy changes to Migrate for the whole cluster. When a node shuts down or restarts, the guests HA manages move to another node first, and come back after.",
+          "Turn it on",
+        ]
       : ["Go back to Proxmox's default shutdown policy?", "When a node restarts, the guests HA manages stop and wait for it to come back.", "Go back"],
   }[id];
   confirmAction(words[0], words[1], words[2], save({ id, on, choice }), !on && s.recommend === true);
@@ -489,9 +979,9 @@ async function moveFix() {
   const limit = S.recommended.find((x) => x.id === "move-limit");
   const pick = net?.choices?.[0];
   S.moveFix = {
-    net: net?.on ? null : net?.choice ?? null,
+    net: net?.on ? null : (net?.choice ?? null),
     limitOn: !!(limit?.on || pick?.storage || !net?.choices?.length),
-    speed: limit?.on ? limit.choice : pick?.storage ? "250" : limit?.choice ?? "50",
+    speed: limit?.on ? limit.choice : pick?.storage ? "250" : (limit?.choice ?? "50"),
   };
   drawMoveFix();
 }
@@ -507,7 +997,8 @@ function drawMoveFix() {
   if (!net || net.on) return dialog(`${head}<p>Moves already have a network of their own, so there's nothing to fix.</p>${close("Close")}`);
   if (!limit?.can && limit?.why) return dialog(`${head}<p>${esc(limit.why)}</p>${close("Close")}`);
   const speeds = (limit?.choices ?? []).map((c) => `<option value="${esc(c.value)}" ${c.value === f.speed ? "selected" : ""}>${esc(c.label)}</option>`).join("");
-  const limitRow = (line) => `<label class="mfline"><input type="checkbox" id="mflimit" ${f.limitOn ? "checked" : ""}> <span>Limit moves to</span> <select id="mfspeed" aria-label="Move speed limit">${speeds}</select></label><p class="meta">${esc(line)}</p>`;
+  const limitRow = (line) =>
+    `<label class="mfline"><input type="checkbox" id="mflimit" ${f.limitOn ? "checked" : ""}> <span>Limit moves to</span> <select id="mfspeed" aria-label="Move speed limit">${speeds}</select></label><p class="meta">${esc(line)}</p>`;
   const limitChange = f.limitOn && (!limit?.on || limit.choice !== f.speed);
   if (!net.choices?.length) {
     // No second network yet: say what it takes, and offer the limit in the meantime.
@@ -548,7 +1039,9 @@ async function applyMoveFix() {
     S.recommended = settings;
     const n = settings.find((x) => x.id === "move-network");
     const l = settings.find((x) => x.id === "move-limit");
-    S.moveFix = { done: `${n?.on ? `Moves now run on ${n.choice}, apart from the heartbeat, up to 3 at a time.` : "Moves still share the heartbeat's network."} ${l?.on ? `They're limited to ${l.choice} MB/s.` : "There's no speed limit."} Settings shows these and can change them.` };
+    S.moveFix = {
+      done: `${n?.on ? `Moves now run on ${n.choice}, apart from the heartbeat, up to 3 at a time.` : "Moves still share the heartbeat's network."} ${l?.on ? `They're limited to ${l.choice} MB/s.` : "There's no speed limit."} Settings shows these and can change them.`,
+    };
   } catch (err) {
     S.moveFix = { error: `${err.message || "BossMox lost contact with Proxmox."} Anything before that step was saved, and Settings shows what's set now.` };
   }
@@ -590,7 +1083,9 @@ async function removeLeftover() {
     }
   }
   const freed = Math.round(done.reduce((a, d) => a + (d.sizeGb ?? 0), 0));
-  dialog(`<h3>${problem ? "Stopped" : "Done"}</h3><p>${esc(`${done.length === 1 ? "1 disk" : `${done.length} disks`} removed${freed ? `, ${freed} GB freed` : ""}.`)}</p>${problem ? `<p class="loginerr">${esc(problem)}</p>` : ""}<div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
+  dialog(
+    `<h3>${problem ? "Stopped" : "Done"}</h3><p>${esc(`${done.length === 1 ? "1 disk" : `${done.length} disks`} removed${freed ? `, ${freed} GB freed` : ""}.`)}</p>${problem ? `<p class="loginerr">${esc(problem)}</p>` : ""}<div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`,
+  );
   S.leftoverKeep = new Set();
   S.healthChecks = null;
   S.healthAgain = true;
@@ -613,7 +1108,9 @@ function readNotices() {
 function saveNotices(value) {
   try {
     localStorage.setItem(NOTICES_KEY, JSON.stringify(value));
-  } catch { /* the choice just won't be remembered */ }
+  } catch {
+    /* the choice just won't be remembered */
+  }
 }
 
 /* Window manager */
@@ -628,7 +1125,10 @@ function openWin(app) {
   const el = document.createElement("section");
   el.className = "win";
   el.setAttribute("aria-label", a.title);
-  const vw = innerWidth, vh = innerHeight, w = Math.min(a.w, vw - 40), h = Math.min(a.h, vh - 90);
+  const vw = innerWidth,
+    vh = innerHeight,
+    w = Math.min(a.w, vw - 40),
+    h = Math.min(a.h, vh - 90);
   el.style.cssText = `width:${w}px;height:${h}px;left:${Math.max(20, (vw - w) / 2 - 120 + n * 30)}px;top:${Math.max(58, (vh - h) / 2 - 10 + n * 26)}px`;
   const title = esc(a.title);
   el.innerHTML = `<div class="tbar"><span>${title}</span>${app === "vms" ? `<button class="btn tbarbtn" data-open="create">Create a VM</button>` : ""}
@@ -648,13 +1148,20 @@ function focusWin(app) {
   renderTasks(app);
 }
 function renderTasks(active) {
-  const top = active || Object.keys(wins).filter((k) => !wins[k].classList.contains("hidden")).sort((a, b) => wins[b].style.zIndex - wins[a].style.zIndex)[0];
-  $("#tasks").innerHTML = Object.keys(wins).map((k) => `<button class="task ${k === top ? "on" : ""}" data-open="${k}">${esc(APPS[k].title)}</button>`).join("");
+  const top =
+    active ||
+    Object.keys(wins)
+      .filter((k) => !wins[k].classList.contains("hidden"))
+      .sort((a, b) => wins[b].style.zIndex - wins[a].style.zIndex)[0];
+  $("#tasks").innerHTML = Object.keys(wins)
+    .map((k) => `<button class="task ${k === top ? "on" : ""}" data-open="${k}">${esc(APPS[k].title)}</button>`)
+    .join("");
 }
 function drag(el, handle) {
   handle.addEventListener("pointerdown", (e) => {
     if (e.target.closest("button") || innerWidth <= 760) return;
-    const sx = e.clientX - el.offsetLeft, sy = e.clientY - el.offsetTop;
+    const sx = e.clientX - el.offsetLeft,
+      sy = e.clientY - el.offsetTop;
     handle.setPointerCapture(e.pointerId);
     const move = (m) => {
       el.style.left = `${Math.min(innerWidth - 120, Math.max(-200, m.clientX - sx))}px`;
@@ -717,8 +1224,13 @@ function vmsShell() {
 }
 function renderList() {
   if (!$("#vmlist")) return;
-  $("#seg").innerHTML = [["all", "All"], ["running", "Running"], ["look", "Needs a look"]]
-    .map(([k, l]) => `<button class="${S.filter === k ? "on" : ""}" data-filter="${k}">${l}</button>`).join("");
+  $("#seg").innerHTML = [
+    ["all", "All"],
+    ["running", "Running"],
+    ["look", "Needs a look"],
+  ]
+    .map(([k, l]) => `<button class="${S.filter === k ? "on" : ""}" data-filter="${k}">${l}</button>`)
+    .join("");
   if (!S.data) {
     $("#vmlist").innerHTML = `<p class="empty">Waiting for Proxmox.</p>`;
     return;
@@ -728,10 +1240,16 @@ function renderList() {
   if (S.vmNode && !names.includes(S.vmNode)) S.vmNode = "";
   $("#vmnode").innerHTML = `<option value="">Every node</option>${names.map((n) => `<option value="${esc(n)}" ${n === S.vmNode ? "selected" : ""}>On ${esc(n)}</option>`).join("")}`;
   const q = S.q.toLowerCase();
-  const list = S.data.vms.filter((v) => (!S.vmNode || v.node === S.vmNode) && (S.filter === "all" || (S.filter === "running" && v.running) || (S.filter === "look" && v.issues.length)) && (v.name + v.os).toLowerCase().includes(q));
+  const list = S.data.vms.filter(
+    (v) => (!S.vmNode || v.node === S.vmNode) && (S.filter === "all" || (S.filter === "running" && v.running) || (S.filter === "look" && v.issues.length)) && (v.name + v.os).toLowerCase().includes(q),
+  );
   $("#vmlist").innerHTML = list.length
-    ? list.map((v) => `<button class="row ${v.id === S.sel ? "on" : ""}" data-pick="${v.id}">
-      <span class="dot ${dotClass(v)}"></span><b>${esc(v.name)}</b><small>${esc(stateWord(v))}</small></button>`).join("")
+    ? list
+        .map(
+          (v) => `<button class="row ${v.id === S.sel ? "on" : ""}" data-pick="${v.id}">
+      <span class="dot ${dotClass(v)}"></span><b>${esc(v.name)}</b><small>${esc(stateWord(v))}</small></button>`,
+        )
+        .join("")
     : `<p class="empty">No VMs match${S.vmNode ? ` on ${esc(S.vmNode)}` : ""}. Try a different word or filter.</p>`;
 }
 function renderDetail() {
@@ -745,9 +1263,13 @@ function renderDetail() {
   box.innerHTML = `
     <div class="head"><div><h2>${esc(v.name)}</h2>
       <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
-      <div class="actions">${v.template ? `<button class="btn primary" data-clone="${v.id}">New from template</button>` : v.running
-        ? `<button class="btn" data-console="${v.id}">Console</button><button class="btn" data-power="shutdown">Shut down</button><button class="btn" data-power="reboot">Restart</button><button class="btn" data-power="stop">Force off</button>`
-        : `<button class="btn primary" data-power="start">Start</button>`}${v.template ? "" : `<button class="btn" data-clone="${v.id}">Clone</button>`}${(S.data?.nodes.length ?? 0) > 1 && !v.template ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${v.type === "qemu" && !v.template ? `<span ${v.running ? 'title="The machine has to be powered off to access this menu"' : ""}><button class="btn" ${v.running ? "disabled" : `data-bootmenu="${v.id}"`}>Boot menu</button></span>` : ""}${v.template ? "" : `<button class="btn" data-maketemplate="${v.id}">Make template</button>`}<button class="btn" data-guestdelete="${v.id}">Delete</button></div></div>
+      <div class="actions">${
+        v.template
+          ? `<button class="btn primary" data-clone="${v.id}">New from template</button>`
+          : v.running
+            ? `<button class="btn" data-console="${v.id}">Console</button><button class="btn" data-power="shutdown">Shut down</button><button class="btn" data-power="reboot">Restart</button><button class="btn" data-power="stop">Force off</button>`
+            : `<button class="btn primary" data-power="start">Start</button>`
+      }${v.template ? "" : `<button class="btn" data-clone="${v.id}">Clone</button>`}${(S.data?.nodes.length ?? 0) > 1 && !v.template ? `<button class="btn" data-move="${v.id}">Move</button>` : ""}${v.type === "qemu" && !v.template ? `<span ${v.running ? 'title="The machine has to be powered off to access this menu"' : ""}><button class="btn" ${v.running ? "disabled" : `data-bootmenu="${v.id}"`}>Boot menu</button></span>` : ""}${v.template ? "" : `<button class="btn" data-maketemplate="${v.id}">Make template</button>`}<button class="btn" data-guestdelete="${v.id}">Delete</button></div></div>
     <div id="vmwaiting">${waitingWords(v)}</div>
     <div class="tabs" role="tablist">${[["overview", "Overview"], ["hardware", "Hardware"], ...(v.template ? [] : [["snapshots", "Snapshots"]]), ["settings", "Settings"]].map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" class="${S.tab === k ? "on" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
     <div class="tabpane">${TAB[S.tab](v)}</div>`;
@@ -759,6 +1281,72 @@ function renderDetail() {
     loadWaiting(v);
   }
 }
+/* Keep this guest running (ADR 0036): Proxmox HA for one guest. */
+const HA_WORDS = {
+  started: "Protected and running",
+  stopped: "Protected, kept off",
+  error: "HA gave up on it: Health check has the fix",
+  fence: "Its node failed; HA is fencing it",
+  recovery: "HA is starting it on another node",
+  migrate: "HA is moving it",
+  relocate: "HA is moving it",
+  disabled: "Protected, but HA is set to leave it off",
+  freeze: "Paused while its node restarts",
+  request_stop: "HA is stopping it",
+  ignored: "HA is ignoring it for now",
+};
+function haRow(v) {
+  const on = Boolean(v.ha);
+  const words = on ? (HA_WORDS[v.ha] ?? `HA state: ${v.ha}`) : "Off. Turn it on and HA starts it on another node if this one fails.";
+  return `<div class="setrow harow"><div class="hctext"><b>Keep this guest running</b><small>${esc(words)}</small></div>
+    <button class="sw" role="switch" aria-checked="${on}" aria-label="Keep ${esc(v.name)} running" data-haswitch="${v.id}"><i></i></button></div>`;
+}
+async function askHa(id) {
+  const v = S.data?.vms.find((x) => x.id === id);
+  if (!v) return;
+  if (v.ha) {
+    return confirmAction(`Stop protecting ${v.name}?`, `HA won't restart ${v.name} on another node any more if ${v.node} fails. It keeps running where it is.`, "Stop protecting", () =>
+      runAction("ha-unprotect", v.node, `Stop protecting ${v.name}`, { id }, () => refresh()),
+    );
+  }
+  dialog(`<h3>Checking ${esc(v.name)}</h3><p>Seeing whether HA can look after it.</p>`);
+  let c;
+  try {
+    c = await signal(`api/ha?id=${id}`);
+  } catch (err) {
+    if (err.message === "signed out") return;
+    return dialog(`<h3>Couldn't check it</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  if (c.problems.length) {
+    const eject = c.problems.some((p) => p.fix === "eject");
+    return dialog(
+      `<h3>HA can't keep ${esc(c.name)} running yet</h3>${c.problems.map((p) => `<p class="loginerr">${esc(p.text)}</p>`).join("")}<div class="row-end"><button class="btn" data-dlg="cancel">Close</button>${eject ? `<button class="btn primary" data-haeject="${id}">Change the disc</button>` : ""}</div>`,
+    );
+  }
+  const fencing = c.firstTime
+    ? `<div class="advice hafence"><div><b>This turns on fencing for the whole cluster</b>From now on, a node that loses touch with the others for about a minute restarts itself, and HA starts its protected guests on another node. That's right when a node has really failed. It's wrong when the node was fine and only its heartbeat network was busy or had a hiccup: then guests that were running fine get restarted.${c.warnings.map((w) => `<span class="haline ${c.safe ? "ok" : ""}">${esc(w)}</span>`).join("")}</div></div>`
+    : "";
+  S.pending = () => runAction("ha-protect", c.node, `Protecting ${c.name}`, { id }, () => refresh());
+  dialog(`<h3>Keep ${esc(c.name)} running?</h3>
+    <p>If ${esc(c.node)} fails, HA starts ${esc(c.name)} on another node.${c.running ? "" : ` It's off now, so HA starts it as soon as it's protected.`}</p>
+    ${fencing}
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-dlg="ok">Keep it running</button></div>`);
+}
+async function askHaRecover(id, node) {
+  const v = S.data?.vms.find((x) => x.id === id);
+  const name = v?.name ?? `Guest ${id}`;
+  confirmAction(`Bring ${name} back under HA?`, `${v?.lock ? `BossMox unlocks ${name} (${v.lock}), then ` : "BossMox "}sets it to disabled under HA and starts it again.`, "Bring it back", () =>
+    runAction("ha-recover", node, `Bringing ${name} back`, { id }, () => {
+      // Read fresh, past the health cache, so the item that was fixed goes.
+      S.healthChecks = null;
+      S.healthAgain = true;
+      drawHealthCheck();
+      loadHealthCheck();
+      refresh();
+    }),
+  );
+}
+
 const when = (t) => (t ? new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Time not recorded");
 const TAB = {
   overview: (v) => `
@@ -777,23 +1365,37 @@ const TAB = {
       <dt>Starts at boot</dt><dd>${v.startsAtBoot ? "Yes" : "No"}</dd>
       <dt>Snapshots</dt><dd>${v.snapshots.length || "None"}</dd>
     </dl>
+    ${v.template || (S.data?.nodes.length ?? 0) < 2 ? "" : haRow(v)}
     ${v.template ? "" : usagePane(`guest:${v.node}:${v.type}:${v.id}`)}`,
   hardware: (v) => {
     const lock = v.template ? "" : "1";
-    const disk = (d) => `<div class="snap"><div>${d.boot ? "Boot disk" : d.mount ? esc(d.mount) : "Disk"}<small>${d.sizeGb} GB on ${esc(d.storage)}, ${esc(d.slot)}</small></div>${lock ? `<div class="actions"><button class="btn" data-diskgrow="${esc(d.slot)}">Grow</button>${d.boot ? "" : `<button class="btn" data-diskremove="${esc(d.slot)}">Remove</button>`}</div>` : ""}</div>`;
-    const nic = (n) => `<div class="snap"><div>${esc(n.bridge || "Not connected")}${n.vlan ? `, VLAN ${esc(n.vlan)}` : ""}<small>${v.type === "lxc" ? `${esc(addrWords(n))}, ` : ""}${esc(n.model)}, ${esc(n.mac)}</small></div><div class="actions">${lock && v.type === "lxc" ? `<button class="btn" data-addrchange="${esc(n.slot)}">Change address</button>` : ""}${lock && v.nics.length > 1 ? `<button class="btn" data-nicremove="${esc(n.slot)}">Remove</button>` : ""}</div></div>`;
+    const disk = (d) =>
+      `<div class="snap"><div>${d.boot ? "Boot disk" : d.mount ? esc(d.mount) : "Disk"}<small>${d.sizeGb} GB on ${esc(d.storage)}, ${esc(d.slot)}</small></div>${lock ? `<div class="actions"><button class="btn" data-diskgrow="${esc(d.slot)}">Grow</button>${d.boot ? "" : `<button class="btn" data-diskremove="${esc(d.slot)}">Remove</button>`}</div>` : ""}</div>`;
+    const nic = (n) =>
+      `<div class="snap"><div>${esc(n.bridge || "Not connected")}${n.vlan ? `, VLAN ${esc(n.vlan)}` : ""}<small>${v.type === "lxc" ? `${esc(addrWords(n))}, ` : ""}${esc(n.model)}, ${esc(n.mac)}</small></div><div class="actions">${lock && v.type === "lxc" ? `<button class="btn" data-addrchange="${esc(n.slot)}">Change address</button>` : ""}${lock && v.nics.length > 1 ? `<button class="btn" data-nicremove="${esc(n.slot)}">Remove</button>` : ""}</div></div>`;
     return `${v.configLoaded ? "" : `<p class="meta">Proxmox didn't return this guest's settings.</p>`}
       <div class="hwhead"><h3>Disks</h3>${lock ? `<button class="btn" data-diskadd="1">Add a disk</button>` : ""}</div>${v.disks.map(disk).join("") || `<p class="empty">No disks.</p>`}
       ${v.type === "qemu" ? discSection(v) : ""}
       <div class="hwhead"><h3>Network</h3>${lock ? `<button class="btn" data-nicadd="1">Add a network card</button>` : ""}</div>${v.nics.map(nic).join("") || `<p class="empty">Not connected to a network.</p>`}
       ${v.running && lock ? `<p class="meta">It's running. Added disks usually appear right away, but some changes wait until it's shut down and started.</p>` : ""}`;
   },
-  snapshots: (v) => `<div class="head"><p class="meta" style="margin-top:0">A snapshot saves ${esc(v.name)} as it is now, so you can go back to it later. It isn't a backup: it lives on the same disk.</p>
+  snapshots: (
+    v,
+  ) => `<div class="head"><p class="meta" style="margin-top:0">A snapshot saves ${esc(v.name)} as it is now, so you can go back to it later. It isn't a backup: it lives on the same disk.</p>
       ${S.snapSupport?.[v.id] === false ? "" : `<div class="actions"><button class="btn primary" data-snaptake="1">Take a snapshot</button></div>`}</div>
     ${S.snapSupport?.[v.id] === false ? snapshotAdvice(v) : ""}
-    ${v.snapshots.length
-      ? v.snapshots.map((s) => `<div class="snap"><div>${esc(s.name)}<small>${esc(s.description ? `${s.description}, ${when(s.takenAt)}` : when(s.takenAt))}</small></div><div class="actions"><button class="btn" data-snaprestore="${esc(s.name)}">Go back to this</button><button class="btn" data-snapdelete="${esc(s.name)}">Delete</button></div></div>`).join("")
-      : S.snapSupport?.[v.id] === false ? "" : `<p class="empty">This VM has no snapshots yet.</p>`}`,
+    ${
+      v.snapshots.length
+        ? v.snapshots
+            .map(
+              (s) =>
+                `<div class="snap"><div>${esc(s.name)}<small>${esc(s.description ? `${s.description}, ${when(s.takenAt)}` : when(s.takenAt))}</small></div><div class="actions"><button class="btn" data-snaprestore="${esc(s.name)}">Go back to this</button><button class="btn" data-snapdelete="${esc(s.name)}">Delete</button></div></div>`,
+            )
+            .join("")
+        : S.snapSupport?.[v.id] === false
+          ? ""
+          : `<p class="empty">This VM has no snapshots yet.</p>`
+    }`,
   settings: (v) => settingsPane(v),
 };
 
@@ -801,15 +1403,16 @@ const TAB = {
 function monView() {
   return `<div class="vms"><aside><div id="srvlist"></div></aside><div id="srvdetail"></div></div>`;
 }
-const signal = (url) => fetch(url).then(async (res) => {
-  const body = await res.json();
-  if (res.status === 401) {
-    showLogin("You've been signed out. Sign in again to continue.");
-    throw new Error("signed out");
-  }
-  if (!res.ok) throw new Error(body.error);
-  return body;
-});
+const signal = (url) =>
+  fetch(url).then(async (res) => {
+    const body = await res.json();
+    if (res.status === 401) {
+      showLogin("You've been signed out. Sign in again to continue.");
+      throw new Error("signed out");
+    }
+    if (!res.ok) throw new Error(body.error);
+    return body;
+  });
 async function loadServer(name = S.server) {
   if (!name) return;
   const run = S.loadRun;
@@ -837,7 +1440,9 @@ async function loadCpuTypes(node) {
   if (S.cpuTypes || !node) return;
   try {
     S.cpuTypes = (await signal(`api/cpu-types?server=${encodeURIComponent(node)}`)).types;
-  } catch { /* the common types are still offered */ }
+  } catch {
+    /* the common types are still offered */
+  }
 }
 async function loadAhead() {
   if (S.loadingAhead || !S.data) return;
@@ -915,8 +1520,13 @@ function renderServers() {
     pickServer(S.data.nodes[0].name);
     return;
   }
-  list.innerHTML = S.data.nodes.map((n) => `<button class="row ${n.name === S.server ? "on" : ""}" data-server="${esc(n.name)}">
-    <span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? `${n.cpuPct}% busy, ${n.memPct}% memory` : "Offline"}</small></button>`).join("") + (S.data.nodes.length > 1 ? `<button class="btn rollbtn" data-rolling="1">Update all nodes</button>` : "");
+  list.innerHTML =
+    S.data.nodes
+      .map(
+        (n) => `<button class="row ${n.name === S.server ? "on" : ""}" data-server="${esc(n.name)}">
+    <span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? `${n.cpuPct}% busy, ${n.memPct}% memory` : "Offline"}</small></button>`,
+      )
+      .join("") + (S.data.nodes.length > 1 ? `<button class="btn rollbtn" data-rolling="1">Update all nodes</button>` : "");
   if (S.serverTab === "overview") renderServerDetail();
 }
 const CHANNEL_WORDS = { free: "Use the free channel", enterprise: "Use the enterprise channel" };
@@ -929,11 +1539,15 @@ const SERVER_TAB = {
     return `
     ${(() => {
       const m = movedGuests(d.name);
-      return m ? `<div class="advice"><div><b>${m.guests.length} moved off for a restart</b>${esc(awayWords(m))}</div><button class="btn" data-moveback="${esc(d.name)}">Move everything back</button></div>` : "";
+      return m
+        ? `<div class="advice"><div><b>${m.guests.length} moved off for a restart</b>${esc(awayWords(m))}</div><button class="btn" data-moveback="${esc(d.name)}">Move everything back</button></div>`
+        : "";
     })()}
     ${d.channel && !d.channel.ok ? `<div class="advice"><div><b>${esc(d.channel.headline)}</b>${esc(d.channel.note)}</div>${channelButton(d)}</div>` : ""}
     ${d.updates?.total ? `<div class="advice"><div><b>${d.updates.total} ${d.updates.total === 1 ? "update is" : "updates are"} waiting</b>${d.updates.rebootNeeded ? "This includes a new kernel, so the node will need a restart." : "No restart should be needed."}</div><button class="btn" data-servertab="updates">See updates</button></div>` : ""}
-    ${a ? `<div class="facts">
+    ${
+      a
+        ? `<div class="facts">
       <div class="fact"><label>Processor</label><b>${node?.cpuPct ?? 0}% busy</b><div class="meter"><i style="width:${Math.min(node?.cpuPct ?? 0, 100)}%"></i></div></div>
       <div class="fact"><label>Memory</label><b>${a.memUsedGb} of ${a.memTotalGb} GB</b><div class="meter"><i style="width:${a.memTotalGb ? (a.memUsedGb / a.memTotalGb) * 100 : 0}%"></i></div></div>
       <div class="fact"><label>System disk</label><b>${a.diskUsedGb} of ${a.diskTotalGb} GB</b><div class="meter"><i style="width:${a.diskTotalGb ? (a.diskUsedGb / a.diskTotalGb) * 100 : 0}%"></i></div></div>
@@ -945,20 +1559,29 @@ const SERVER_TAB = {
       <dt>Processor</dt><dd>${esc(a.processor)}, ${a.cpus} threads</dd>
       ${d.channel ? `<dt>Update channel</dt><dd>${esc(d.channel.name)}</dd>` : ""}
     </dl>
-    ${usagePane(`node:${d.name}`)}` : noAccess("this node's status", "Sys.Audit")}
+    ${usagePane(`node:${d.name}`)}`
+        : noAccess("this node's status", "Sys.Audit")
+    }
     <article class="server" style="margin-top:20px"><header><span>Running here</span><small>${on.filter((v) => v.running).length} of ${on.length}</small></header>
       <div class="bays">${on.map((v) => `<button class="bay ${v.running ? "" : "stopped"} ${v.issues.length ? "warn" : ""}" data-vm="${v.id}"><i></i>${esc(v.name)}</button>`).join("")}<span class="spare"></span></div></article>`;
   },
   updates: (d) => {
     if (!d.updates) return noAccess("waiting updates", "Sys.Modify");
-    const group = (title, items, open) => items.length ? `<details class="upgroup" ${open ? "open" : ""}><summary>${title} (${items.length})</summary>
-      ${items.map((u) => `<div class="snap"><div>${esc(u.name)}<small>${esc(u.title)}</small></div><code class="ver">${esc(u.from)} to ${esc(u.to)}</code></div>`).join("")}</details>` : "";
+    const group = (title, items, open) =>
+      items.length
+        ? `<details class="upgroup" ${open ? "open" : ""}><summary>${title} (${items.length})</summary>
+      ${items.map((u) => `<div class="snap"><div>${esc(u.name)}<small>${esc(u.title)}</small></div><code class="ver">${esc(u.from)} to ${esc(u.to)}</code></div>`).join("")}</details>`
+        : "";
     return `
     <div class="head"><div>${d.channel ? `<p class="meta" style="margin-top:0">Update channel: ${esc(d.channel.name)}. ${esc(d.channel.note)}</p>` : ""}</div>
       <div class="actions">${channelButton(d)}<button class="btn" data-check="${esc(d.name)}">Check for updates</button>${d.updates.total ? `<button class="btn primary" data-install="${esc(d.name)}">Install updates</button>` : ""}</div></div>
-    ${d.updates.total ? `<p style="margin-top:10px"><b>${d.updates.total} waiting.</b> ${d.updates.rebootNeeded ? "The new kernel means a restart afterward." : "No restart should be needed."}</p>
+    ${
+      d.updates.total
+        ? `<p style="margin-top:10px"><b>${d.updates.total} waiting.</b> ${d.updates.rebootNeeded ? "The new kernel means a restart afterward." : "No restart should be needed."}</p>
       ${group("Kernel", d.updates.kernel, true)}${group("Proxmox", d.updates.proxmox, true)}${group("Everything else", d.updates.other, false)}
-      <p class="meta">This list is from the node's last check for updates.</p>` : `<p class="empty">This node is up to date as of its last check for updates.</p>`}`;
+      <p class="meta">This list is from the node's last check for updates.</p>`
+        : `<p class="empty">This node is up to date as of its last check for updates.</p>`
+    }`;
   },
   services: (d) => {
     if (!d.services) return noAccess("services", "Sys.Audit");
@@ -989,7 +1612,14 @@ function renderServerDetail() {
     <div class="head"><div><h2>${esc(S.server)}</h2>
       <div class="state"><span class="dot ${node?.online ? "running" : "warn"}"></span>${node?.online ? "Online" : "Offline"}${d?.summary ? `, running for ${esc(d.summary.uptime)}` : ""}</div></div>
       <div class="actions"><button class="btn" data-nodeconsole="${esc(S.server)}" ${node?.online ? "" : "disabled"}>Console</button><button class="btn danger" data-restartserver="${esc(S.server)}">Restart</button></div></div>
-    <div class="tabs" role="tablist">${[["overview", "Overview"], ["updates", d?.updates?.total ? `Updates (${d.updates.total})` : "Updates"], ["services", "Services"], ["activity", "Activity"]].map(([k, l]) => `<button role="tab" aria-selected="${S.serverTab === k}" class="${S.serverTab === k ? "on" : ""}" data-servertab="${k}">${l}</button>`).join("")}</div>
+    <div class="tabs" role="tablist">${[
+      ["overview", "Overview"],
+      ["updates", d?.updates?.total ? `Updates (${d.updates.total})` : "Updates"],
+      ["services", "Services"],
+      ["activity", "Activity"],
+    ]
+      .map(([k, l]) => `<button role="tab" aria-selected="${S.serverTab === k}" class="${S.serverTab === k ? "on" : ""}" data-servertab="${k}">${l}</button>`)
+      .join("")}</div>
     <div class="tabpane">${body}</div>`;
   box.scrollTop = top;
   if (S.serverTab === "overview") loadUsage();
@@ -998,7 +1628,11 @@ function renderServerDetail() {
  * Usage graphs (ADR 0022): Proxmox's own history for a node or guest, one small chart per measure, one scale each.
  * The screens around them redraw every 10 seconds, so the data is cached here and fetched at most once a minute.
  */
-const USAGE_RANGES = [["hour", "Last hour"], ["day", "Last day"], ["week", "Last week"]];
+const USAGE_RANGES = [
+  ["hour", "Last hour"],
+  ["day", "Last day"],
+  ["week", "Last week"],
+];
 S.usage = {};
 S.usageRange = "hour";
 const usageKey = (key) => `${key}|${S.usageRange}`;
@@ -1035,7 +1669,8 @@ function niceMax(v) {
   const p = 10 ** Math.floor(Math.log10(v));
   return [1, 2, 2.5, 5, 10].map((m) => m * p).find((m) => m >= v);
 }
-const whenLabel = (t, range) => new Date(t * 1000).toLocaleString([], range === "week" ? { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" } : { hour: "numeric", minute: "2-digit" });
+const whenLabel = (t, range) =>
+  new Date(t * 1000).toLocaleString([], range === "week" ? { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" } : { hour: "numeric", minute: "2-digit" });
 function usageCharts(hit) {
   if (!hit?.data) return hit?.error ? `<p class="empty">${esc(hit.error)}</p>` : `<p class="empty">Loading usage.</p>`;
   const u = hit.data;
@@ -1043,18 +1678,41 @@ function usageCharts(hit) {
   const charts = [
     { title: "Processor", unit: "%", max: 100, series: [["cpu", "Busy"]], note: u.cores ? `of ${u.cores} ${u.cores === 1 ? "core" : "cores"}` : "" },
     { title: "Memory", unit: "GB", max: u.memTotalGb || null, series: [["memGb", "In use"]], note: u.memTotalGb ? `of ${u.memTotalGb} GB` : "" },
-    { title: "Network", unit: "Mbit/s", max: null, series: [["netIn", "In"], ["netOut", "Out"]] },
-    ...(u.kind === "guest" ? [{ title: "Disk activity", unit: "MB/s", max: null, series: [["diskRead", "Read"], ["diskWrite", "Write"]] }] : []),
+    {
+      title: "Network",
+      unit: "Mbit/s",
+      max: null,
+      series: [
+        ["netIn", "In"],
+        ["netOut", "Out"],
+      ],
+    },
+    ...(u.kind === "guest"
+      ? [
+          {
+            title: "Disk activity",
+            unit: "MB/s",
+            max: null,
+            series: [
+              ["diskRead", "Read"],
+              ["diskWrite", "Write"],
+            ],
+          },
+        ]
+      : []),
   ];
   return `<div class="ugrid">${charts.map((c) => usageChart(u, c)).join("")}</div>`;
 }
 function usageChart(u, c) {
-  const W = 600, H = 120, pts = u.points;
+  const W = 600,
+    H = 120,
+    pts = u.points;
   const values = c.series.flatMap(([k]) => pts.map((p) => p[k]).filter((v) => v !== null && v !== undefined));
   const top = c.max ?? niceMax(Math.max(0, ...values));
   const x = (i) => (pts.length === 1 ? W : (i / (pts.length - 1)) * W);
   const y = (v) => H - (Math.min(v, top) / top) * H;
-  const path = (k) => pts.reduce((d, p, i) => (p[k] === null || p[k] === undefined ? d : `${d}${i && pts[i - 1][k] !== null && pts[i - 1][k] !== undefined ? "L" : "M"}${x(i).toFixed(1)},${y(p[k]).toFixed(1)}`), "");
+  const path = (k) =>
+    pts.reduce((d, p, i) => (p[k] === null || p[k] === undefined ? d : `${d}${i && pts[i - 1][k] !== null && pts[i - 1][k] !== undefined ? "L" : "M"}${x(i).toFixed(1)},${y(p[k]).toFixed(1)}`), "");
   const latest = (k) => [...pts].reverse().find((p) => p[k] !== null && p[k] !== undefined)?.[k] ?? null;
   const peak = (k) => Math.max(...pts.map((p) => p[k] ?? 0));
   const summary = `${c.title}, ${USAGE_RANGES.find(([r]) => r === u.range)[1].toLowerCase()}: ${c.series.map(([k, l]) => `${c.series.length > 1 ? `${l} ` : ""}now ${fmt(latest(k), c.unit)}, peak ${fmt(peak(k), c.unit)}`).join("; ")}.`;
@@ -1119,7 +1777,14 @@ function diskLine(d) {
 function poolBlock(p, onSystem = false) {
   const pct = p.totalGb ? Math.min(100, Math.round((p.usedGb / p.totalGb) * 100)) : 0;
   const who = (g) => (S.data?.vms.some((v) => v.id === g.vmid) ? guestName(g.vmid) : `Left over from guest ${g.vmid}`);
-  const guest = (g) => (g.usedGb !== null && g.usedGb < g.gb ? (g.usedGb < 0.1 ? `${who(g)} (${sizeWords(g.gb)} disk, nearly empty)` : `${who(g)} ${sizeWords(g.usedGb)} of a ${sizeWords(g.gb)} disk`) : p.thin ? `${who(g)} (${sizeWords(g.gb)} disk)` : `${who(g)} ${sizeWords(g.gb)}`);
+  const guest = (g) =>
+    g.usedGb !== null && g.usedGb < g.gb
+      ? g.usedGb < 0.1
+        ? `${who(g)} (${sizeWords(g.gb)} disk, nearly empty)`
+        : `${who(g)} ${sizeWords(g.usedGb)} of a ${sizeWords(g.gb)} disk`
+      : p.thin
+        ? `${who(g)} (${sizeWords(g.gb)} disk)`
+        : `${who(g)} ${sizeWords(g.gb)}`;
   const using = [...p.guests.map(guest), ...p.files.filter((f) => f.gb >= 0.1).map((f) => `${f.label} ${sizeWords(f.gb)}`), ...(p.otherGb ? [`${p.otherLabel} ${sizeWords(p.otherGb)}`] : [])];
   const facts = [
     p.layout,
@@ -1136,7 +1801,12 @@ function poolBlock(p, onSystem = false) {
       ${listed ? `<div class="actions"><button class="btn" data-stedit="${esc(p.id)}">Change use</button>${p.shared || !p.disks.length ? `<button class="btn" data-stremove="${esc(p.id)}">Remove</button>` : onSystem ? "" : `<button class="btn" data-pooldel="${esc(p.id)}">Delete</button>`}</div>` : ""}</div>
     ${p.active ? `<small>${sizeWords(p.usedGb)} used of ${sizeWords(p.totalGb)}, ${sizeWords(p.freeGb)} free</small><div class="meter"><i style="width:${pct}%"></i></div>` : `<p class="loginerr">This node can't reach it right now.</p>`}
     ${using.length ? `<small>Using it: ${esc(using.join(", "))}</small>` : ""}
-    <small>Holds ${esc(holds.join(", ").toLowerCase().replace(/\bvm\b/g, "VM") || "nothing yet")}.</small>
+    <small>Holds ${esc(
+      holds
+        .join(", ")
+        .toLowerCase()
+        .replace(/\bvm\b/g, "VM") || "nothing yet",
+    )}.</small>
     ${facts.map((f) => `<small>${esc(f)}</small>`).join("")}
     ${p.details ? `<small class="stdetails">${esc(p.details)}</small>` : ""}
     ${p.active ? `<div><button class="linkbtn" data-poolopen="${esc(p.id)}" aria-expanded="${open ? "true" : "false"}">${open ? "Hide what's on it" : "What's on it"}</button></div>${open ? poolItemsList(p) : ""}` : ""}</div>`;
@@ -1144,11 +1814,18 @@ function poolBlock(p, onSystem = false) {
 const ITEM_WORDS = { disk: "Disks", disc: "Installer discs", template: "Container templates", backup: "Backups", import: "Imports", snippet: "Snippets", other: "Other" };
 function poolItemsList(p) {
   const holdsDiscs = p.uses.includes("iso");
-  const groups = Object.keys(ITEM_WORDS).map((k) => [k, p.items.filter((i) => i.kind === k)]).filter(([, list]) => list.length);
+  const groups = Object.keys(ITEM_WORDS)
+    .map((k) => [k, p.items.filter((i) => i.kind === k)])
+    .filter(([, list]) => list.length);
   const row = (i) => {
     const what = i.kind === "disk" ? (i.leftover ? "Left over from a guest that no longer exists" : `${i.owner || guestName(i.vmid)}'s disk`) : "";
     const size = i.usedGb !== null && i.usedGb < i.gb ? `${sizeWords(i.usedGb)} of ${sizeWords(i.gb)}` : sizeWords(i.gb);
-    const button = i.kind === "backup" ? `<button class="btn" data-open="backups">Open Backups</button>` : i.canDelete ? `<button class="btn ${i.leftover ? "danger" : ""}" data-itemdelete="${esc(i.volid)}" data-itempool="${esc(p.id)}">Delete</button>` : "";
+    const button =
+      i.kind === "backup"
+        ? `<button class="btn" data-open="backups">Open Backups</button>`
+        : i.canDelete
+          ? `<button class="btn ${i.leftover ? "danger" : ""}" data-itemdelete="${esc(i.volid)}" data-itempool="${esc(p.id)}">Delete</button>`
+          : "";
     return `<div class="snap"><div>${esc(i.name)}<small>${esc([what, size].filter(Boolean).join(", "))}${!i.canDelete && i.kind !== "backup" && i.kind !== "disk" ? `. ${esc(i.whyNot)}` : ""}</small></div><div class="actions">${button}</div></div>`;
   };
   return `<div class="stitems">
@@ -1172,16 +1849,23 @@ function drawSetup(problem = "") {
   const node = S.storeNode;
   const drives = (S.diskData?.[node] ?? []).filter((d) => d.free || d.canWipe);
   const blocked = (S.diskData?.[node] ?? []).find((d) => d.blocked)?.blocked ?? "";
-  const choice = (key, value, title, line, on, disabled = false) => `<button class="choice ${on ? "on" : ""}" role="radio" aria-checked="${on}" data-setup="${key}" data-setupval="${value}" ${disabled ? "disabled" : ""}><b>${esc(title)}</b><small>${esc(line)}</small></button>`;
+  const choice = (key, value, title, line, on, disabled = false) =>
+    `<button class="choice ${on ? "on" : ""}" role="radio" aria-checked="${on}" data-setup="${key}" data-setupval="${value}" ${disabled ? "disabled" : ""}><b>${esc(title)}</b><small>${esc(line)}</small></button>`;
   const where = `<p class="stq">Where is it?</p><div class="choices" role="radiogroup" aria-label="Where is it">
     ${choice("where", "drive", "A drive in this computer", drives.length ? `${drives.length} on ${node} can be used.` : blocked || `${node} has no drive that can be used. Every drive already holds something.`, st.where === "drive", !drives.length)}
     ${choice("where", "nas", "A NAS or file server", "Storage over the network. Every node can use it.", st.where === "nas")}</div>`;
   // iSCSI is on the way (Rocky, 2026-11-09): shown so people know, greyed out until it's built and tested.
-  const nasPart = st.where !== "nas" ? "" : `<p class="stq">How does it share?</p><div class="choices" role="radiogroup" aria-label="How it shares" style="grid-template-columns:1fr">
+  const nasPart =
+    st.where !== "nas"
+      ? ""
+      : `<p class="stq">How does it share?</p><div class="choices" role="radiogroup" aria-label="How it shares" style="grid-template-columns:1fr">
     ${choice("share", "nfs", "NFS", "Shared folders, the usual choice for Linux and most NAS boxes.", false)}
     ${choice("share", "smb", "SMB", "Windows file sharing. Needs a username and password.", false)}
     <button class="choice" role="radio" aria-checked="false" aria-disabled="true" disabled><b>iSCSI</b><small>A disk on the NAS, used as if it were inside the node.</small><span class="soon">Coming soon</span></button></div>`;
-  const drivePart = st.where !== "drive" ? "" : `
+  const drivePart =
+    st.where !== "drive"
+      ? ""
+      : `
     <p class="stq">Which ${drives.length > 1 ? "drives" : "drive"}?</p><fieldset class="uses"><legend class="sr">Drives</legend>${drives.map((d) => `<label class="createcheck"><input type="checkbox" data-setupdisk="${esc(d.path)}" ${st.devices.has(d.path) ? "checked" : ""}> ${esc(d.model || d.path)}, ${sizeWords(d.sizeGb)}${d.model ? ` <small class="inl">${esc(d.path)}</small>` : ""} <small class="inl">${d.free ? "empty" : `has old data (${esc(d.used)})`}</small></label>`).join("")}</fieldset>
     <p class="stq">What's it for?</p><div class="choices" role="radiogroup" aria-label="What it's for" style="grid-template-columns:1fr">${PURPOSES.map(([k, t, l]) => choice("purpose", k, t, l, st.purpose === k)).join("")}</div>
     <label class="field restartname"><span>Name</span><input id="setupname" maxlength="31" autocomplete="off" autocapitalize="none" spellcheck="false" value="${esc(st.name)}"></label>
@@ -1220,8 +1904,11 @@ function askPoolDelete(id) {
   const users = (S.data?.vms ?? []).filter((v) => v.usesStorage.includes(id)).map((v) => v.name);
   const why = g.disks.some((d) => d.system)
     ? `${id} is on the system disk, alongside Proxmox itself, so BossMox won't delete it. A fresh install splits the system disk into a folder (local) and a pool for guests (local-lvm). That's normal, and both are useful.`
-    : users.length ? `${users.join(", ")} still ${users.length === 1 ? "uses" : "use"} it. Move or remove ${users.length === 1 ? "that" : "those"} first.`
-      : p.items.length ? `There's still something on it. Open What's on it, and delete or move ${p.items.length === 1 ? "it" : "them"} first.` : "";
+    : users.length
+      ? `${users.join(", ")} still ${users.length === 1 ? "uses" : "use"} it. Move or remove ${users.length === 1 ? "that" : "those"} first.`
+      : p.items.length
+        ? `There's still something on it. Open What's on it, and delete or move ${p.items.length === 1 ? "it" : "them"} first.`
+        : "";
   if (why) return dialog(`<h3>${esc(id)} can't be deleted${g.disks.some((d) => d.system) ? "" : " yet"}</h3><p>${esc(why)}</p>${closeRow}`);
   const drives = g.disks.map((d) => (d.model ? `${d.model} (${d.path})` : d.path)).join(" and ");
   S.poolDelete = id;
@@ -1231,24 +1918,49 @@ function askPoolDelete(id) {
   S.poolDeleteNode = node;
 }
 function askItemDelete(pool, volid) {
-  const i = S.storeMaps?.[S.storeNode] && [...S.storeMaps[S.storeNode].groups.flatMap((g) => g.pools), ...S.storeMaps[S.storeNode].unplaced, ...S.storeMaps[S.storeNode].network].find((p) => p.id === pool)?.items.find((x) => x.volid === volid);
+  const i =
+    S.storeMaps?.[S.storeNode] &&
+    [...S.storeMaps[S.storeNode].groups.flatMap((g) => g.pools), ...S.storeMaps[S.storeNode].unplaced, ...S.storeMaps[S.storeNode].network]
+      .find((p) => p.id === pool)
+      ?.items.find((x) => x.volid === volid);
   if (!i) return;
   const node = S.storeNode;
   const line = i.leftover
     ? `This disk is left over from guest ${i.vmid}, which no longer exists, and nothing uses it. Deleting it frees ${sizeWords(i.usedGb ?? i.gb)} on ${pool}. It can't be undone.`
     : `This deletes ${i.name} from ${pool}, freeing ${sizeWords(i.gb)}. It can't be undone.`;
-  confirmAction(`Delete ${i.name}?`, line, `Delete ${i.name}`, () => runAction("content-delete", node, `Deleting ${i.name}`, { storage: pool, volid, confirm: volid }, () => loadStorageMap(node)), true);
+  confirmAction(
+    `Delete ${i.name}?`,
+    line,
+    `Delete ${i.name}`,
+    () => runAction("content-delete", node, `Deleting ${i.name}`, { storage: pool, volid, confirm: volid }, () => loadStorageMap(node)),
+    true,
+  );
 }
 function mapPane() {
   const nodes = onlineNodes();
   S.storeNode = nodes.includes(S.storeNode) ? S.storeNode : nodes[0];
   const m = S.storeMaps?.[S.storeNode];
-  const pick = nodes.length > 1 ? `<label class="field stnode"><span>Node</span><select id="stnode">${nodes.map((n) => `<option ${n === S.storeNode ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>` : `<div></div>`;
+  const pick =
+    nodes.length > 1
+      ? `<label class="field stnode"><span>Node</span><select id="stnode">${nodes.map((n) => `<option ${n === S.storeNode ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>`
+      : `<div></div>`;
   const top = `<div class="sttop">${pick}<div class="actions"><button class="btn primary" data-setupstart="1">Add storage</button></div></div>`;
   if (!m) return `${top}<p class="empty">${esc(S.mapError || "Looking at this node's disks and storage.")}</p>`;
   const section = (heading, body) => `<h3 class="sthd">${heading}</h3>${body}`;
   return `${top}
-    ${m.groups.map((g) => `<section class="stgroup">${g.disks.length > 1 ? `<p class="stmany">${g.disks.length} disks working together</p>` : ""}${g.disks.map(diskLine).join("")}${g.disks.some((d) => d.system) && g.pools.length > 1 ? `<small class="stnote">Proxmox itself lives here too. A fresh install splits this disk into a folder for files and a pool for guests' disks. That's normal, and both stay.</small>` : ""}${g.pools.map((p) => poolBlock(p, g.disks.some((d) => d.system))).join("")}</section>`).join("")}
+    ${m.groups
+      .map(
+        (g) =>
+          `<section class="stgroup">${g.disks.length > 1 ? `<p class="stmany">${g.disks.length} disks working together</p>` : ""}${g.disks.map(diskLine).join("")}${g.disks.some((d) => d.system) && g.pools.length > 1 ? `<small class="stnote">Proxmox itself lives here too. A fresh install splits this disk into a folder for files and a pool for guests' disks. That's normal, and both stay.</small>` : ""}${g.pools
+            .map((p) =>
+              poolBlock(
+                p,
+                g.disks.some((d) => d.system),
+              ),
+            )
+            .join("")}</section>`,
+      )
+      .join("")}
     ${m.empty.length ? section("Empty disks", `<section class="stgroup">${m.empty.map(diskLine).join("")}<small class="stnote">Nothing is on these yet. Add storage turns them into a pool.</small></section>`) : ""}
     ${m.otherDisks.length ? section("Disks used by something else", `<section class="stgroup">${m.otherDisks.map(diskLine).join("")}</section>`) : ""}
     ${m.unplaced.length ? section("On this node, disk not identified", `<section class="stgroup">${m.unplaced.map(poolBlock).join("")}</section>`) : ""}
@@ -1298,7 +2010,9 @@ async function loadDisks(node) {
     S.diskData = { ...S.diskData, [node]: disks };
     drawStore();
     renderHealth();
-  } catch { /* the next pass asks again, and the tab says it's still looking */ }
+  } catch {
+    /* the next pass asks again, and the tab says it's still looking */
+  }
 }
 const afterStorage = async () => {
   await refresh();
@@ -1393,7 +2107,7 @@ async function showDiskHealth(path) {
   try {
     const r = await signal(`api/disk-smart?server=${encodeURIComponent(node)}&disk=${encodeURIComponent(path)}`);
     const rows = (r.attributes ?? []).map((a) => `${a.name ?? a.id}: ${a.raw ?? a.value ?? ""}`);
-    const body = rows.length ? rows.join("\n") : r.text ?? "";
+    const body = rows.length ? rows.join("\n") : (r.text ?? "");
     dialog(`<h3>${esc(path)} on ${esc(node)}</h3><p class="${d?.failing ? "loginerr" : ""}">${d?.failing ? "This disk reports a problem. Move what's on it and replace it." : (r.health ?? "UNKNOWN") === "UNKNOWN" ? "This disk doesn't report its health. Virtual disks and some USB drives can't." : "This disk reports that it's healthy."}</p>
       ${body.trim() ? `<pre class="tasklog whole">${esc(body)}</pre>` : ""}${closeRow}`);
   } catch (err) {
@@ -1427,8 +2141,17 @@ function drawMakeChoices() {
   const n = pickedDisks().length;
   $("#mkfswrap").hidden = kind !== "directory";
   const was = $("#mkraid")?.value;
-  const options = [["single", "One disk, no copies", n === 1], ["mirror", "Mirror: survives losing all but one disk", n >= 2], ["raidz", "RAIDZ: survives losing 1 disk", n >= 3], ["raidz2", "RAIDZ2: survives losing 2 disks", n >= 4], ["raid10", "Striped mirrors: fast, survives 1 per pair", n >= 4 && n % 2 === 0]].filter((o) => o[2]);
-  $("#mkraidwrap").innerHTML = kind === "zfs" && options.length ? `<label class="field restartname"><span>How the disks work together</span><select id="mkraid">${options.map(([k, l]) => `<option value="${k}" ${k === was ? "selected" : ""}>${l}</option>`).join("")}</select></label>` : "";
+  const options = [
+    ["single", "One disk, no copies", n === 1],
+    ["mirror", "Mirror: survives losing all but one disk", n >= 2],
+    ["raidz", "RAIDZ: survives losing 1 disk", n >= 3],
+    ["raidz2", "RAIDZ2: survives losing 2 disks", n >= 4],
+    ["raid10", "Striped mirrors: fast, survives 1 per pair", n >= 4 && n % 2 === 0],
+  ].filter((o) => o[2]);
+  $("#mkraidwrap").innerHTML =
+    kind === "zfs" && options.length
+      ? `<label class="field restartname"><span>How the disks work together</span><select id="mkraid">${options.map(([k, l]) => `<option value="${k}" ${k === was ? "selected" : ""}>${l}</option>`).join("")}</select></label>`
+      : "";
 }
 function makeStorage() {
   const kind = $("#mkkind").value;
@@ -1459,14 +2182,24 @@ const closeDialog = () => {
 };
 function confirmAction(title, line, label, run, danger = false) {
   S.pending = run;
-  dialog(`<h3>${esc(title)}</h3><p>${esc(line)}</p><div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn ${danger ? "danger" : "primary"}" data-dlg="ok">${esc(label)}</button></div>`);
+  dialog(
+    `<h3>${esc(title)}</h3><p>${esc(line)}</p><div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn ${danger ? "danger" : "primary"}" data-dlg="ok">${esc(label)}</button></div>`,
+  );
 }
 function drawTask(title, view, error) {
   const running = !error && !view?.finished;
   const slow = running && Date.now() - S.taskStarted > 10000;
   const help = S.taskHelp;
   const noAnswer = help && view?.result === "failed" && /timeout/i.test(view.message ?? "");
-  const words = error || (noAnswer ? help.failed : slow ? help?.waiting ?? "This is taking a while. It carries on in Proxmox even if you stop watching." : running ? "Working on it." : { ok: "Finished.", warning: "Finished with warnings.", failed: `It failed. ${view.message}` }[view.result]);
+  const words =
+    error ||
+    (noAnswer
+      ? help.failed
+      : slow
+        ? (help?.waiting ?? "This is taking a while. It carries on in Proxmox even if you stop watching.")
+        : running
+          ? "Working on it."
+          : { ok: "Finished.", warning: "Finished with warnings.", failed: `It failed. ${view.message}` }[view.result]);
   const force = help && (slow || noAnswer) ? `<button class="btn danger" data-forceoff="${help.guest}">Force off</button>` : "";
   dialog(`<h3>${esc(title)}</h3><p class="${error || view?.result === "failed" ? "loginerr" : ""}">${esc(words)}</p>
     ${view?.lines?.length ? `<pre class="tasklog">${esc(view.lines.join("\n"))}</pre>` : ""}
@@ -1551,16 +2284,18 @@ function stayedWords(job) {
 const keepFree = () => S.data?.preferences?.keepFreePct ?? 10;
 const KEEP_CHOICES = [5, 10, 15, 20, 25, 30];
 /** The cluster-wide room to keep on each node when BossMox moves guests. `again` redraws the window it's in. */
-const keepFreeField = (again) => `<label class="field restartname"><span>Keep free on each node</span><select id="keepfree" data-keepagain="${esc(again)}">${KEEP_CHOICES.map((n) => `<option value="${n}" ${n === keepFree() ? "selected" : ""}>${n}% of memory, storage and processor</option>`).join("")}</select></label>`;
+const keepFreeField = (again) =>
+  `<label class="field restartname"><span>Keep free on each node</span><select id="keepfree" data-keepagain="${esc(again)}">${KEEP_CHOICES.map((n) => `<option value="${n}" ${n === keepFree() ? "selected" : ""}>${n}% of memory, storage and processor</option>`).join("")}</select></label>`;
 const jobOf = (m, id) => (m?.job && id && `job:${m.job.startedAt}` === id ? m.job : null);
 function jobRows(job, home) {
-  const word = (g) => ({
-    done: home ? `Back on ${g.target}` : `Moved to ${g.target}`,
-    failed: home ? "Didn't get home" : "Didn't move",
-    stayed: "Stayed where it is: no room at home",
-    moving: home ? "Moving back" : `Moving to ${g.target}`,
-    waiting: job.running ? "Waiting its turn" : "Not moved",
-  })[g.state];
+  const word = (g) =>
+    ({
+      done: home ? `Back on ${g.target}` : `Moved to ${g.target}`,
+      failed: home ? "Didn't get home" : "Didn't move",
+      stayed: "Stayed where it is: no room at home",
+      moving: home ? "Moving back" : `Moving to ${g.target}`,
+      waiting: job.running ? "Waiting its turn" : "Not moved",
+    })[g.state];
   const dot = (g) => (g.state === "done" ? "running" : g.state === "failed" || g.state === "stayed" || (!job.running && g.state === "waiting") ? "warn" : "busy");
   return job.guests.map((g) => `<div class="snap"><div>${esc(g.name)}</div><span class="state"><span class="dot ${dot(g)}"></span>${esc(word(g))}</span></div>`).join("");
 }
@@ -1578,8 +2313,12 @@ async function followMoves(id, title) {
     if (shown && !($("#scrim").classList.contains("on") && $("#dialog [data-moveswin]"))) return;
     if (job) {
       shown = true;
-      const words = job.error ? `<p class="loginerr">${esc(job.error)}</p>` : `<p>${job.running ? "One at a time, each checked for room first. You can close this: the moves carry on." : stayedWords(job) ? esc(stayedWords(job)) : "All of them are home."}</p>`;
-      dialog(`<h3 data-moveswin="1">${esc(title)}</h3>${words}<div class="restartlist">${jobRows(job, job.kind === "home")}</div><div class="row-end">${job.running ? `<button class="btn" data-movestop="${esc(job.node)}">Stop after this one</button>` : ""}<button class="btn" data-dlg="cancel">Close</button></div>`);
+      const words = job.error
+        ? `<p class="loginerr">${esc(job.error)}</p>`
+        : `<p>${job.running ? "One at a time, each checked for room first. You can close this: the moves carry on." : stayedWords(job) ? esc(stayedWords(job)) : "All of them are home."}</p>`;
+      dialog(
+        `<h3 data-moveswin="1">${esc(title)}</h3>${words}<div class="restartlist">${jobRows(job, job.kind === "home")}</div><div class="row-end">${job.running ? `<button class="btn" data-movestop="${esc(job.node)}">Stop after this one</button>` : ""}<button class="btn" data-dlg="cancel">Close</button></div>`,
+      );
       if (!job.running) {
         await refresh();
         renderServerDetail();
@@ -1592,13 +2331,18 @@ async function followMoves(id, title) {
 function askMoveBack(server) {
   const m = movedGuests(server);
   if (!m) return;
-  confirmAction(`Move ${m.guests.length} back to ${server}?`, `${awayWords(m)} will move back to ${server}, one at a time. BossMox checks that ${server} has room before each one.`, `Move back to ${server}`, async () => {
-    try {
-      followMoves(await startMoves("move-home", server), `Moving back to ${server}`);
-    } catch (err) {
-      dialog(`<h3>Nothing moved</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
-    }
-  });
+  confirmAction(
+    `Move ${m.guests.length} back to ${server}?`,
+    `${awayWords(m)} will move back to ${server}, one at a time. BossMox checks that ${server} has room before each one.`,
+    `Move back to ${server}`,
+    async () => {
+      try {
+        followMoves(await startMoves("move-home", server), `Moving back to ${server}`);
+      } catch (err) {
+        dialog(`<h3>Nothing moved</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+      }
+    },
+  );
 }
 async function stopMoves(server) {
   const res = await post("api/action/move-stop", { server });
@@ -1609,20 +2353,32 @@ async function stopMoves(server) {
  * Restart and Update all nodes (ADR 0027). The page asks what to do with each running VM, then the BossMox server
  * runs it. This page, or any other, only follows: closing it changes nothing.
  */
-const PHASE_WORDS = { waiting: "Waiting its turn", checking: "Checking the cluster", emptying: "Moving and shutting down", installing: "Installing updates", restarting: "Restarting", starting: "Starting guests again", returning: "Bringing guests home", done: "Done", failed: "Stopped here" };
+const PHASE_WORDS = {
+  waiting: "Waiting its turn",
+  checking: "Checking the cluster",
+  emptying: "Moving and shutting down",
+  installing: "Installing updates",
+  restarting: "Restarting",
+  starting: "Starting guests again",
+  returning: "Bringing guests home",
+  done: "Done",
+  failed: "Stopped here",
+};
 function vmWords(v, running = true) {
-  return ({
-    waiting: !running ? (v.choice === "shutdown" ? "Not shut down" : "Not moved") : v.choice === "shutdown" ? "Will shut down" : "Will move",
-    moving: "Moving",
-    moved: `On ${v.on ?? "another node"}`,
-    stopping: "Shutting down",
-    off: "Off for the restart",
-    starting: "Starting",
-    started: "Running again",
-    home: "Back home",
-    stayed: `Stayed on ${v.on ?? "another node"}`,
-    failed: v.note ? `Problem: ${v.note}` : "Problem",
-  })[v.state] ?? v.state;
+  return (
+    {
+      waiting: !running ? (v.choice === "shutdown" ? "Not shut down" : "Not moved") : v.choice === "shutdown" ? "Will shut down" : "Will move",
+      moving: "Moving",
+      moved: `On ${v.on ?? "another node"}`,
+      stopping: "Shutting down",
+      off: "Off for the restart",
+      starting: "Starting",
+      started: "Running again",
+      home: "Back home",
+      stayed: `Stayed on ${v.on ?? "another node"}`,
+      failed: v.note ? `Problem: ${v.note}` : "Problem",
+    }[v.state] ?? v.state
+  );
 }
 const vmDot = (v) => (["home", "started", "moved"].includes(v.state) ? "running" : ["failed", "stayed"].includes(v.state) ? "warn" : v.state === "waiting" || v.state === "off" ? "" : "busy");
 
@@ -1633,14 +2389,15 @@ async function openRunStart(kind, server = "") {
     if (kind === "update") {
       const names = onlineNodes();
       dialog(`<h3>Checking every node for updates</h3><p>This looks for new updates. It doesn't install anything.</p>`);
-      await Promise.all(names.map(async (n) => {
-        const res = await post("api/action/check-updates", { server: n });
-        const body = await res.json();
-        if (!res.ok) throw new Error(body.error);
-        // A failed check leaves the node's update list stale, and the plan would call it up to date (#55).
-        const view = await followTask(n, body.task);
-        if (view.result === "failed") throw new Error(`The update check failed on ${n}: ${view.message || "Proxmox didn't say why"}. Nothing was planned.`);
-      }));
+      await Promise.all(
+        names.map(async (n) => {
+          const res = await post("api/action/check-updates", { server: n });
+          const body = await res.json();
+          if (!res.ok) throw new Error(body.error);
+          // A failed check leaves that node's list stale. The plan reads Proxmox's task list and leaves it out, named (#55, #73).
+          await followTask(n, body.task);
+        }),
+      );
     } else dialog(`<h3>Planning the restart of ${esc(server)}</h3><p>Reading what runs there and where it can go.</p>`);
     const [plan, reboot] = await Promise.all([
       signal(`api/run-plan?kind=${kind}${kind === "restart" ? `&server=${encodeURIComponent(server)}` : ""}`),
@@ -1659,8 +2416,18 @@ function drawRunStart(kind, server, plan, reboot) {
   const again = `run:${kind}:${server}`;
   const busy = reboot?.busy?.length ? [`Wait for this to finish first: ${reboot.busy.join(", ")}.`] : [];
   const blocked = [...plan.blocked, ...busy];
-  if (blocked.length) return dialog(`<h3>Not ready</h3>${blocked.map((b) => `<p class="loginerr">${esc(b)}</p>`).join("")}<div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn" data-runagain="${esc(again)}">Check again</button></div>`);
-  if (!plan.nodes.length) return dialog(`<h3>Every node is up to date</h3><p>Nothing is waiting to install.</p>${closeRow}`);
+  if (blocked.length)
+    return dialog(
+      `<h3>Not ready</h3>${blocked.map((b) => `<p class="loginerr">${esc(b)}</p>`).join("")}<div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn" data-runagain="${esc(again)}">Check again</button></div>`,
+    );
+  const skipped = (plan.notChecked ?? [])
+    .map(
+      (n) =>
+        `<p class="loginerr">Left out: ${esc(n.name)}. Its check for updates failed (${esc(n.why)}), so BossMox doesn't know what it needs. If its update channel needs a subscription it doesn't have, Health check can switch it to the free one.</p>`,
+    )
+    .join("");
+  if (!plan.nodes.length)
+    return dialog(skipped ? `<h3>Nothing to install on the nodes that were checked</h3>${skipped}${closeRow}` : `<h3>Every node is up to date</h3><p>Nothing is waiting to install.</p>${closeRow}`);
   const restarts = plan.nodes.filter((n) => n.restart);
   const pick = (v) => {
     if (v.self) return `<span class="state">BossMox itself: moves${v.to ? ` to ${esc(v.to)}` : ""}</span>`;
@@ -1672,13 +2439,15 @@ function drawRunStart(kind, server, plan, reboot) {
     return `<select data-vmchoice="${v.id}" aria-label="What to do with ${esc(v.name)}">${opts}</select>`;
   };
   const row = (v) => `<div class="snap"><div>${esc(v.name)}${!v.canMove && !v.self ? `<small>${esc(v.why)}</small>` : ""}</div>${pick(v)}</div>`;
-  const nodeBlock = (n) => `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${kind === "update" ? `<small>${n.updates} ${n.updates === 1 ? "update" : "updates"}${n.version ? `, version ${esc(n.version)}` : ""}</small>` : ""}</div><span class="state">${n.restart ? (n.vms.length ? "Restarts" : "Restarts, nothing running") : "No restart needed"}</span></div>${n.vms.map(row).join("")}</div>`;
-  const how = kind === "update"
-    ? "BossMox updates one node at a time, in this order. For a node that restarts, it moves or shuts down each running VM as chosen below, installs, restarts, starts what it shut down and brings the rest home. Config files you've changed keep your version. It runs on the BossMox server: you can close this window, and follow it from any browser."
-    : "BossMox moves or shuts down each running VM as chosen below, restarts the node, then starts what it shut down and brings the rest home. It runs on the BossMox server: you can close this window, and follow it from any browser.";
+  const nodeBlock = (n) =>
+    `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${kind === "update" ? `<small>${n.updates} ${n.updates === 1 ? "update" : "updates"}${n.version ? `, version ${esc(n.version)}` : ""}</small>` : ""}</div><span class="state">${n.restart ? (n.vms.length ? "Restarts" : "Restarts, nothing running") : "No restart needed"}</span></div>${n.vms.map(row).join("")}</div>`;
+  const how =
+    kind === "update"
+      ? "BossMox updates one node at a time, in this order. For a node that restarts, it moves or shuts down each running VM as chosen below, installs, restarts, starts what it shut down and brings the rest home. Config files you've changed keep your version. It runs on the BossMox server: you can close this window, and follow it from any browser."
+      : "BossMox moves or shuts down each running VM as chosen below, restarts the node, then starts what it shut down and brings the rest home. It runs on the BossMox server: you can close this window, and follow it from any browser.";
   const word = kind === "update" ? "confirm" : "reboot";
-  dialog(`<h3>${kind === "update" ? `Update ${plan.nodes.length === 1 ? esc(plan.nodes[0].name) : `all ${plan.nodes.length} nodes`}?` : `Restart ${esc(server)}?`}</h3>
-    <p>${how}</p>
+  dialog(`<h3>${kind === "update" ? `Update ${plan.nodes.length === 1 ? esc(plan.nodes[0].name) : `${skipped ? "" : "all "}${plan.nodes.length} nodes`}?` : `Restart ${esc(server)}?`}</h3>
+    <p>${how}</p>${skipped}
     ${restarts.some((n) => n.vms.length) ? `<p class="meta">${plan.moveBatch > 1 ? `Moves run up to ${plan.moveBatch} at a time.` : plan.moveShared ? "Moves run one at a time: they share the cluster heartbeat's only network. Health check says how to give them their own." : "Moves run one at a time."}</p>` : ""}
     ${plan.nodes.map(nodeBlock).join("")}
     ${restarts.some((n) => n.vms.length) ? keepFreeField(again) : ""}
@@ -1701,7 +2470,9 @@ async function startRun() {
     if (!res.ok) throw new Error(body.error);
     openRun();
   } catch (err) {
-    dialog(`<h3>It didn't start</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn" data-runagain="run:${esc(kind)}:${esc(server)}">Check again</button></div>`);
+    dialog(
+      `<h3>It didn't start</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn" data-runagain="run:${esc(kind)}:${esc(server)}">Check again</button></div>`,
+    );
   }
 }
 /** Follows the run in a window until it's closed. The run itself doesn't care whether anyone is watching. */
@@ -1732,7 +2503,10 @@ function drawRun(run) {
   const stayed = run.nodes.flatMap((n) => n.vms.filter((v) => v.state === "stayed"));
   // A node a Stop left partway reads as stopped, not as the step it was in.
   const halted = (n, i) => !run.running && i === run.current && !["done", "failed", "waiting"].includes(n.phase);
-  const nodeBlock = (n, i) => `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${n.note ? `<small>${esc(n.note)}</small>` : ""}</div><span class="state"><span class="dot ${n.phase === "done" ? "running" : n.phase === "failed" || halted(n, i) ? "warn" : i === run.current && run.running ? "busy" : ""}"></span>${esc(halted(n, i) ? `Stopped after ${(PHASE_WORDS[n.phase] ?? n.phase).toLowerCase()}` : PHASE_WORDS[n.phase] ?? n.phase)}</span></div>
+  const nodeBlock = (
+    n,
+    i,
+  ) => `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${n.note ? `<small>${esc(n.note)}</small>` : ""}</div><span class="state"><span class="dot ${n.phase === "done" ? "running" : n.phase === "failed" || halted(n, i) ? "warn" : i === run.current && run.running ? "busy" : ""}"></span>${esc(halted(n, i) ? `Stopped after ${(PHASE_WORDS[n.phase] ?? n.phase).toLowerCase()}` : (PHASE_WORDS[n.phase] ?? n.phase))}</span></div>
     ${n.restart ? n.vms.map((v) => `<div class="snap"><div>${esc(v.name)}${v.note && !["failed", "stayed"].includes(v.state) ? `<small>${esc(v.note)}</small>` : ""}</div><span class="state"><span class="dot ${vmDot(v)}"></span>${esc(vmWords(v, run.running))}</span></div>`).join("") : ""}</div>`;
   dialog(`<h3>${esc(title)}</h3>
     ${run.error ? `<p class="loginerr">${esc(run.error)}</p>` : run.running ? `<p>Started by ${esc(run.by)}. It runs on the BossMox server, so this window can be closed; open it again from the desktop.</p>` : `<p>Everything that was planned is done.</p>`}
@@ -1762,10 +2536,13 @@ async function followTask(server, task) {
 /* Network, read only for now: a wrong change here can cut off the server, so editing needs its own design. */
 function drawNetwork(n) {
   const fact = (label, value) => (value ? `<dt>${label}</dt><dd>${esc(value)}</dd>` : "");
-  const card = (i) => `<article class="netcard"><header><span class="dot ${i.active ? "running" : ""}"></span><b>${esc(i.name)}</b><small>${esc(i.kind)}${i.active ? "" : ", not connected"}</small></header>
+  const card = (
+    i,
+  ) => `<article class="netcard"><header><span class="dot ${i.active ? "running" : ""}"></span><b>${esc(i.name)}</b><small>${esc(i.kind)}${i.active ? "" : ", not connected"}</small></header>
     ${i.note ? `<p class="meta">${esc(i.note)}</p>` : ""}
     <dl class="plain">${fact("Address", i.address)}${fact("Gateway", i.gateway)}${fact("Uses", i.ports.join(", "))}${fact("Part of", i.partOf)}${i.kind === "Virtual switch" ? `<dt>Guests</dt><dd>${esc(i.guests.join(", ") || "None")}</dd>` : ""}</dl></article>`;
-  $("#netdetail").innerHTML = `<div class="head"><div><h2>${esc(n.server)}</h2><div class="state">${n.dnsServers.length ? `Looks up names with ${esc(n.dnsServers.join(", "))}` : "No name server set"}${n.searchDomain ? `, in ${esc(n.searchDomain)}` : ""}</div></div></div>
+  $("#netdetail").innerHTML =
+    `<div class="head"><div><h2>${esc(n.server)}</h2><div class="state">${n.dnsServers.length ? `Looks up names with ${esc(n.dnsServers.join(", "))}` : "No name server set"}${n.searchDomain ? `, in ${esc(n.searchDomain)}` : ""}</div></div></div>
     ${n.interfaces.map(card).join("") || `<p class="empty">This node didn't report any network connections.</p>`}
     <p class="meta">BossMox shows the network but can't change it yet. A wrong change here can cut off the node, so that's coming with a safety net.</p>`;
 }
@@ -1774,7 +2551,12 @@ async function loadNetwork() {
   if (!list) return;
   const nodes = S.data?.nodes ?? [];
   S.netServer ??= nodes.find((n) => n.online)?.name;
-  list.innerHTML = nodes.map((n) => `<button class="row ${n.name === S.netServer ? "on" : ""}" data-netserver="${esc(n.name)}"><span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? "Online" : "Offline"}</small></button>`).join("");
+  list.innerHTML = nodes
+    .map(
+      (n) =>
+        `<button class="row ${n.name === S.netServer ? "on" : ""}" data-netserver="${esc(n.name)}"><span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? "Online" : "Offline"}</small></button>`,
+    )
+    .join("");
   const box = $("#netdetail");
   const asked = S.netServer;
   if (!asked) {
@@ -1836,7 +2618,9 @@ async function loadAddress(v) {
     S.addresses[v.id] = { list: r.addresses, known: r.known, at: Date.now() };
     if (S.sel === v.id && $("#vmaddr")) $("#vmaddr").textContent = addressWords(v);
     if (S.sel === v.id) drawAgentHelp(v);
-  } catch { /* the next look asks again */ }
+  } catch {
+    /* the next look asks again */
+  }
 }
 
 /* Hardware */
@@ -1848,7 +2632,8 @@ function poolWords(node, id) {
   if (!m) return "";
   for (const g of m.groups) {
     const p = g.pools.find((x) => x.id === id);
-    if (p) return `${g.disks.some((d) => d.system) ? "on the system disk" : `on ${g.disks.map((d) => (d.model ? `${d.model} (${d.path})` : d.path)).join(" + ")}`}${p.snapshots.startsWith("Snapshots don't") ? ", no snapshots" : ""}`;
+    if (p)
+      return `${g.disks.some((d) => d.system) ? "on the system disk" : `on ${g.disks.map((d) => (d.model ? `${d.model} (${d.path})` : d.path)).join(" + ")}`}${p.snapshots.startsWith("Snapshots don't") ? ", no snapshots" : ""}`;
   }
   const n = m.network.find((x) => x.id === id);
   return n ? `${n.title.toLowerCase()}${n.details ? ` at ${n.details}` : ""}` : "";
@@ -1980,7 +2765,13 @@ document.addEventListener("change", (e) => {
 function askRemoveNic(slot) {
   const v = selected();
   const n = v.nics.find((x) => x.slot === slot);
-  confirmAction(`Remove this network card from ${v.name}?`, `It's connected to ${n?.bridge}. Anything using it loses that connection.`, "Remove card", () => runAction("nic-remove", v.node, `Removing a network card from ${v.name}`, { ...guestBody(v), nic: slot, confirm: slot }, after), true);
+  confirmAction(
+    `Remove this network card from ${v.name}?`,
+    `It's connected to ${n?.bridge}. Anything using it loses that connection.`,
+    "Remove card",
+    () => runAction("nic-remove", v.node, `Removing a network card from ${v.name}`, { ...guestBody(v), nic: slot, confirm: slot }, after),
+    true,
+  );
 }
 async function askClone(id) {
   const v = S.data?.vms.find((g) => g.id === id);
@@ -2048,13 +2839,16 @@ function startUpload() {
   const done = (title, line, bad) => {
     S.taskRunning = false;
     dialog(`<h3>${esc(title)}</h3><p class="${bad ? "loginerr" : ""}">${esc(line)}</p>${closeRow}`);
-    S.afterTask = after;
+    // The step after an upload is for one that worked; a failed one only closes (#74).
+    S.afterTask = bad ? null : after;
   };
   xhr.onload = () => {
     let body = {};
     try {
       body = JSON.parse(xhr.responseText);
-    } catch { /* the status still says what happened */ }
+    } catch {
+      /* the status still says what happened */
+    }
     if (xhr.status === 401) {
       S.taskRunning = false;
       closeDialog();
@@ -2065,8 +2859,18 @@ function startUpload() {
     if (!body.task) return done("Uploaded", `${file.name} is ready on ${server}.`, false);
     show("Sent. Proxmox is saving it.");
     followTask(server, body.task).then(
-      (view) => (view.result === "failed" ? done("The upload failed", `Proxmox couldn't save ${file.name}: ${view.message || "it didn't say why"}.`, true) : done("Uploaded", `${file.name} is ready on ${server}.`, false)),
-      (err) => (err.message === "signed out" ? done("Signed out", "You were signed out while Proxmox was saving the file. Sign in again and check Storage to see if it's there.", true) : done("Not sure it saved", `${file.name} arrived, but BossMox lost sight of Proxmox saving it. Check Storage to see if it's there.`, true)),
+      (view) =>
+        view.result === "failed"
+          ? done("The upload failed", `Proxmox couldn't save ${file.name}: ${view.message || "it didn't say why"}.`, true)
+          : done("Uploaded", `${file.name} is ready on ${server}.`, false),
+      (err) => {
+        // Signed out: the sign-in screen, not a window over it with a step that would run signed out (#74).
+        if (err.message !== "signed out") return done("Not sure it saved", `${file.name} arrived, but BossMox lost sight of Proxmox saving it. Check Storage to see if it's there.`, true);
+        S.taskRunning = false;
+        S.afterTask = null;
+        closeDialog();
+        showLogin(`You were signed out while Proxmox was saving ${file.name}. Sign in again and check Storage to see if it's there.`);
+      },
     );
   };
   xhr.onerror = () => done("The upload failed", "The connection dropped. Nothing was saved.", true);
@@ -2159,9 +2963,18 @@ function createGuest() {
   if (kind === "lxc" && !$("#cinstaller").value) return fail("Pick a template.");
   if (kind === "lxc" && $("#cpassword").value.length < 8) return fail("Give it a password of at least 8 characters.");
   const body = {
-    kind, id: S.createPlan.nextId, name, cores: Number($("#ccores").value), memoryMb, diskGb: Number($("#cdisk").value),
-    storage: $("#cstorage").value, bridge: $("#cbridge").value, installer: $("#cinstaller").value, os: $("#cos")?.value ?? "linux",
-    start: $("#cstart").checked, password: $("#cpassword")?.value ?? "",
+    kind,
+    id: S.createPlan.nextId,
+    name,
+    cores: Number($("#ccores").value),
+    memoryMb,
+    diskGb: Number($("#cdisk").value),
+    storage: $("#cstorage").value,
+    bridge: $("#cbridge").value,
+    installer: $("#cinstaller").value,
+    os: $("#cos")?.value ?? "linux",
+    start: $("#cstart").checked,
+    password: $("#cpassword")?.value ?? "",
   };
   const id = Number(body.id);
   runAction("guest-create", server, `Creating ${name}`, body, async () => {
@@ -2184,7 +2997,9 @@ async function askGuestDelete(id) {
   if (v.running) return dialog(`<h3>Shut ${esc(v.name)} down first</h3><p>A running guest can't be deleted. Shut it down from its Overview, then delete it.</p>${closeRow}`);
   const clones = (S.data?.vms ?? []).filter((x) => x.id !== v.id && (x.refs ?? []).some((r) => r.includes(`base-${v.id}-disk-`))).map((x) => x.name);
   if (clones.length) {
-    return dialog(`<h3>${esc(v.name)} can't be deleted yet</h3><p>${esc(clones.join(", "))} ${clones.length === 1 ? "was" : "were"} made from this template and still ${clones.length === 1 ? "needs" : "need"} it. Delete ${clones.length === 1 ? "that clone" : "those clones"} first.</p>${closeRow}`);
+    return dialog(
+      `<h3>${esc(v.name)} can't be deleted yet</h3><p>${esc(clones.join(", "))} ${clones.length === 1 ? "was" : "were"} made from this template and still ${clones.length === 1 ? "needs" : "need"} it. Delete ${clones.length === 1 ? "that clone" : "those clones"} first.</p>${closeRow}`,
+    );
   }
   // Asked fresh: what this says decides whether someone deletes their only copy.
   dialog(`<h3>Delete ${esc(v.name)}?</h3><p>Checking its backups.</p>`);
@@ -2192,12 +3007,15 @@ async function askGuestDelete(id) {
   try {
     const list = await signal("api/backups");
     backups = list.groups.find((g) => g.id === v.id)?.backups ?? [];
-  } catch { /* said below */ }
-  const kept = backups === null
-    ? "BossMox couldn't check its backups just now, so don't count on there being one."
-    : backups.length
-      ? `It has ${backups.length === 1 ? "1 backup" : `${backups.length} backups`}, the newest from ${when(backups[0].takenAt)}. ${backups.length === 1 ? "That stays" : "Those stay"}, so it can be restored.`
-      : "It has no backups, so once it's deleted there's no getting it back.";
+  } catch {
+    /* said below */
+  }
+  const kept =
+    backups === null
+      ? "BossMox couldn't check its backups just now, so don't count on there being one."
+      : backups.length
+        ? `It has ${backups.length === 1 ? "1 backup" : `${backups.length} backups`}, the newest from ${when(backups[0].takenAt)}. ${backups.length === 1 ? "That stays" : "Those stay"}, so it can be restored.`
+        : "It has no backups, so once it's deleted there's no getting it back.";
   dialog(`<h3>Delete ${esc(v.name)}?</h3><p>${esc(v.name)} and its disks are erased for good, and its snapshots go too. ${esc(kept)}</p>
     <label class="field restartname"><span>Type ${esc(v.name)} to confirm</span><input id="rname" data-word="${esc(v.name.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-guestdeletego="${v.id}" disabled>Delete ${esc(v.name)}</button></div>`);
@@ -2233,7 +3051,8 @@ function backupsPane() {
   const live = S.data?.vms ?? [];
   const known = new Set(b.groups.map((g) => g.id));
   const missing = live.filter((v) => !known.has(v.id));
-  const row = (x) => `<div class="snap"><div>${esc(when(x.takenAt))}<small>${esc(x.size)} on ${esc(x.storage)}, ${esc(x.node)}${x.notes ? `, ${esc(x.notes)}` : ""}</small></div><div class="actions"><button class="btn" data-bkrestore="${esc(x.volid)}">Restore</button><button class="btn" data-bkdelete="${esc(x.volid)}" ${x.locked ? "disabled title=\"This backup is protected\"" : ""}>Delete</button></div></div>`;
+  const row = (x) =>
+    `<div class="snap"><div>${esc(when(x.takenAt))}<small>${esc(x.size)} on ${esc(x.storage)}, ${esc(x.node)}${x.notes ? `, ${esc(x.notes)}` : ""}</small></div><div class="actions"><button class="btn" data-bkrestore="${esc(x.volid)}">Restore</button><button class="btn" data-bkdelete="${esc(x.volid)}" ${x.locked ? 'disabled title="This backup is protected"' : ""}>Delete</button></div></div>`;
   const group = (g) => `<details class="upgroup"><summary>${esc(g.name)} (${g.backups.length}), latest ${esc(when(g.backups[0]?.takenAt))}</summary>
     ${g.exists ? `<div class="actions bknow"><button class="btn" data-bknow="${g.id}">Back up now</button></div>` : ""}${g.backups.map(row).join("")}</details>`;
   const elsewhere = b.backupsElsewhere
@@ -2246,14 +3065,19 @@ function backupsPane() {
 }
 /** A schedule that takes in every guest also takes in ones made later, which is why this is the one to have. */
 const everythingCovered = () => S.backups.schedules.some((j) => j.what === "Everything" && j.on);
-const protectBanner = () => (everythingCovered() ? "" : `<div class="advice"><div><b>Protect everything</b>Back up every guest each night, including new ones you add later.</div><button class="btn primary" data-protect="1">Set it up</button></div>`);
+const protectBanner = () =>
+  everythingCovered()
+    ? ""
+    : `<div class="advice"><div><b>Protect everything</b>Back up every guest each night, including new ones you add later.</div><button class="btn primary" data-protect="1">Set it up</button></div>`;
 async function askProtect() {
   const server = onlineNodes()[0];
   if (!server) return;
   try {
     const plan = await signal(`api/reboot-plan?server=${encodeURIComponent(server)}`);
     if (!plan.backupStorages.length) {
-      dialog(`<h3>Nowhere to save backups</h3><p>Add a NAS first, and pick Backups as one of the things it's for.</p><div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-openstore="1">Open Storage</button></div>`);
+      dialog(
+        `<h3>Nowhere to save backups</h3><p>Add a NAS first, and pick Backups as one of the things it's for.</p><div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-openstore="1">Open Storage</button></div>`,
+      );
       return;
     }
     S.protectOn = server;
@@ -2293,7 +3117,12 @@ function drawBackups() {
   }
   S.bkTab ??= "backups";
   const open = new Set([...box.querySelectorAll("details[open] summary")].map((e) => e.textContent));
-  box.innerHTML = `<div class="tabs" role="tablist">${[["backups", "Backups"], ["schedules", "Schedules"]].map(([k, l]) => `<button role="tab" aria-selected="${S.bkTab === k}" class="${S.bkTab === k ? "on" : ""}" data-bktab="${k}">${l}</button>`).join("")}</div>
+  box.innerHTML = `<div class="tabs" role="tablist">${[
+    ["backups", "Backups"],
+    ["schedules", "Schedules"],
+  ]
+    .map(([k, l]) => `<button role="tab" aria-selected="${S.bkTab === k}" class="${S.bkTab === k ? "on" : ""}" data-bktab="${k}">${l}</button>`)
+    .join("")}</div>
     <div class="tabpane">${S.backupsError ? `<p class="loginerr">${esc(S.backupsError)}</p>` : ""}${S.bkTab === "backups" ? backupsPane() : schedulesPane()}</div>`;
   box.querySelectorAll("details").forEach((e) => {
     if (open.has($("summary", e).textContent)) e.open = true;
@@ -2343,10 +3172,14 @@ function askBackupReplace() {
   const { x } = S.bkPlan;
   const v = S.data?.vms.find((g) => g.id === x.group.id);
   const storage = $("#bkdisk").value;
-  if (v?.running) return dialog(`<h3>Shut down ${esc(v.name)} first</h3><p>BossMox won't replace a guest while it's running. Shut it down in Virtual Machines, then come back to this backup.</p>${closeRow}`);
+  if (v?.running)
+    return dialog(`<h3>Shut down ${esc(v.name)} first</h3><p>BossMox won't replace a guest while it's running. Shut it down in Virtual Machines, then come back to this backup.</p>${closeRow}`);
   S.bkPlan.storage = storage;
   S.bkPlan.node = v?.node ?? x.node;
-  if (v && v.node !== x.node) return dialog(`<h3>This backup is on a different node</h3><p>${esc(v.name)} is on ${esc(v.node)}, and this backup is on ${esc(x.node)}. Move ${esc(v.name)} to ${esc(x.node)} first, or restore as a copy.</p>${closeRow}`);
+  if (v && v.node !== x.node)
+    return dialog(
+      `<h3>This backup is on a different node</h3><p>${esc(v.name)} is on ${esc(v.node)}, and this backup is on ${esc(x.node)}. Move ${esc(v.name)} to ${esc(x.node)} first, or restore as a copy.</p>${closeRow}`,
+    );
   dialog(`<h3>Replace ${esc(x.group.name)}?</h3><p>${esc(x.group.name)} is erased and rebuilt from ${esc(when(x.takenAt))}. Anything newer on it is gone for good, and its snapshots go too.</p>
     <label class="field restartname"><span>Type replace to confirm</span><input id="rname" data-word="replace" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-bkreplacego="1" disabled>Replace ${esc(x.group.name)}</button></div>`);
@@ -2362,7 +3195,13 @@ function restoreReplace() {
 function askBackupDelete(volid) {
   const x = findBackup(volid);
   if (!x) return;
-  confirmAction(`Delete this backup of ${x.group.name}?`, `The backup from ${when(x.takenAt)} on ${x.storage} is gone for good.`, "Delete backup", () => runAction("backup-delete", x.node, `Deleting backup of ${x.group.name}`, { volid, storage: x.storage, confirm: volid }, loadBackups), true);
+  confirmAction(
+    `Delete this backup of ${x.group.name}?`,
+    `The backup from ${when(x.takenAt)} on ${x.storage} is gone for good.`,
+    "Delete backup",
+    () => runAction("backup-delete", x.node, `Deleting backup of ${x.group.name}`, { volid, storage: x.storage, confirm: volid }, loadBackups),
+    true,
+  );
 }
 async function askSchedule() {
   const server = S.data?.nodes.find((n) => n.online)?.name;
@@ -2370,7 +3209,16 @@ async function askSchedule() {
   try {
     const plan = await signal(`api/reboot-plan?server=${encodeURIComponent(server)}`);
     if (!plan.backupStorages.length) return noPlaceFor("Nowhere to save backups", server, "backup");
-    const days = [["", "Every day"], ["mon", "Mondays"], ["tue", "Tuesdays"], ["wed", "Wednesdays"], ["thu", "Thursdays"], ["fri", "Fridays"], ["sat", "Saturdays"], ["sun", "Sundays"]];
+    const days = [
+      ["", "Every day"],
+      ["mon", "Mondays"],
+      ["tue", "Tuesdays"],
+      ["wed", "Wednesdays"],
+      ["thu", "Thursdays"],
+      ["fri", "Fridays"],
+      ["sat", "Saturdays"],
+      ["sun", "Sundays"],
+    ];
     dialog(`<h3>Add a backup schedule</h3>
       <p class="loginerr" id="joberr" hidden></p>
       <label class="field restartname"><span>What to back up</span><select id="jobwhat"><option value="all">Everything</option>${S.data.vms.map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join("")}</select></label>
@@ -2404,13 +3252,21 @@ function toggleSchedule(id) {
   const server = S.data?.nodes.find((n) => n.online)?.name;
   if (!j || !server) return;
   const word = j.on ? "Pause" : "Resume";
-  confirmAction(`${word} this schedule?`, `${j.when}, ${j.what} to ${j.storage}.`, `${word} schedule`, () => runAction("schedule-toggle", server, `${word} schedule`, { job: id, on: !j.on }, loadBackups));
+  confirmAction(`${word} this schedule?`, `${j.when}, ${j.what} to ${j.storage}.`, `${word} schedule`, () =>
+    runAction("schedule-toggle", server, `${word} schedule`, { job: id, on: !j.on }, loadBackups),
+  );
 }
 function askScheduleDelete(id) {
   const j = S.backups.schedules.find((x) => x.id === id);
   const server = S.data?.nodes.find((n) => n.online)?.name;
   if (!j || !server) return;
-  confirmAction("Delete this schedule?", `${j.when}, ${j.what} to ${j.storage}. Backups it already made stay.`, "Delete schedule", () => runAction("schedule-delete", server, "Deleting the schedule", { job: id, confirm: id }, loadBackups), true);
+  confirmAction(
+    "Delete this schedule?",
+    `${j.when}, ${j.what} to ${j.storage}. Backups it already made stay.`,
+    "Delete schedule",
+    () => runAction("schedule-delete", server, "Deleting the schedule", { job: id, confirm: id }, loadBackups),
+    true,
+  );
 }
 
 /* Turning a VM or container on and off */
@@ -2425,12 +3281,21 @@ function askPower(power, id = S.sel) {
   const v = S.data?.vms.find((g) => g.id === id);
   if (!v) return;
   const w = POWER_WORDS[power];
-  const help = power === "shutdown" || power === "reboot" ? {
-    guest: v.id,
-    waiting: `Waiting for ${v.name} to respond. Some systems ignore this request. If it doesn't answer, Proxmox gives up, or you can force it off now.`,
-    failed: `${v.name} didn't respond, so it's still running. Some systems ignore this request. Force off cuts the power, and anything unsaved is lost.`,
-  } : null;
-  confirmAction(`${w.title} ${v.name}?`, w.line(v), `${w.title} ${v.name}`, () => runAction("guest-power", v.node, `${w.title} ${v.name}`, { ...guestBody(v), power, confirm: String(v.id) }, () => refresh(), help), power === "stop");
+  const help =
+    power === "shutdown" || power === "reboot"
+      ? {
+          guest: v.id,
+          waiting: `Waiting for ${v.name} to respond. Some systems ignore this request. If it doesn't answer, Proxmox gives up, or you can force it off now.`,
+          failed: `${v.name} didn't respond, so it's still running. Some systems ignore this request. Force off cuts the power, and anything unsaved is lost.`,
+        }
+      : null;
+  confirmAction(
+    `${w.title} ${v.name}?`,
+    w.line(v),
+    `${w.title} ${v.name}`,
+    () => runAction("guest-power", v.node, `${w.title} ${v.name}`, { ...guestBody(v), power, confirm: String(v.id) }, () => refresh(), help),
+    power === "stop",
+  );
 }
 
 /* Snapshots */
@@ -2442,7 +3307,9 @@ async function checkSnapshots(v) {
     S.snapSupport = { ...S.snapSupport, [v.id]: supported };
     S.snapFix = { ...S.snapFix, [v.id]: fix ?? [] };
     if (S.tab === "snapshots") renderDetail();
-  } catch { /* Proxmox still refuses in plain view if this check couldn't run. */ }
+  } catch {
+    /* Proxmox still refuses in plain view if this check couldn't run. */
+  }
 }
 function askSnapshot() {
   const v = selected();
@@ -2488,7 +3355,13 @@ function doRestore(name) {
 function askDeleteSnapshot(name) {
   const v = selected();
   if (!v) return;
-  confirmAction(`Delete snapshot ${name}?`, `You won't be able to go back to it. ${v.name} itself doesn't change.`, `Delete ${name}`, () => runAction("snapshot-delete", v.node, `Deleting snapshot ${name}`, { ...guestBody(v), snapshot: name, confirm: name }, () => refresh()), true);
+  confirmAction(
+    `Delete snapshot ${name}?`,
+    `You won't be able to go back to it. ${v.name} itself doesn't change.`,
+    `Delete ${name}`,
+    () => runAction("snapshot-delete", v.node, `Deleting snapshot ${name}`, { ...guestBody(v), snapshot: name, confirm: name }, () => refresh()),
+    true,
+  );
 }
 
 /* Moving a VM or container */
@@ -2503,11 +3376,16 @@ async function startMove(id) {
     return fail(err.message);
   }
   if (plan.localResources) return fail("It uses hardware attached to this node, such as a USB device, so it has to stay here.");
-  if (!plan.targets.length) return fail(plan.blocked.length ? `No other node can take it. ${plan.blocked.map((b) => `${b.name} is missing ${b.storages.join(", ")}`).join(". ")}.` : "There's no other online node to move it to.");
+  if (!plan.targets.length)
+    return fail(
+      plan.blocked.length ? `No other node can take it. ${plan.blocked.map((b) => `${b.name} is missing ${b.storages.join(", ")}`).join(". ")}.` : "There's no other online node to move it to.",
+    );
   S.move = { v };
   const words = plan.interrupts
     ? `${v.name} will shut down, move, and start again on the new node, so it will be offline for a short time.`
-    : v.running ? `${v.name} keeps running while it moves.` : `${v.name} is off, so it will just be moved.`;
+    : v.running
+      ? `${v.name} keeps running while it moves.`
+      : `${v.name} is off, so it will just be moved.`;
   dialog(`<h3>Move ${esc(v.name)}?</h3><p>${esc(words)} It's on ${esc(v.node)} now.${plan.localDisks ? " Its disks are copied too, which can take a while." : ""}</p>
     <label class="field restartname"><span>Move to</span><select id="mtarget">${plan.targets.map((n) => `<option>${esc(n)}</option>`).join("")}</select></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-movego="1">Move ${esc(v.name)}</button></div>`);
@@ -2535,7 +3413,9 @@ async function openTerminal(server) {
     if (!res.ok) throw new Error(body.error);
     showTerminal(server, body.terminal, "Install updates", `Updating ${esc(server)}. Check the list, then type <b>Y</b> and press Enter to install.`);
   } catch (err) {
-    dialog(`<h3>Couldn't start the install</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`);
+    dialog(
+      `<h3>Couldn't start the install</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`,
+    );
   }
 }
 function showTerminal(server, id, title, help, guest = null, typed = null) {
@@ -2544,7 +3424,8 @@ function showTerminal(server, id, title, help, guest = null, typed = null) {
   APPS.terminal.title = title;
   {
     openWin("terminal");
-    $(".wbody", wins.terminal).innerHTML = `<div class="termwrap">${isConsole ? `<div class="vnctools"><span>${help}</span>${buttons}</div>` : `<p class="termhelp">${help}</p>`}<div id="termbox"></div></div>`;
+    $(".wbody", wins.terminal).innerHTML =
+      `<div class="termwrap">${isConsole ? `<div class="vnctools"><span>${help}</span>${buttons}</div>` : `<p class="termhelp">${help}</p>`}<div id="termbox"></div></div>`;
     const dark = { background: "#07161C", foreground: "#CFE6DF" };
     const xterm = new Terminal({ cursorBlink: true, fontFamily: "ui-monospace,Consolas,monospace", fontSize: 14, theme: dark, scrollback: 10000 });
     const fit = new FitAddon.FitAddon();
@@ -2566,12 +3447,13 @@ function showTerminal(server, id, title, help, guest = null, typed = null) {
     const decoder = new TextDecoder();
     let recent = "";
     let waiting = typed;
-    if (typed) setTimeout(() => {
-      if (!waiting || term?.socket !== socket) return;
-      waiting = null;
-      const h = $(".vnctools span", wins.terminal);
-      if (h) h.textContent = "The prompt didn't appear, so nothing was typed. Paste the command from the update window and press Enter.";
-    }, 20000);
+    if (typed)
+      setTimeout(() => {
+        if (!waiting || term?.socket !== socket) return;
+        waiting = null;
+        const h = $(".vnctools span", wins.terminal);
+        if (h) h.textContent = "The prompt didn't appear, so nothing was typed. Paste the command from the update window and press Enter.";
+      }, 20000);
     socket.onmessage = (e) => {
       const bytes = new Uint8Array(e.data);
       xterm.write(bytes);
@@ -2602,7 +3484,7 @@ function showTerminal(server, id, title, help, guest = null, typed = null) {
     });
     const observer = new ResizeObserver(resize);
     observer.observe($("#termbox"));
-    const ping = setInterval(() => socket.readyState === 1 ? socket.send("2") : clearInterval(ping), 30000);
+    const ping = setInterval(() => (socket.readyState === 1 ? socket.send("2") : clearInterval(ping)), 30000);
     term = { socket, xterm, observer, server, done: isConsole, guest };
     drawConsoleActions();
   }
@@ -2610,7 +3492,8 @@ function showTerminal(server, id, title, help, guest = null, typed = null) {
 
 /** True when a terminal's latest output ends at a shell prompt (root's # or a user's $), colours stripped. */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal escape codes is the point.
-const atPrompt = (text) => /[#$] ?$/.test(text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "").replace(/\r/g, ""));
+const TERMINAL_CODES = [/\x1b\[[0-9;?]*[ -/]*[@-~]/g, /\x1b\][^\x07]*\x07/g];
+const atPrompt = (text) => /[#$] ?$/.test(text.replace(TERMINAL_CODES[0], "").replace(TERMINAL_CODES[1], "").replace(/\r/g, ""));
 
 /* Console: a container gets a terminal, and a VM shows its screen */
 let vnc = null;
@@ -2650,17 +3533,19 @@ function loadNoVnc() {
   });
 }
 /** typed: a command to type at the node's prompt without pressing Enter, so the person still starts it (ADR 0020). */
-async function openNodeConsole(server, typed = null) {
+async function openNodeConsole(server, typed = null, helpText = null, title = null) {
   if (term) return dialog(`<h3>A terminal is already open</h3><p>Close it first, then open this console.</p>${closeRow}`);
   try {
     const res = await post("api/action/node-console", { server });
     const body = await res.json();
     if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
     if (!res.ok) throw new Error(body.error);
-    const help = typed
-      ? `The BossMox update command is typed in for you. Press Enter to start it, then type y when it asks. Near the end BossMox restarts: this window closes, and you sign in again on the new version.`
-      : `Console for ${esc(server)}. Anything you run here changes the node right away.`;
-    showTerminal(server, body.terminal, typed ? `Update BossMox on ${server}` : `Console: ${server}`, help, "node", typed);
+    const help =
+      helpText ??
+      (typed
+        ? `The BossMox update command is typed in for you. Press Enter to start it, then type y when it asks. Near the end BossMox restarts: this window closes, and you sign in again on the new version.`
+        : `Console for ${esc(server)}. Anything you run here changes the node right away.`);
+    showTerminal(server, body.terminal, title ?? (typed ? `Update BossMox on ${server}` : `Console: ${server}`), help, "node", typed);
   } catch (err) {
     dialog(`<h3>Couldn't open the console</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
   }
@@ -2688,7 +3573,9 @@ async function openConsole(id) {
     openWin("console");
     $(".conacts", wins.console).dataset.guest = v.id;
     drawConsoleActions();
-    const state = (t) => { if ($("#vncstate")) $("#vncstate").textContent = t; };
+    const state = (t) => {
+      if ($("#vncstate")) $("#vncstate").textContent = t;
+    };
     const url = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/terminal?id=${encodeURIComponent(body.screen)}`;
     const rfb = new NoVNC.default($("#vncbox"), url, { credentials: { password: body.password }, wsProtocols: ["binary"] });
     rfb.scaleViewport = true;
@@ -2713,19 +3600,75 @@ async function openConsole(id) {
 }
 
 /* Changing a VM or container's settings. The whole tab is the form, and only what changed gets sent. */
-const CPU_COMMON = [["", "Proxmox default (kvm64)"], ["x86-64-v2-AES", "x86-64-v2-AES: moves between most hardware"], ["x86-64-v3", "x86-64-v3: newer, still portable"], ["host", "host: fastest, but needs matching hardware to move"]];
-const OS_WORDS = [["l26", "Linux"], ["win11", "Windows 11 or Server 2022 and later"], ["win10", "Windows 10 or Server 2016 and 2019"], ["win8", "Windows 8 or Server 2012"], ["win7", "Windows 7 or Server 2008 R2"], ["l24", "Older Linux (2.4)"], ["solaris", "Solaris"], ["other", "Something else"]];
-const MACHINE_WORDS = [["", "i440fx (default)"], ["q35", "q35 (newer, needed for PCIe passthrough)"]];
-const CONTROLLER_WORDS = [["virtio-scsi-single", "VirtIO SCSI single (best for Linux)"], ["virtio-scsi-pci", "VirtIO SCSI"], ["lsi", "LSI 53C895A (works without drivers)"], ["lsi53c810", "LSI 53C810"], ["megasas", "MegaRAID SAS"], ["pvscsi", "VMware PVSCSI"]];
-const DISPLAY_WORDS = [["", "Default"], ["std", "Standard VGA"], ["virtio", "VirtIO GPU"], ["qxl", "SPICE (qxl)"], ["vmware", "VMware compatible"], ["serial0", "Serial console"], ["none", "None"]];
-const WAIT_WORDS = { memory: "Memory", cores: "Processor cores", sockets: "Sockets", cpu: "Processor type", balloon: "Memory it can shrink to", machine: "Machine type", scsihw: "Disk controller", vga: "Display", ostype: "Operating system", name: "Name", onboot: "Start at boot", swap: "Swap", agent: "Guest agent", tablet: "Tablet pointer", numa: "NUMA", cpulimit: "Processor limit", hostname: "Name", features: "Features", nameserver: "DNS servers", searchdomain: "Search domain", bios: "Starts with" };
+const CPU_COMMON = [
+  ["", "Proxmox default (kvm64)"],
+  ["x86-64-v2-AES", "x86-64-v2-AES: moves between most hardware"],
+  ["x86-64-v3", "x86-64-v3: newer, still portable"],
+  ["host", "host: fastest, but needs matching hardware to move"],
+];
+const OS_WORDS = [
+  ["l26", "Linux"],
+  ["win11", "Windows 11 or Server 2022 and later"],
+  ["win10", "Windows 10 or Server 2016 and 2019"],
+  ["win8", "Windows 8 or Server 2012"],
+  ["win7", "Windows 7 or Server 2008 R2"],
+  ["l24", "Older Linux (2.4)"],
+  ["solaris", "Solaris"],
+  ["other", "Something else"],
+];
+const MACHINE_WORDS = [
+  ["", "i440fx (default)"],
+  ["q35", "q35 (newer, needed for PCIe passthrough)"],
+];
+const CONTROLLER_WORDS = [
+  ["virtio-scsi-single", "VirtIO SCSI single (best for Linux)"],
+  ["virtio-scsi-pci", "VirtIO SCSI"],
+  ["lsi", "LSI 53C895A (works without drivers)"],
+  ["lsi53c810", "LSI 53C810"],
+  ["megasas", "MegaRAID SAS"],
+  ["pvscsi", "VMware PVSCSI"],
+];
+const DISPLAY_WORDS = [
+  ["", "Default"],
+  ["std", "Standard VGA"],
+  ["virtio", "VirtIO GPU"],
+  ["qxl", "SPICE (qxl)"],
+  ["vmware", "VMware compatible"],
+  ["serial0", "Serial console"],
+  ["none", "None"],
+];
+const WAIT_WORDS = {
+  memory: "Memory",
+  cores: "Processor cores",
+  sockets: "Sockets",
+  cpu: "Processor type",
+  balloon: "Memory it can shrink to",
+  machine: "Machine type",
+  scsihw: "Disk controller",
+  vga: "Display",
+  ostype: "Operating system",
+  name: "Name",
+  onboot: "Start at boot",
+  swap: "Swap",
+  agent: "Guest agent",
+  tablet: "Tablet pointer",
+  numa: "NUMA",
+  cpulimit: "Processor limit",
+  hostname: "Name",
+  features: "Features",
+  nameserver: "DNS servers",
+  searchdomain: "Search domain",
+  bios: "Starts with",
+};
 const pickOne = (id, choices, now) => {
   const list = choices.some(([k]) => k === now) ? choices : [...choices, [now, now]];
   return `<select data-set="${id}">${list.map(([k, l]) => `<option value="${esc(k)}" ${k === now ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
 };
-const setText = (id, label, now, extra = "") => `<label class="field"><span>${label}</span><input data-set="${id}" value="${esc(now ?? "")}" autocomplete="off" autocapitalize="none" spellcheck="false" ${extra}></label>`;
+const setText = (id, label, now, extra = "") =>
+  `<label class="field"><span>${label}</span><input data-set="${id}" value="${esc(now ?? "")}" autocomplete="off" autocapitalize="none" spellcheck="false" ${extra}></label>`;
 const setNumber = (id, label, now, extra = "") => `<label class="field"><span>${label}</span><input data-set="${id}" type="number" value="${now ?? ""}" ${extra}></label>`;
-const setGb = (id, label, mb, extra = "") => `<label class="field"><span>${label}</span><input data-set="${id}" data-gb="1" type="number" min="0" step="0.25" value="${mb === null || mb === undefined ? "" : mb / 1024}" ${extra}></label>`;
+const setGb = (id, label, mb, extra = "") =>
+  `<label class="field"><span>${label}</span><input data-set="${id}" data-gb="1" type="number" min="0" step="0.25" value="${mb === null || mb === undefined ? "" : mb / 1024}" ${extra}></label>`;
 const setCheck = (id, label, on) => `<label class="createcheck"><input data-set="${id}" type="checkbox" ${on ? "checked" : ""}> ${label}</label>`;
 const setPick = (id, label, choices, now) => `<label class="field"><span>${label}</span>${pickOne(id, choices, now)}</label>`;
 function settingsPane(v) {
@@ -2741,7 +3684,9 @@ function settingsPane(v) {
     <div class="createrow">${setText("tags", "Tags, separated by spaces", s.tags)}${setNumber("startOrder", "Start order, if it matters", s.startOrder, 'min="1" max="999"')}</div>
     ${setCheck("onboot", "Start when its node starts", s.onboot)}
     ${setCheck("protection", "Protect from being deleted", s.protection)}`;
-  const body = v.type === "qemu" ? `${common}
+  const body =
+    v.type === "qemu"
+      ? `${common}
     <h3 class="sethead">Processor</h3>
     <div class="createrow">${setNumber("cores", "Cores", s.cores, 'min="1" max="128"')}${setNumber("sockets", "Sockets", s.sockets, 'min="1" max="4"')}</div>
     ${setPick("cpu", "Type", cpu, s.cpu)}
@@ -2751,14 +3696,23 @@ function settingsPane(v) {
     <div class="createrow">${setGb("memoryMb", "Memory in GB", s.memoryMb, 'min="0.25"')}${setGb("balloonMb", "Can shrink to, in GB. Blank to stay fixed", s.balloonMb)}</div>
     <h3 class="sethead">System</h3>
     ${setPick("ostype", "Operating system", OS_WORDS, s.ostype)}
-    ${setPick("bios", "Starts with", [["seabios", "BIOS"], ["ovmf", "UEFI"]], s.bios)}
+    ${setPick(
+      "bios",
+      "Starts with",
+      [
+        ["seabios", "BIOS"],
+        ["ovmf", "UEFI"],
+      ],
+      s.bios,
+    )}
     ${setPick("machine", "Machine type", MACHINE_WORDS, s.machine)}
     ${setPick("scsihw", "Disk controller", CONTROLLER_WORDS, s.scsihw)}
     ${setPick("display", "Display", DISPLAY_WORDS, s.display)}
     ${setCheck("agent", "The guest agent is installed inside it", s.agent)}
     ${setCheck("tablet", "Tablet pointer, so the mouse tracks in the console", s.tablet)}
     ${setCheck("acpi", "ACPI, so shutting down works from outside", s.acpi)}
-    ${setCheck("kvm", "Hardware virtualization", s.kvm)}` : `${common}
+    ${setCheck("kvm", "Hardware virtualization", s.kvm)}`
+      : `${common}
     <h3 class="sethead">Processor and memory</h3>
     <div class="createrow">${setNumber("cores", "Cores", s.cores, 'min="1" max="128"')}${setNumber("cpuLimit", "Limit in cores, blank for none", s.cpuLimit, 'min="0" max="128" step="0.25"')}</div>
     <div class="createrow">${setGb("memoryMb", "Memory in GB", s.memoryMb, 'min="0.25"')}${setGb("swapMb", "Swap in GB", s.swapMb)}</div>
@@ -2770,7 +3724,9 @@ function settingsPane(v) {
     ${setCheck("fuse", "FUSE file systems", s.fuse)}
     <p class="meta">System: ${esc(s.system || "unknown")}. ${s.unprivileged ? "Unprivileged" : "Privileged"} container. These can't be changed after it's made.</p>`;
   return `<form id="setform" autocomplete="off">${body}<div class="setbar"><button type="button" class="btn" id="setundo" data-setundo="1" disabled>Undo changes</button><button type="button" class="btn primary" id="setsave" data-setsave="1" disabled>Save changes</button></div></form>
-    <details class="upgroup"><summary>Technical details</summary><div class="raw">${Object.entries(v.tech).map(([k, val]) => `<span>${esc(k)}</span><code>${esc(val)}</code>`).join("")}</div></details>`;
+    <details class="upgroup"><summary>Technical details</summary><div class="raw">${Object.entries(v.tech)
+      .map(([k, val]) => `<span>${esc(k)}</span><code>${esc(val)}</code>`)
+      .join("")}</div></details>`;
 }
 function settingsChanges(v) {
   const out = {};
@@ -2782,7 +3738,11 @@ function settingsChanges(v) {
     if (el.type === "checkbox") value = el.checked;
     else if (el.dataset.gb) value = el.value === "" ? null : Math.round(Number(el.value) * 1024);
     else if (el.type === "number") value = el.value === "" ? null : Number(el.value);
-    else if (key === "tags") value = el.value.split(/[\s,;]+/).filter(Boolean).join(" ");
+    else if (key === "tags")
+      value = el.value
+        .split(/[\s,;]+/)
+        .filter(Boolean)
+        .join(" ");
     else if (el.tagName === "TEXTAREA" || key === "name") value = el.value.trimEnd();
     if ((value ?? "") !== (now ?? "")) out[key] = value;
   });
@@ -2801,18 +3761,29 @@ function saveSettings() {
   const changes = settingsChanges(v);
   const name = changes.name;
   const taken = name && S.data.vms.find((g) => g.id !== v.id && g.name.toLowerCase() === name.toLowerCase());
-  const go = () => runAction("guest-settings", v.node, `Saving ${name ?? v.name}`, { ...guestBody(v), changes }, async () => {
-    await refresh();
-    await loadWaiting(v);
-    renderDetail();
-  });
+  const go = () =>
+    runAction("guest-settings", v.node, `Saving ${name ?? v.name}`, { ...guestBody(v), changes }, async () => {
+      await refresh();
+      await loadWaiting(v);
+      renderDetail();
+    });
   if (taken) return dialog(`<h3>That name's taken</h3><p>${esc(taken.name)} already exists. Pick another name.</p>${closeRow}`);
   // Proxmox saves this happily, then refuses to start the guest, so it's said here instead.
   const wanted = (changes.cores ?? v.settings.cores) * (changes.sockets ?? v.settings.sockets ?? 1);
   const has = S.data.nodes.find((n) => n.name === v.node)?.cores ?? 0;
-  if (has && wanted > has) return dialog(`<h3>That's more than ${esc(v.node)} has</h3><p>${wanted} processor cores were asked for, and ${esc(v.node)} has ${has}. Proxmox wouldn't be able to start ${esc(v.name)}.</p>${closeRow}`);
+  if (has && wanted > has)
+    return dialog(
+      `<h3>That's more than ${esc(v.node)} has</h3><p>${wanted} processor cores were asked for, and ${esc(v.node)} has ${has}. Proxmox wouldn't be able to start ${esc(v.name)}.</p>${closeRow}`,
+    );
   const risky = ["bios", "machine", "scsihw"].filter((k) => k in changes);
-  if (risky.length && !v.template) return confirmAction(`Change how ${v.name} starts?`, "Changing the firmware, machine type or disk controller can stop an installed system from starting. If it does, change it back.", "Save changes", go, true);
+  if (risky.length && !v.template)
+    return confirmAction(
+      `Change how ${v.name} starts?`,
+      "Changing the firmware, machine type or disk controller can stop an installed system from starting. If it does, change it back.",
+      "Save changes",
+      go,
+      true,
+    );
   go();
 }
 async function loadWaiting(v) {
@@ -2823,12 +3794,16 @@ async function loadWaiting(v) {
     S.waiting = { ...S.waiting, [v.id]: waiting };
     if (S.sel === v.id && had !== JSON.stringify(waiting) && S.tab !== "settings") renderDetail();
     else if (S.sel === v.id) drawWaiting(v);
-  } catch { /* the next look asks again */ }
+  } catch {
+    /* the next look asks again */
+  }
 }
 function waitingWords(v) {
   const list = S.waiting?.[v.id] ?? [];
   if (!list.length) return "";
-  const said = [...new Set(list.map((w) => (w.key === "memory" ? `Memory, ${Number(w.next) / 1024} GB` : w.key === "cores" ? `Processor cores, ${w.next}` : WAIT_WORDS[w.key] ?? "A hardware change")))];
+  const said = [
+    ...new Set(list.map((w) => (w.key === "memory" ? `Memory, ${Number(w.next) / 1024} GB` : w.key === "cores" ? `Processor cores, ${w.next}` : (WAIT_WORDS[w.key] ?? "A hardware change")))),
+  ];
   return `<div class="advice"><div><b>Waiting for a restart</b>${esc(said.join(". "))}. ${v.running ? "These apply the next time it's shut down and started." : "These apply when it next starts."}</div></div>`;
 }
 function drawWaiting(v) {
@@ -2838,19 +3813,25 @@ function drawWaiting(v) {
 function forceBios(id) {
   const v = S.data.vms.find((g) => g.id === id);
   if (!v.running) return startToBootMenu(id);
-  confirmAction(`Restart ${v.name} into its boot menu?`, "It restarts right away, like pressing the reset button. Anything unsaved inside it is lost.", "Restart now", async () => {
-    const state = $("#vncstate");
-    const was = state?.textContent;
-    if (state) state.textContent = "Restarting to the boot menu.";
-    try {
-      const res = await post("api/action/guest-boot-menu", { server: v.node, ...guestBody(v), confirm: String(v.id) });
-      const body = await res.json();
-      if (!res.ok) throw new Error(body.error);
-    } catch (err) {
-      failDialog(`${v.name} didn't restart`, err);
-    }
-    if (state?.isConnected) state.textContent = was;
-  }, true);
+  confirmAction(
+    `Restart ${v.name} into its boot menu?`,
+    "It restarts right away, like pressing the reset button. Anything unsaved inside it is lost.",
+    "Restart now",
+    async () => {
+      const state = $("#vncstate");
+      const was = state?.textContent;
+      if (state) state.textContent = "Restarting to the boot menu.";
+      try {
+        const res = await post("api/action/guest-boot-menu", { server: v.node, ...guestBody(v), confirm: String(v.id) });
+        const body = await res.json();
+        if (!res.ok) throw new Error(body.error);
+      } catch (err) {
+        failDialog(`${v.name} didn't restart`, err);
+      }
+      if (state?.isConnected) state.textContent = was;
+    },
+    true,
+  );
 }
 /** Goes straight to the console, because the menu is why they pressed the button. */
 async function startToBootMenu(id) {
@@ -2919,9 +3900,12 @@ function downloadDisc() {
 const RENDER = {
   terminal: () => "",
   console: () => `<div class="vncwrap"><div class="vnctools"><span id="vncstate">Connecting.</span><div class="actions conacts"></div></div><div id="vncbox"></div></div>`,
-  vms: vmsShell, monitor: monView, storage: storeView,
+  vms: vmsShell,
+  monitor: monView,
+  storage: storeView,
   create: () => `<div id="newbox" class="bkbox"></div>`,
-  tasklog: () => `<div class="vms"><aside><div id="tlnodes"></div></aside><div id="tlbox"><div class="tltools"><input class="search" id="tlq" type="search" placeholder="Find a task" aria-label="Find a task" value="${esc(S.tlQ ?? "")}"><select id="tlshow" aria-label="Which tasks"><option value="all">All tasks</option><option value="problems">Problems only</option></select></div><div id="tlrows"></div></div></div>`,
+  tasklog: () =>
+    `<div class="vms"><aside><div id="tlnodes"></div></aside><div id="tlbox"><div class="tltools"><input class="search" id="tlq" type="search" placeholder="Find a task" aria-label="Find a task" value="${esc(S.tlQ ?? "")}"><select id="tlshow" aria-label="Which tasks"><option value="all">All tasks</option><option value="problems">Problems only</option></select></div><div id="tlrows"></div></div></div>`,
   network: () => `<div class="vms"><aside><div id="netlist"></div></aside><div id="netdetail"></div></div>`,
   backups: () => `<div id="bkbox" class="bkbox"></div>`,
   health: () => `<div id="hcbox" class="bkbox"></div>`,
@@ -3095,7 +4079,10 @@ document.addEventListener("click", (e) => {
       S.healthAgain = true;
       if (wins.health) await loadHealthCheck();
       const avail = S.data?.update?.available;
-      if (avail) return dialog(`<h3>BossMox ${esc(avail.version)} is available</h3><p>Updating keeps your settings and doesn't touch your guests.</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn primary" data-bmupdate="1">How to update</button></div>`);
+      if (avail)
+        return dialog(
+          `<h3>BossMox ${esc(avail.version)} is available</h3><p>Updating keeps your settings and doesn't touch your guests.</p><div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn primary" data-bmupdate="1">How to update</button></div>`,
+        );
       if (wins.health) return;
       dialog(`<h3>BossMox is up to date</h3>${closeRow}`);
     })().catch((err) => dialog(`<h3>BossMox couldn't check</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`));
@@ -3144,8 +4131,18 @@ document.addEventListener("click", (e) => {
       }
     };
     return on
-      ? confirmAction("Check for BossMox updates?", "Every 6 hours BossMox asks GitHub whether a newer version is out, and tells you if there is. It never installs anything by itself. GitHub sees this BossMox's internet address when it asks.", "Check for updates", () => runAction("preferences-set", onlineNodes()[0], "Saving", { updateCheck: true }, after))
-      : confirmAction("Stop checking for updates?", "BossMox will stop asking GitHub for new versions, for everyone who uses it, so it won't tell you when one is out. You can turn the check back on in the health check.", "Stop checking", () => runAction("preferences-set", onlineNodes()[0], "Saving", { updateCheck: false }, after));
+      ? confirmAction(
+          "Check for BossMox updates?",
+          "Every 6 hours BossMox asks GitHub whether a newer version is out, and tells you if there is. It never installs anything by itself. GitHub sees this BossMox's internet address when it asks.",
+          "Check for updates",
+          () => runAction("preferences-set", onlineNodes()[0], "Saving", { updateCheck: true }, after),
+        )
+      : confirmAction(
+          "Stop checking for updates?",
+          "BossMox will stop asking GitHub for new versions, for everyone who uses it, so it won't tell you when one is out. You can turn the check back on in the health check.",
+          "Stop checking",
+          () => runAction("preferences-set", onlineNodes()[0], "Saving", { updateCheck: false }, after),
+        );
   }
   if (d.backupselsewhere) {
     const on = d.backupselsewhere === "on";
@@ -3158,16 +4155,29 @@ document.addEventListener("click", (e) => {
       }
     };
     return on
-      ? confirmAction("Stop warning about backup schedules?", "Use this if your guests are backed up by something Proxmox doesn't know about, such as Veeam, a script or another backup server. BossMox stops warning about guests without a Proxmox backup schedule, for everyone who uses it, in every browser. Failed Proxmox backups are still reported, and you can turn the warnings back on any time.", "Stop the warnings", () => runAction("preferences-set", onlineNodes()[0], "Saving", { backupsElsewhere: true }, after))
-      : confirmAction("Check backup schedules again?", "BossMox will warn again about any guest that isn't on a Proxmox backup schedule, for everyone who uses it.", "Check schedules again", () => runAction("preferences-set", onlineNodes()[0], "Saving", { backupsElsewhere: false }, after));
+      ? confirmAction(
+          "Stop warning about backup schedules?",
+          "Use this if your guests are backed up by something Proxmox doesn't know about, such as Veeam, a script or another backup server. BossMox stops warning about guests without a Proxmox backup schedule, for everyone who uses it, in every browser. Failed Proxmox backups are still reported, and you can turn the warnings back on any time.",
+          "Stop the warnings",
+          () => runAction("preferences-set", onlineNodes()[0], "Saving", { backupsElsewhere: true }, after),
+        )
+      : confirmAction("Check backup schedules again?", "BossMox will warn again about any guest that isn't on a Proxmox backup schedule, for everyone who uses it.", "Check schedules again", () =>
+          runAction("preferences-set", onlineNodes()[0], "Saving", { backupsElsewhere: false }, after),
+        );
   }
   if (d.movefix) return moveFix();
   if (d.hapolicy) {
-    return confirmAction("Have HA move its guests before a node restarts?", "Proxmox's HA shutdown policy changes to Migrate for the whole cluster. When a node shuts down or restarts, from Proxmox or by hand, the guests HA manages move to another node first, and come back after. A guest that can't move holds up the shutdown.", "Turn it on", () => runAction("recommended-set", onlineNodes()[0], "Saving", { id: "ha-shutdown", on: true, choice: "" }, async () => {
-      S.healthChecks = null;
-      S.healthAgain = true;
-      await loadHealthCheck();
-    }));
+    return confirmAction(
+      "Have HA move its guests before a node restarts?",
+      "Proxmox's HA shutdown policy changes to Migrate for the whole cluster. When a node shuts down or restarts, from Proxmox or by hand, the guests HA manages move to another node first, and come back after. A guest that can't move holds up the shutdown.",
+      "Turn it on",
+      () =>
+        runAction("recommended-set", onlineNodes()[0], "Saving", { id: "ha-shutdown", on: true, choice: "" }, async () => {
+          S.healthChecks = null;
+          S.healthAgain = true;
+          await loadHealthCheck();
+        }),
+    );
   }
   if (d.leftover) {
     S.leftoverKeep = new Set();
@@ -3192,6 +4202,58 @@ document.addEventListener("click", (e) => {
     drawSettings();
     return loadSettings();
   }
+  if (d.hcx) {
+    hcSaveDismissed([...hcDismissed(), d.hcx]);
+    return drawHealthCheck();
+  }
+  if (d.hcback) {
+    hcSaveDismissed([]);
+    return drawHealthCheck();
+  }
+  if (d.haswitch) return askHa(Number(d.haswitch));
+  if (d.haoff) {
+    const g = (S.haList ?? []).find((x) => x.id === Number(d.haoff));
+    if (!g) return;
+    return confirmAction(`Stop protecting ${g.name}?`, `HA won't restart ${g.name} on another node any more if ${g.node} fails. It keeps running where it is.`, "Stop protecting", () =>
+      runAction("ha-unprotect", g.node, `Stop protecting ${g.name}`, { id: g.id }, () => loadSettings()),
+    );
+  }
+  if (d.harecover) return askHaRecover(Number(d.harecover), d.hanode);
+  if (d.haeject) {
+    closeDialog();
+    S.sel = Number(d.haeject);
+    S.tab = "settings";
+    return renderDetail();
+  }
+  if (d.alsetup) return openAlertsSetup();
+  if (d.algo) return saveAlerts();
+  if (d.altest) return sendAlertTest();
+  if (d.alyes) return confirmAlerts(true);
+  if (d.alno) return confirmAlerts(false);
+  if (d.aloff)
+    return confirmAction("Turn off alerts?", "BossMox removes the alert target and rule it added in Proxmox. Anything set up outside BossMox stays.", "Turn off", () =>
+      runAction("alerts-remove", onlineNodes()[0], "Turning off alerts", {}, () => loadSettings()),
+    );
+  if (d.tbsetup) return openTieBreakerSetup();
+  if (d.tbgo) return startTieBreaker();
+  if (d.tbwatch) return watchTieBreaker();
+  if (d.tbconsole) return openTieBreakerConsole();
+  if (d.tbverify) return verifyTieBreaker();
+  if (d.tbcopy) {
+    const text = (S.tieBreaker?.view?.lines ?? []).join("\n");
+    navigator.clipboard?.writeText(text).then(
+      () => {
+        e.target.textContent = "Copied";
+      },
+      () => {
+        e.target.textContent = "Select and copy";
+      },
+    );
+    return;
+  }
+  if (d.hbsetup) return openHeartbeatSetup();
+  if (d.hbgo) return startHeartbeat();
+  if (d.hbwatch) return watchHeartbeat();
   if (d.hcagain) {
     S.healthChecks = null;
     S.healthAgain = true;
@@ -3216,25 +4278,42 @@ document.addEventListener("click", (e) => {
   if (d.hcboot) {
     const ids = d.hcboot.split(",").map(Number);
     const names = ids.map((id) => S.data?.vms.find((v) => v.id === id)?.name).filter(Boolean);
-    return confirmAction(`Start ${names.length === 1 ? names[0] : `${names.length} guests`} at boot?`, `${names.join(", ")} will start by themselves whenever ${names.length === 1 ? "its node" : "their nodes"} start, after a power cut or an update restart. Nothing changes while ${names.length === 1 ? "it's" : "they're"} running now.`, "Start at boot", () => runAction("boot-on", onlineNodes()[0], "Saving", { guests: ids.join(",") }, async () => {
-      await refresh();
-      await loadHealthCheck();
-    }));
+    return confirmAction(
+      `Start ${names.length === 1 ? names[0] : `${names.length} guests`} at boot?`,
+      `${names.join(", ")} will start by themselves whenever ${names.length === 1 ? "its node" : "their nodes"} start, after a power cut or an update restart. Nothing changes while ${names.length === 1 ? "it's" : "they're"} running now.`,
+      "Start at boot",
+      () =>
+        runAction("boot-on", onlineNodes()[0], "Saving", { guests: ids.join(",") }, async () => {
+          await refresh();
+          await loadHealthCheck();
+        }),
+    );
   }
   if (d.snapfix) {
     const v = S.data?.vms.find((g) => g.id === +d.snapfix);
     if (!v) return;
-    return confirmAction(`Make snapshots work for ${v.name}?`, `BossMox converts ${v.name}'s disks to a format that can be snapshotted, on the same storage. It takes about a minute for every few GB, and ${v.name} stays shut down until it's done. Make a backup first if it holds anything you can't lose.`, "Convert its disks", () => runAction("snapshot-fix", v.node, `Converting ${v.name}'s disks`, { ...guestBody(v), confirm: String(v.id) }, async () => {
-      delete S.snapSupport[v.id];
-      await refresh();
-      await checkSnapshots(v);
-      renderDetail();
-    }));
+    return confirmAction(
+      `Make snapshots work for ${v.name}?`,
+      `BossMox converts ${v.name}'s disks to a format that can be snapshotted, on the same storage. It takes about a minute for every few GB, and ${v.name} stays shut down until it's done. Make a backup first if it holds anything you can't lose.`,
+      "Convert its disks",
+      () =>
+        runAction("snapshot-fix", v.node, `Converting ${v.name}'s disks`, { ...guestBody(v), confirm: String(v.id) }, async () => {
+          delete S.snapSupport[v.id];
+          await refresh();
+          await checkSnapshots(v);
+          renderDetail();
+        }),
+    );
   }
   if (d.agenton) {
     const v = S.data?.vms.find((g) => g.id === +d.agenton);
     if (!v) return;
-    return confirmAction(`Turn on the guest agent setting for ${v.name}?`, `It takes effect after ${v.name} is shut down and started again. The agent itself still has to be installed inside it.`, "Turn it on", () => runAction("guest-settings", v.node, `Saving ${v.name}`, { ...guestBody(v), changes: { agent: true } }, refresh));
+    return confirmAction(
+      `Turn on the guest agent setting for ${v.name}?`,
+      `It takes effect after ${v.name} is shut down and started again. The agent itself still has to be installed inside it.`,
+      "Turn it on",
+      () => runAction("guest-settings", v.node, `Saving ${v.name}`, { ...guestBody(v), changes: { agent: true } }, refresh),
+    );
   }
   if (d.poolopen) {
     S.openPools ??= new Set();
@@ -3341,7 +4420,12 @@ document.addEventListener("click", (e) => {
     const server = d.backup;
     const ids = (S.restart?.guests ?? []).map((v) => v.id).join(",");
     const storage = $("#rstore").value;
-    return confirmAction(`Back up ${S.restart.guests.length} on ${server}?`, `This saves a copy to ${storage}. They stay running, though they may feel slower while it runs.`, `Back up to ${storage}`, () => runAction("back-up-guests", server, `Backing up ${server}`, { guests: ids, storage }, () => openRunStart("restart", server)));
+    return confirmAction(
+      `Back up ${S.restart.guests.length} on ${server}?`,
+      `This saves a copy to ${storage}. They stay running, though they may feel slower while it runs.`,
+      `Back up to ${storage}`,
+      () => runAction("back-up-guests", server, `Backing up ${server}`, { guests: ids, storage }, () => openRunStart("restart", server)),
+    );
   }
   if (d.channel && d.channelserver) {
     const server = d.channelserver;
@@ -3349,16 +4433,27 @@ document.addEventListener("click", (e) => {
     const line = free
       ? "Proxmox's free channel gets the same software as the paid one, sooner and with less testing. Proxmox suggests it for testing and non-production use, and a subscription for production. BossMox turns the paid sources off, without deleting them, and then checks for updates."
       : "This node has an active subscription, so it can use Proxmox's tested enterprise channel. BossMox turns the free sources off, without deleting them, and then checks for updates.";
-    return confirmAction(`${CHANNEL_WORDS[d.channel]} on ${server}?`, line, CHANNEL_WORDS[d.channel], () => runAction("update-channel", server, `Switching ${server} to the ${d.channel} channel`, { channel: d.channel }));
+    return confirmAction(`${CHANNEL_WORDS[d.channel]} on ${server}?`, line, CHANNEL_WORDS[d.channel], () =>
+      runAction("update-channel", server, `Switching ${server} to the ${d.channel} channel`, { channel: d.channel }),
+    );
   }
   if (d.check) {
     const server = d.check;
-    return confirmAction(`Check ${server} for updates?`, "This only looks for new updates. It doesn't install anything.", `Check ${server}`, () => runAction("check-updates", server, `Checking ${server} for updates`));
+    return confirmAction(`Check ${server} for updates?`, "This only looks for new updates. It doesn't install anything.", `Check ${server}`, () =>
+      runAction("check-updates", server, `Checking ${server} for updates`),
+    );
   }
   if (d.install) {
     const server = d.install;
     const n = S.detail?.updates?.total ?? 0;
-    return confirmAction(`Install ${n} updates on ${server}?`, S.detail?.updates?.rebootNeeded ? "This opens a terminal on the node and installs in the foreground. A restart will be needed afterward. You'll get one more chance to review the list." : "This opens a terminal on the node and installs in the foreground. You'll get one more chance to review the list.", `Open installer for ${server}`, () => openTerminal(server));
+    return confirmAction(
+      `Install ${n} updates on ${server}?`,
+      S.detail?.updates?.rebootNeeded
+        ? "This opens a terminal on the node and installs in the foreground. A restart will be needed afterward. You'll get one more chance to review the list."
+        : "This opens a terminal on the node and installs in the foreground. You'll get one more chance to review the list.",
+      `Open installer for ${server}`,
+      () => openTerminal(server),
+    );
   }
   if (d.servertab) {
     S.serverTab = d.servertab;
@@ -3418,23 +4513,33 @@ document.addEventListener("change", (e) => {
     S.vmNode = e.target.value;
     return renderList();
   }
+  if (e.target.id === "alkind") return openAlertsSetup(e.target.value);
   if (e.target.dataset?.keepagain) {
     const again = e.target.dataset.keepagain;
     const keepFreePct = Number(e.target.value);
     const [, kind, server] = again.split(":");
     // Saved for the whole cluster, so it asks first (#55). Cancel goes back to the same plan, unchanged.
     const shown = S.runStart;
-    S.afterTask = () => drawRunStart(shown.kind, shown.server, shown.plan, shown.reboot);
+    // Each guest's choice is only in the window, so it's kept and put back too (#74).
+    const picked = [...document.querySelectorAll("[data-vmchoice]")].map((s) => [s.dataset.vmchoice, s.value]);
+    S.afterTask = () => {
+      drawRunStart(shown.kind, shown.server, shown.plan, shown.reboot);
+      for (const [id, value] of picked) {
+        const s = document.querySelector(`[data-vmchoice="${id}"]`);
+        if (s) s.value = value;
+      }
+    };
     return confirmAction(
       `Keep ${keepFreePct}% free on every node?`,
       `This is a cluster-wide setting, not just for this ${kind === "update" ? "update" : "restart"}. From now on BossMox keeps ${keepFreePct}% of each node's memory, storage and processor free when it moves guests, here and in Move off and Move back.`,
       "Save for every node",
-      () => (async () => {
-        const res = await post("api/action/preferences-set", { server: onlineNodes()[0], keepFreePct });
-        if (!res.ok) return dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc((await res.json()).error)}</p>${closeRow}`);
-        await refresh();
-        openRunStart(kind, server);
-      })().catch((err) => dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`)),
+      () =>
+        (async () => {
+          const res = await post("api/action/preferences-set", { server: onlineNodes()[0], keepFreePct });
+          if (!res.ok) return dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc((await res.json()).error)}</p>${closeRow}`);
+          await refresh();
+          openRunStart(kind, server);
+        })().catch((err) => dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`)),
     );
   }
   if (e.target.dataset?.bkwarn) {
@@ -3476,11 +4581,19 @@ document.addEventListener("input", (e) => {
 });
 
 /* Look picker: remembered per browser */
-const LOOKS = [["daylight", "Daylight"], ["dusk", "Dusk"], ["workbench", "Workbench"]];
+const LOOKS = [
+  ["daylight", "Daylight"],
+  ["dusk", "Dusk"],
+  ["workbench", "Workbench"],
+];
 function setLook(k) {
   if (!["daylight", "dusk", "workbench"].includes(k)) k = "daylight";
   document.documentElement.dataset.look = k;
-  try { localStorage.setItem("bossmox-look", k); } catch { /* still works, just not remembered */ }
+  try {
+    localStorage.setItem("bossmox-look", k);
+  } catch {
+    /* still works, just not remembered */
+  }
   $("#lookpick").value = k;
 }
 $("#looks").insertAdjacentHTML("beforeend", `<select id="lookpick" aria-label="Look">${LOOKS.map(([k, l]) => `<option value="${k}">${l}</option>`).join("")}</select>`);
@@ -3615,18 +4728,24 @@ $("#loginform").addEventListener("submit", async (e) => {
   }
 });
 $("#signout").addEventListener("click", async () => {
-  try { await post("api/logout", {}); } finally { showLogin(); }
+  try {
+    await post("api/logout", {});
+  } finally {
+    showLogin();
+  }
 });
 
 /* Live data */
 async function refresh() {
   let error = "";
-  // Sign-out bumps loadRun, and each refresh bumps refreshSeq. An answer that arrives after either is dropped, so a slow
-  // refresh can't bring the desktop back after Sign out, or an older answer replace a newer one (#59).
+  // Sign-out bumps loadRun: an answer that arrives after it is dropped, so a slow refresh can't bring the desktop back
+  // (#59). An answer is also dropped once a newer one has been shown, so an older answer can't replace it. Only a newer
+  // answer that has arrived counts: when every read takes longer than the 10-second poll, each answer is still shown,
+  // and a failure still raises "Showing old data" (#70).
   const gen = S.loadRun;
   S.refreshSeq = (S.refreshSeq ?? 0) + 1;
   const seq = S.refreshSeq;
-  const late = () => gen !== S.loadRun || seq !== S.refreshSeq;
+  const late = () => gen !== S.loadRun || (S.shownSeq ?? 0) > seq;
   try {
     const res = await fetch("api/overview");
     const body = await res.json();
@@ -3636,6 +4755,7 @@ async function refresh() {
       return;
     }
     if (!res.ok) throw new Error(body.error);
+    S.shownSeq = seq;
     S.data = body;
     S.who = body.username;
     $("#who").textContent = body.username;
@@ -3665,6 +4785,9 @@ async function refresh() {
   stale.hidden = !(error && S.data);
   stale.textContent = "Showing old data, lost contact with Proxmox";
   renderHealth();
+  // The Health check window's gauges follow the live numbers; the rest of it changes only on Check again.
+  const hcGauges = $("#hcbox .overall");
+  if (hcGauges && S.data?.cluster) hcGauges.outerHTML = overallBars(S.data.cluster, S.data.nodes.length);
   renderList();
   if (S.tab !== "settings") renderDetail();
   renderServers();
@@ -3675,7 +4798,11 @@ async function refresh() {
 
 const q = new URLSearchParams(location.search);
 let saved = null;
-try { saved = localStorage.getItem("bossmox-look"); } catch { /* use the default */ }
+try {
+  saved = localStorage.getItem("bossmox-look");
+} catch {
+  /* use the default */
+}
 setLook(q.get("look") || saved || "daylight");
 tick();
 setInterval(tick, 20000);

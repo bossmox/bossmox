@@ -14,8 +14,15 @@ const CONTROLLERS = ["virtio-scsi-single", "virtio-scsi-pci", "lsi", "lsi53c810"
 const DISPLAYS = ["std", "virtio", "qxl", "vmware", "cirrus", "serial0", "none"];
 
 const first = (value: unknown) => String(value ?? "").split(",")[0] ?? "";
-const rest = (value: unknown) => String(value ?? "").split(",").slice(1);
-const part = (value: unknown, key: string) => String(value ?? "").split(",").find((p) => p.startsWith(`${key}=`))?.slice(key.length + 1) ?? "";
+const rest = (value: unknown) =>
+  String(value ?? "")
+    .split(",")
+    .slice(1);
+const part = (value: unknown, key: string) =>
+  String(value ?? "")
+    .split(",")
+    .find((p) => p.startsWith(`${key}=`))
+    ?.slice(key.length + 1) ?? "";
 const onByDefault = (value: unknown) => value === undefined || String(value) !== "0";
 const flag = (value: unknown) => String(value ?? "0") === "1";
 /** "2048" or "current=2048": Proxmox has written memory both ways. */
@@ -32,7 +39,10 @@ export function readSettings(kind: Kind, c: Config) {
   const common = {
     name: String(c.name ?? c.hostname ?? ""),
     notes: String(c.description ?? "").trimEnd(),
-    tags: String(c.tags ?? "").split(/[;,\s]+/).filter(Boolean).join(" "),
+    tags: String(c.tags ?? "")
+      .split(/[;,\s]+/)
+      .filter(Boolean)
+      .join(" "),
     onboot: flag(c.onboot),
     protection: flag(c.protection),
     startOrder: orderOf(c.startup),
@@ -99,14 +109,18 @@ export function changesForm(kind: Kind, c: Config, changes: Record<string, unkno
     },
     notes: (v) => on("description", typeof v === "string" && v.length <= 8000 ? v : wrong("Notes can be up to 8000 characters.")),
     tags: (v) => {
-      const tags = String(v ?? "").split(/[;,\s]+/).filter(Boolean);
+      const tags = String(v ?? "")
+        .split(/[;,\s]+/)
+        .filter(Boolean);
       if (tags.some((t) => !TAG.test(t))) wrong("Tags use letters, numbers, dots and dashes.");
       on("tags", tags.join(";"));
     },
     onboot: (v) => (form.onboot = bool(v, "Start at boot")),
     protection: (v) => (form.protection = bool(v, "Protection")),
     startOrder: (v) => {
-      const others = String(c.startup ?? "").split(",").filter((p) => p && !p.startsWith("order="));
+      const others = String(c.startup ?? "")
+        .split(",")
+        .filter((p) => p && !p.startsWith("order="));
       if (v === null || v === "") return on("startup", others.join(","));
       on("startup", [`order=${whole(v, 1, 999, "Start order is a number from 1 to 999.")}`, ...others].join(","));
     },
@@ -123,7 +137,9 @@ export function changesForm(kind: Kind, c: Config, changes: Record<string, unkno
     cpu: (v) => {
       if (v === "") return on("cpu", "");
       const type = typeof v === "string" && CPU.test(v) ? v : wrong("That processor type isn't valid.");
-      const keep = String(c.cpu ?? "").split(",").filter((p) => p.includes("=") && !p.startsWith("cputype="));
+      const keep = String(c.cpu ?? "")
+        .split(",")
+        .filter((p) => p.includes("=") && !p.startsWith("cputype="));
       form.cpu = [type, ...keep].join(",");
     },
     numa: (v) => (form.numa = bool(v, "NUMA")),
@@ -154,7 +170,9 @@ export function changesForm(kind: Kind, c: Config, changes: Record<string, unkno
       form.vga = swapFirst(c.vga, DISPLAYS.includes(String(v)) ? String(v) : wrong("That display isn't valid."));
     },
     agent: (v) => {
-      const keep = String(c.agent ?? "").split(",").filter((p) => p.includes("=") && !p.startsWith("enabled="));
+      const keep = String(c.agent ?? "")
+        .split(",")
+        .filter((p) => p.includes("=") && !p.startsWith("enabled="));
       form.agent = [bool(v, "The guest agent"), ...keep].join(",");
     },
     tablet: (v) => (form.tablet = bool(v, "Tablet pointer")),
@@ -176,7 +194,12 @@ export function changesForm(kind: Kind, c: Config, changes: Record<string, unkno
     rules[key]?.(value);
   }
   if (Object.keys(features).length) {
-    const merged = new Map(String(c.features ?? "").split(",").filter(Boolean).map((p) => p.split("=") as [string, string]));
+    const merged = new Map(
+      String(c.features ?? "")
+        .split(",")
+        .filter(Boolean)
+        .map((p) => p.split("=") as [string, string]),
+    );
     for (const [k, v] of Object.entries(features)) {
       if (v === "1") merged.set(k, "1");
       else merged.delete(k);

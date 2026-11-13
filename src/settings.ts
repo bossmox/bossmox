@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { writeJsonAtomic } from "./json-file.js";
 
 export const settingsPath = (env: NodeJS.ProcessEnv) => env.BOSSMOX_SETTINGS ?? "/var/lib/bossmox/settings.json";
