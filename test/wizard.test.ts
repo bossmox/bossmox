@@ -46,7 +46,7 @@ function aptNode() {
     on: () =>
       r
         .files!.flatMap((f) => (f.repositories ?? []).filter((x) => x.Enabled).map((x) => x.URIs![0]!))
-        .filter((u) => u.includes("proxmox.com"))
+        .filter((u) => /(^|\.)proxmox\.com$/.test(new URL(u).hostname))
         .sort(),
   };
 }
