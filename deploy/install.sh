@@ -128,7 +128,7 @@ if [ -z "$ADDRESS" ] && [ "$ASSUME_YES" != 1 ] && [ -t 0 ]; then
   echo "  A fixed address stays the same, so your bookmark keeps working. Recommended."
   echo "  An automatic one comes from your router and can change after a restart."
   [ -z "$NODE_IP" ] || echo "  This node is $NODE_IP. Pick an address on the same network that nothing else uses."
-  for TRY in 1 2 3 4 5; do
+  for _ in 1 2 3 4 5; do
     read -r -p "Fixed address for BossMox (like 192.168.1.20), or press Enter for automatic: " IN || IN=""
     [ -n "$IN" ] || break
     A=${IN%/*}

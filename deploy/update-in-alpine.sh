@@ -54,7 +54,7 @@ find /opt/bossmox -mindepth 1 -delete
 
 sh "$STAGE/install-in-alpine.sh" "$ADDRESS" "" "" || put_back "the new version didn't install."
 
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
   if answers; then
     rm -rf "$OLD" "$OLD.env" "$OLD.init"
     finish ok

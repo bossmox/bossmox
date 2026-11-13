@@ -19,4 +19,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run lint
+      # Fails when a file isn't formatted the way biome.json says (npm run format fixes it).
+      - run: npx biome format
+      # The deploy scripts run as root on Proxmox nodes. Notes and style hints are off: they flag the
+      # `test && do || die` lines these scripts use on purpose.
+      - run: shellcheck --severity=warning deploy/*.sh
       - run: npm test

@@ -1,0 +1,2 @@
+# Formatting only (#62). GitHub's blame view skips these; locally: git config blame.ignoreRevsFile .git-blame-ignore-revs
+110db127ad7ee9e4ad37598b1fe0414f299bb6d6
