@@ -1,6 +1,6 @@
 # 0038: Alerts, through Proxmox's own notifications
 
-**Date:** 2026-11-13. **Status:** proposed (Rocky reads before any code). Issue #34, 0.2.0 piece 4, part (a).
+**Date:** 2026-11-13. **Status:** accepted 2026-11-13 (Rocky: form fields for secrets, encrypted both hops and stored nowhere; email in 0.2.1; part (b) later). Issue #34, 0.2.0 piece 4, part (a).
 
 ## Context
 
@@ -68,4 +68,4 @@ Part (b), BossMox's own health-check alerts. Proxmox has no API for another prog
 
 1. ~~SMTP password~~ **Decided (Rocky, 2026-11-13):** a form field, encrypted both hops, stored nowhere by BossMox.
 2. **Decided (Rocky, 2026-11-13):** email moves to 0.2.1; ntfy, Discord, Slack, Teams and Gotify stay in 0.2.0.
-3. Part (b): in 0.2.0, or the next release?
+3. **Decided (Rocky, 2026-11-13):** part (b) in a later release.
