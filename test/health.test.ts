@@ -179,3 +179,10 @@ test("HA gave up on a guest: bad, with the lock named and Fix this (ADR 0036)", 
   assert.match(item?.detail ?? "", /locked \(migrate\).*every node shutting down at once/);
   assert.deepEqual(item?.fix, { kind: "ha-recover", label: "Fix this", vmids: [102], node: "a" });
 });
+
+test("two votes and no tie-breaker: the warning opens Settings; a disconnected one or an odd count gets no button (ADR 0037)", () => {
+  const two = (over: Partial<HealthInput>) => by(buildHealth({ ...base(), nodes: [{ name: "a", online: true }, { name: "b", online: true }], cluster: { quorate: true }, votes: [{ node: "a", votes: 1 }, { node: "b", votes: 1 }], ...over }), "votes");
+  assert.deepEqual(two({})?.fix, { kind: "settings", label: "Open Settings" });
+  assert.match(two({})?.detail ?? "", /set up in Settings/);
+  assert.equal(two({ tieBreakerDown: true })?.fix, undefined);
+});

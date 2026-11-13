@@ -485,7 +485,120 @@ function redundancySection() {
     if (!v.canSetUp) detail += " Setting it up changes a file in a node's console, so it needs a root@pam sign-in.";
   } else if (v.state === "no-port") detail = `${HB_WHY} That needs a second network port on every node, on a network of its own${v.nodes.length ? `. ${v.nodes.join(", ")} ${v.nodes.length === 1 ? "doesn't have one" : "don't have one"}` : ", shared by all of them"}.`;
   else detail = v.why;
-  return `<h3 class="sthd">Redundancy</h3><div class="stgroup"><div class="setrow"><div class="hctext"><b>Backup network for the heartbeat</b>${v.state === "backed-up" ? `<span class="rec ok">Set up</span>` : `<span class="rec">Best practice</span>`}<small>${esc(detail)}</small></div><div class="actions">${action}</div></div>${haRows}</div>`;
+  return `<h3 class="sthd">Redundancy</h3><div class="stgroup">${tieBreakerRow()}<div class="setrow"><div class="hctext"><b>Backup network for the heartbeat</b>${v.state === "backed-up" ? `<span class="rec ok">Set up</span>` : `<span class="rec">Best practice</span>`}<small>${esc(detail)}</small></div><div class="actions">${action}</div></div>${haRows}</div>`;
+}
+/* A tie-breaker vote for a two-node cluster (ADR 0037). The person sets up the vote machine and types its password in a node's console. */
+const TB_WHY = "With two nodes there are two votes, so when one is down the other has half, not a majority: guests keep running, but nothing can be started, stopped or changed until it's back, and HA can't help. A small third machine outside the cluster gives the deciding vote.";
+function tieBreakerRow() {
+  const t = S.tieBreaker;
+  const v = t?.view;
+  if (!v || v.state === "single") return "";
+  const j = t.job;
+  let detail;
+  let action = "";
+  let tag = `<span class="rec">Best practice</span>`;
+  if (v.state === "set") {
+    tag = v.connected ? `<span class="rec ok">Set up</span>` : `<span class="rec">Not connected</span>`;
+    detail = v.connected ? "The cluster has a third vote, so it keeps its majority when one node is down." : "A tie-breaker is set up, but it isn't connected, so its vote doesn't count. Check that the vote machine is on and reachable on port 5403.";
+  } else if (v.state === "odd") {
+    tag = `<span class="rec ok">Not needed</span>`;
+    detail = `A tie-breaker only helps with an even number of nodes. With ${v.nodes}, the cluster already keeps its majority when one is down.`;
+  } else {
+    detail = TB_WHY;
+    if (j?.running) action = `<button class="btn" data-tbwatch="1">Show progress</button>`;
+    else if (j?.result === "ready") {
+      detail += ` The nodes are ready. Next: run the setup in ${j.node}'s console, then check the vote.`;
+      action = `<button class="btn" data-tbconsole="1">Open the console</button><button class="btn primary" data-tbverify="1">Check the vote</button>`;
+    } else if (v.canSetUp) action = `<button class="btn primary" data-tbsetup="1">Set up</button>`;
+    else detail += " Setting it up needs a root@pam sign-in.";
+  }
+  return `<div class="setrow"><div class="hctext"><b>Tie-breaker vote</b>${tag}<small>${esc(detail)}</small></div><div class="actions">${action}</div></div>`;
+}
+function openTieBreakerSetup() {
+  const v = S.tieBreaker?.view;
+  if (v?.state !== "offer") return;
+  const lines = v.lines.join("\n");
+  dialog(`<h3>Set up a tie-breaker vote?</h3>
+    <p>${esc(TB_WHY)}</p>
+    <p><b>1. The vote machine.</b> Any Debian or Ubuntu machine outside this cluster that stays on: a Raspberry Pi, a small VM on another host, a NAS that runs containers. Not a guest on this cluster: its vote would go down with the node. As root there, run:</p>
+    <pre class="tblines">${esc(lines)}</pre>
+    <div class="row-end" style="margin-top:-4px"><button class="btn" data-tbcopy="1">Copy</button></div>
+    <p class="meta">The second line lets root sign in with a password, which the setup needs once. If root has no password there, set one with passwd. BossMox never sees it: you type it into a node's console in step 3, and afterwards you can turn password sign-in off again.</p>
+    <label class="field restartname"><span>2. The vote machine's address</span><input id="tbaddr" autocomplete="off" spellcheck="false" placeholder="192.168.1.50"></label>
+    <p class="meta">BossMox then checks every node reaches it, and installs the tie-breaker software on the nodes. 3. A node's console opens with the setup command typed in; you press Enter and type the vote machine's root password there.</p>
+    <label class="field restartname"><span>Type the cluster's name, ${esc(v.clusterName)}, to confirm</span><input id="tbname" autocomplete="off" spellcheck="false"></label>
+    <p id="formerr" class="loginerr" hidden></p>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-tbgo="1">Check and prepare</button></div>`);
+  $("#tbaddr").focus();
+}
+async function startTieBreaker() {
+  const v = S.tieBreaker?.view;
+  if (v?.state !== "offer") return;
+  const address = $("#tbaddr").value.trim();
+  const confirm = $("#tbname").value.trim();
+  if (!address) return formError("Type the vote machine's address.");
+  if (confirm !== v.clusterName) return formError(`Type ${v.clusterName} to confirm.`);
+  try {
+    const res = await post("api/action/tiebreaker-prepare", { server: onlineNodes()[0], address, confirm });
+    const body = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) return formError(body.error);
+  } catch (err) {
+    return formError(err.message || "BossMox lost contact with Proxmox.");
+  }
+  watchTieBreaker();
+}
+async function watchTieBreaker() {
+  S.taskRunning = true;
+  S.tbWatch = (S.tbWatch ?? 0) + 1;
+  const me = S.tbWatch;
+  for (;;) {
+    let t;
+    try {
+      t = await signal("api/tiebreaker");
+    } catch (err) {
+      S.taskRunning = false;
+      if (err.message === "signed out") return;
+      return dialog(`<h3>Lost sight of it</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+    }
+    if (me !== S.tbWatch) return;
+    const j = t.job;
+    const steps = (j?.steps ?? []).map((s) => `<div class="hbstep"><span class="dot ${s.state === "ok" ? "running" : s.state === "failed" ? "warn" : "busy"}" aria-hidden="true"></span><span>${esc(s.text)}</span></div>`).join("");
+    const done = j && !j.running;
+    S.tieBreaker = t;
+    if (done && j.result === "ready") {
+      S.taskRunning = false;
+      return dialog(`<h3>The nodes are ready</h3><div class="hbsteps">${steps}</div>
+        <p><b>3. In ${esc(j.node)}'s console</b>, the command <code>pvecm qdevice setup ${esc(j.address)}</code> is typed in for you. Press Enter, type <b>yes</b> if it asks about the vote machine's key, then type the vote machine's root password. When it finishes, come back to Settings and press Check the vote.</p>
+        <div class="row-end"><button class="btn" data-dlg="cancel">Later</button><button class="btn primary" data-tbconsole="1">Open the console</button></div>`);
+    }
+    dialog(`<h3>${done ? "It stopped" : "Preparing the tie-breaker"}</h3><div class="hbsteps" aria-live="polite">${steps || "<p>Starting.</p>"}</div>${done && j.error ? `<p class="loginerr">${esc(j.error)}</p>` : ""}${done ? closeRow : ""}`);
+    if (done) {
+      S.taskRunning = false;
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+function openTieBreakerConsole() {
+  const j = S.tieBreaker?.job;
+  if (!j) return;
+  closeDialog();
+  openNodeConsole(j.node, `pvecm qdevice setup ${j.address}`, `The tie-breaker setup is typed in. Press Enter, type yes if it asks about the vote machine's key, then the vote machine's root password. Then close this and press Check the vote in Settings.`, `Tie-breaker: ${j.node}`);
+}
+async function verifyTieBreaker() {
+  dialog(`<h3>Checking the vote</h3><p>Reading the cluster's votes on a node.</p>`);
+  try {
+    const r = await signal("api/tiebreaker?verify=1");
+    const after = S.tieBreaker?.view?.after;
+    dialog(r.voting
+      ? `<h3>The tie-breaker is voting</h3><p>The cluster has ${r.total} votes, so it keeps its majority when one node is down.</p>${after ? `<p class="meta">Password sign-in for root on the vote machine can go again. As root there, run:</p><pre class="tblines">${esc(after)}</pre>` : ""}${closeRow}`
+      : `<h3>Not voting yet</h3><p class="loginerr">The cluster has ${r.total ?? "?"} votes and no tie-breaker vote. If the setup in the console didn't finish, run it again there; if it did, give it a minute and check again.</p>${closeRow}`);
+    S.afterTask = () => loadSettings();
+  } catch (err) {
+    if (err.message === "signed out") return;
+    dialog(`<h3>Couldn't check</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
 }
 function openHeartbeatSetup() {
   const v = S.heartbeat?.view;
@@ -551,11 +664,12 @@ async function watchHeartbeat() {
 async function loadSettings() {
   const run = S.loadRun;
   try {
-    const [{ settings }, heartbeat, ha] = await Promise.all([signal("api/recommended"), signal("api/heartbeat").catch(() => null), signal("api/ha").catch(() => null)]);
+    const [{ settings }, heartbeat, ha, tb] = await Promise.all([signal("api/recommended"), signal("api/heartbeat").catch(() => null), signal("api/ha").catch(() => null), signal("api/tiebreaker").catch(() => null)]);
     if (run !== S.loadRun) return;
     S.recommended = settings;
     S.heartbeat = heartbeat;
     S.haList = ha?.guests ?? null;
+    S.tieBreaker = tb;
     S.recommendedError = "";
   } catch (err) {
     if (err.message === "signed out" || run !== S.loadRun) return;
@@ -2829,17 +2943,17 @@ function loadNoVnc() {
   });
 }
 /** typed: a command to type at the node's prompt without pressing Enter, so the person still starts it (ADR 0020). */
-async function openNodeConsole(server, typed = null) {
+async function openNodeConsole(server, typed = null, helpText = null, title = null) {
   if (term) return dialog(`<h3>A terminal is already open</h3><p>Close it first, then open this console.</p>${closeRow}`);
   try {
     const res = await post("api/action/node-console", { server });
     const body = await res.json();
     if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
     if (!res.ok) throw new Error(body.error);
-    const help = typed
+    const help = helpText ?? (typed
       ? `The BossMox update command is typed in for you. Press Enter to start it, then type y when it asks. Near the end BossMox restarts: this window closes, and you sign in again on the new version.`
-      : `Console for ${esc(server)}. Anything you run here changes the node right away.`;
-    showTerminal(server, body.terminal, typed ? `Update BossMox on ${server}` : `Console: ${server}`, help, "node", typed);
+      : `Console for ${esc(server)}. Anything you run here changes the node right away.`);
+    showTerminal(server, body.terminal, title ?? (typed ? `Update BossMox on ${server}` : `Console: ${server}`), help, "node", typed);
   } catch (err) {
     dialog(`<h3>Couldn't open the console</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
   }
@@ -3391,6 +3505,16 @@ document.addEventListener("click", (e) => {
     S.sel = Number(d.haeject);
     S.tab = "settings";
     return renderDetail();
+  }
+  if (d.tbsetup) return openTieBreakerSetup();
+  if (d.tbgo) return startTieBreaker();
+  if (d.tbwatch) return watchTieBreaker();
+  if (d.tbconsole) return openTieBreakerConsole();
+  if (d.tbverify) return verifyTieBreaker();
+  if (d.tbcopy) {
+    const text = (S.tieBreaker?.view?.lines ?? []).join("\n");
+    navigator.clipboard?.writeText(text).then(() => { e.target.textContent = "Copied"; }, () => { e.target.textContent = "Select and copy"; });
+    return;
   }
   if (d.hbsetup) return openHeartbeatSetup();
   if (d.hbgo) return startHeartbeat();

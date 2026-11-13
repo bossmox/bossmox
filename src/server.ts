@@ -12,7 +12,7 @@ import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob 
 import { FILE_STORAGE, installerLabel, } from "./create.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
 import { eraseBlocker, hostIsValid, readHardDisks, StorageError, type RawDisk, type RawStorageConfig } from "./storage.js";
-import { snapshotFix, HardwareError, } from "./hardware.js";
+import { pickAddresses, snapshotFix, HardwareError, } from "./hardware.js";
 import { networkInterfaces } from "node:os";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { plainError } from "./plain-errors.js";
@@ -52,6 +52,7 @@ import { guestActions } from "./actions/guests.js";
 import { storageActions } from "./actions/storage.js";
 import { backupActions } from "./actions/backups.js";
 import { createHa } from "./ha.js";
+import { createTieBreaker } from "./qdevice.js";
 import { createHeartbeat, nodeConsole } from "./heartbeat.js";
 import { getRoutes, type GetRoute } from "./routes/get.js";
 import { HttpError } from "./http-error.js";
@@ -130,6 +131,25 @@ const heartbeat = createHeartbeat({
   audit: (event, who, detail) => audit(event, who, "settings", detail),
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
   now: () => Date.now(),
+});
+
+/** A tie-breaker vote for two-node clusters (ADR 0037): checks and installs in the nodes' consoles, like the heartbeat link. */
+const tieBreaker = createTieBreaker({
+  pve,
+  console: nodeConsole(pve, () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName })),
+  // Addresses BossMox knows for each running guest, so the vote machine isn't one of them.
+  guestAddresses: async (session) => {
+    const vms = (await pve.get<RawResource[]>("/cluster/resources?type=vm", session.ticket)).filter((r) => r.status === "running" && r.node);
+    const out: Record<string, string[]> = {};
+    await Promise.all(vms.map(async (r) => {
+      const type = r.type === "lxc" ? "lxc" : "qemu";
+      const path = `/nodes/${encodeURIComponent(r.node as string)}/${type}/${r.vmid}`;
+      const raw = await pve.get<unknown>(type === "lxc" ? `${path}/interfaces` : `${path}/agent/network-get-interfaces`, session.ticket).catch(() => null);
+      if (raw) out[r.name ?? `VM ${r.vmid}`] = pickAddresses(type, raw);
+    }));
+    return out;
+  },
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
 });
 
 /** Keep this guest running (ADR 0036). Where a guest could go comes from the same planning moves use. */
@@ -566,6 +586,7 @@ const actionContext = {
   jobs,
   heartbeat,
   ha,
+  tieBreaker,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -797,7 +818,7 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
 
 
 /** What the GET routes get from the server (review #61). */
-const routeContext = { FULL_LOG, HEALTH_CACHE_MS, VERSION, cache, guestPath, healthCache, ha, heartbeat, jobs, json, loadBackups, loadCreatePlan, loadHealth, loadNetwork, loadRecommended, loadRestorePlan, loadServerDetail, loadStorageMap, nodeDisks, overview, pve, snapshotFixFor, updateView, viewerOf, epoch: () => preferencesEpoch };
+const routeContext = { FULL_LOG, HEALTH_CACHE_MS, VERSION, cache, guestPath, healthCache, ha, heartbeat, jobs, tieBreaker, json, loadBackups, loadCreatePlan, loadHealth, loadNetwork, loadRecommended, loadRestorePlan, loadServerDetail, loadStorageMap, nodeDisks, overview, pve, snapshotFixFor, updateView, viewerOf, epoch: () => preferencesEpoch };
 export type RouteContext = typeof routeContext;
 const GET_ROUTES = getRoutes(routeContext);
 

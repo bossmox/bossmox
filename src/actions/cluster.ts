@@ -30,6 +30,10 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       await c.ha.recover(who, guestId(body.id));
       return null;
     },
+    "tiebreaker-prepare": async (_name, who, body) => {
+      await c.tieBreaker.prepare(who, text(body.address, 64), text(body.confirm, 64));
+      return null;
+    },
     "heartbeat-link-add": async (_name, who, body) => {
       await c.heartbeat.start(who, text(body.network, 32), text(body.confirm, 64));
       return null;

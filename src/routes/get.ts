@@ -63,6 +63,12 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
         }
         return json(res, 200, { guests: await c.ha.list(session.ticket) });
     },
+    "/api/tiebreaker": async (_route, session, params, _req, res) => {
+        // verify=1 reads pvecm status in a node's console after the person ran the setup there.
+        if (params.get("verify") === "1") return json(res, 200, await c.tieBreaker.verify(session));
+        const job = c.tieBreaker.job();
+        return json(res, 200, { view: await c.tieBreaker.view(session), job: job && { ...job, by: job.by === session.username ? job.by : "Someone else" } });
+    },
     "/api/heartbeat": async (_route, session, _params, _req, res) => {
         const job = c.heartbeat.job();
         // Who started it is a username; only that person sees it (review 2, S6).

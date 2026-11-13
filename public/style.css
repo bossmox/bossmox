@@ -458,3 +458,4 @@ i.s1{background:var(--series1)}i.s2{background:var(--series2)}
 .harow{margin-top:14px;border-top:1px solid var(--line);padding-top:12px}
 .hafence .haline{display:block;margin-top:8px}
 .hafence .haline:not(.ok){font-weight:600}
+.tblines{background:var(--surface2);padding:10px 12px;border-radius:8px;overflow-x:auto;font-size:12.5px;white-space:pre;margin:6px 0 10px}
