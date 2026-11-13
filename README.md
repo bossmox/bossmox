@@ -71,10 +71,19 @@ Switch to the free update channel in one click, check for and install updates in
 
 ### Health check
 
-Every check BossMox can make, the passes included, with the fix for each problem one click away.
+Every check BossMox can make, the passes included, with the fix for each problem one click away. Gauges show how much processor, memory and storage the whole cluster is using.
 
 ![The health check, with problems first and a fix beside each](docs/screenshots/health-check.png)
 *Problems first, each with its fix, and the checks that passed, so you can see what healthy looks like.*
+
+### Keeping the cluster running
+
+The ways a cluster survives a failure, each explained in plain words and set up in Settings, with a best-practice note in Health check until it's done:
+
+- **A backup heartbeat link**, when every node has a second network port, so one network problem can't make a healthy node look lost.
+- **Keep this guest running:** Proxmox's high availability restarts a guest on another node when its node fails. BossMox checks the guest can run elsewhere first, and warns about the setups that make HA restart guests that didn't need it.
+- **A tie-breaker for two-node clusters**, so losing one node doesn't stop the other.
+- **Alerts:** Proxmox's own messages about failed backups, fenced nodes and new updates go to ntfy, Discord, Slack, Microsoft Teams or Gotify. Email is coming in 0.2.1.
 
 ### Setup
 
@@ -91,7 +100,7 @@ Daylight, Dusk and Workbench, picked in the top bar.
 
 ## This is a preview
 
-It does a lot already, and everything in it is tested on a real Proxmox cluster, but there's more to come before a 1.0. What's next is on the [roadmap](ROADMAP.md): first cluster resilience (a backup heartbeat link, high availability, a tie-breaker for two nodes, and email alerts), then address changes, USB passthrough and adding nodes. Proxmox's own interface keeps working alongside BossMox for anything it doesn't cover yet.
+It does a lot already, and everything in it is tested on a real Proxmox cluster, but there's more to come before a 1.0. What's next is on the [roadmap](ROADMAP.md): email alerts in 0.2.1, then address changes, USB passthrough and adding nodes. Proxmox's own interface keeps working alongside BossMox for anything it doesn't cover yet.
 
 Hardware security keys (WebAuthn) and recovery codes don't work in BossMox yet; authenticator-app codes do. The setup wizard needs a root account without 2FA.
 
