@@ -147,6 +147,10 @@ That doesn't make it vibe-coded. Nothing goes in because it looks right; every c
 - **Reviewed by someone who didn't write it.** Seven reviews so far, each by AI reviewers that didn't write the code, reading it fresh; the latest two are summed up in [#42](https://github.com/bossmox/bossmox/issues/42). Their findings were fixed and each fix proven, apart from a few minor items still being worked on.
 - **Libraries changed with care.** Updates to the parts BossMox depends on are tested on the cluster before they go in, never merged automatically.
 
+## Supporting BossMox
+
+BossMox is free and open source. If it helps you, you can support Rocky's work on it through [GitHub Sponsors](https://github.com/sponsors/twogunrock). Sponsorships go to Rocky personally.
+
 ## Contributing
 
 Bug reports, ideas and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how, and for the terms contributions come under, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
