@@ -12,6 +12,8 @@ Since 0.2.1, a normal update already refuses a node whose sources point at the n
 
 - [Upgrade to the next major version of Proxmox VE](https://github.com/bossmox/bossmox/issues/95)
 
+Upgrading Ceph isn't on the roadmap at this time. A cluster that uses Ceph needs Ceph Squid (19.2) before it can upgrade to Proxmox VE 9; until then BossMox says so and stops, and Ceph is upgraded in Proxmox's own interface.
+
 ## Later, in no particular order
 
 ### [Addresses](https://github.com/bossmox/bossmox/milestone/2)
