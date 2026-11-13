@@ -500,6 +500,11 @@ function tieBreakerRow() {
   if (v.state === "set") {
     tag = v.connected ? `<span class="rec ok">Set up</span>` : `<span class="rec">Not connected</span>`;
     detail = v.connected ? "The cluster has a third vote, so it keeps its majority when one node is down." : "A tie-breaker is set up, but it isn't connected, so its vote doesn't count. Check that the vote machine is on and reachable on port 5403.";
+    // Just set up from this BossMox: the step that's left is on the vote machine.
+    if (v.connected && j?.result === "ready") {
+      detail += " Password sign-in for root on the vote machine can go again now.";
+      action = `<button class="btn" data-tbverify="1">Check the vote</button>`;
+    }
   } else if (v.state === "odd") {
     tag = `<span class="rec ok">Not needed</span>`;
     detail = `A tie-breaker only helps with an even number of nodes. With ${v.nodes}, the cluster already keeps its majority when one is down.`;
