@@ -4670,6 +4670,7 @@ async function showLogin(message) {
   $("#desk").hidden = true;
   $("#who").hidden = true;
   $("#version").hidden = true;
+  $("#sponsor").hidden = true;
   $("#signout").hidden = true;
   $("#stale").hidden = true;
   $("#login").hidden = false;
@@ -4768,6 +4769,7 @@ async function refresh() {
     $("#who").hidden = false;
     $("#version").textContent = body.version;
     $("#version").hidden = !body.version;
+    $("#sponsor").hidden = false;
     $("#login").hidden = true;
     $("#desk").hidden = false;
     $("#signout").hidden = false;
