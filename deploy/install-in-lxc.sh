@@ -59,6 +59,13 @@ if [ ! -f /etc/bossmox/tls.key ]; then
 fi
 chown root:bossmox /etc/bossmox/tls.key
 chmod 640 /etc/bossmox/tls.key
+# The key BossMox seals saved sign-ins with (ADR 0040). Made once and kept by every update, or a saved sign-in
+# couldn't be opened again. BossMox can read it and can't replace it.
+if [ ! -s /etc/bossmox/secret.key ]; then
+  (umask 077 && openssl rand -hex 32 > /etc/bossmox/secret.key)
+fi
+chown root:bossmox /etc/bossmox/secret.key
+chmod 640 /etc/bossmox/secret.key
 
 cat > /etc/bossmox/env <<EOF
 NODE_ENV=production
