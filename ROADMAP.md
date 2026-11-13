@@ -2,19 +2,13 @@
 
 What's coming to BossMox, in plain words. Each theme is a [GitHub milestone](https://github.com/bossmox/bossmox/milestones), and each item is an issue you can follow or comment on. There are no dates: a release ships when its whole theme is done and tested on a real cluster.
 
-Version numbers: fixes to a released version bump the last number (0.2.0 to 0.2.1); new features bump the middle one (0.1.x to 0.2.0). 1.0 is the first release called stable.
+Version numbers: fixes to a released version bump the last number; new features bump the middle one (0.2.x to 0.3.0). 1.0 is the first release called stable.
 
-## Next: [Email alerts](https://github.com/bossmox/bossmox/milestone/7) (0.2.1)
+## Next: [Proxmox upgrades](https://github.com/bossmox/bossmox/milestone/8) (0.3.0)
 
-0.2.0 sends Proxmox's alerts to ntfy, Discord, Slack, Teams or Gotify. 0.2.1 adds email. It also stops a normal update from turning into a major upgrade by accident.
+Upgrade a cluster to the next major version of Proxmox VE (for example 8 to 9) from BossMox, one node at a time, without Proxmox's own interface or a shell. BossMox runs Proxmox's upgrade checker and explains what it finds, moves guests off each node before it upgrades, and keeps the cluster working while some nodes are on the old version and some on the new.
 
-- [Alerts by email](https://github.com/bossmox/bossmox/issues/34)
-- [Refuse to update a node whose repositories point at a different release](https://github.com/bossmox/bossmox/issues/94)
-- [A sponsor link inside the app](https://github.com/bossmox/bossmox/issues/40)
-
-## Then: [Proxmox upgrades](https://github.com/bossmox/bossmox/milestone/8) (0.3.0)
-
-Upgrade a cluster to the next major version of Proxmox VE (for example 8 to 9) from BossMox, one node at a time, without Proxmox's own interface or a shell.
+Since 0.2.1, a normal update already refuses a node whose sources point at the next release, so an upgrade only ever happens on purpose.
 
 - [Upgrade to the next major version of Proxmox VE](https://github.com/bossmox/bossmox/issues/95)
 
@@ -45,6 +39,6 @@ Splitting the browser app into modules.
 How BossMox is delivered and supported.
 
 - [Signed releases](https://github.com/bossmox/bossmox/issues/39)
-- [Donate link](https://github.com/bossmox/bossmox/issues/40)
+- [An image for running BossMox on your own computer (VirtualBox, maybe Hyper-V)](https://github.com/bossmox/bossmox/issues/97)
 
-Cluster resilience shipped in [0.2.0](https://github.com/bossmox/bossmox/releases/tag/v0.2.0-preview). Next: email alerts in 0.2.1. Released work is in the [release notes](https://github.com/bossmox/bossmox/releases), and the reasoning behind each decision is in [docs/adr](docs/adr).
+Email alerts, the update guard and the sponsor link shipped in [0.2.1](https://github.com/bossmox/bossmox/releases/tag/v0.2.1-preview), and cluster resilience in [0.2.0](https://github.com/bossmox/bossmox/releases/tag/v0.2.0-preview). Next: Proxmox upgrades in 0.3.0. Released work is in the [release notes](https://github.com/bossmox/bossmox/releases), and the reasoning behind each decision is in [docs/adr](docs/adr).
