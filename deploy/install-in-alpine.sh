@@ -38,25 +38,15 @@ mkdir -p /var/lib/bossmox
 chown bossmox:bossmox /var/lib/bossmox
 chmod 750 /var/lib/bossmox
 
-if [ ! -f /etc/bossmox/tls.key ]; then
-  SAN=""
-  OLDIFS=$IFS
-  IFS=,
-  for name in $PUBLIC_ADDRESS; do
-    case "$name" in
-      *:*:*) entry="IP:$name" ;;
-      *[!0-9.:]*) entry="DNS:${name%%:*}" ;;
-      *) entry="IP:${name%%:*}" ;;
-    esac
-    SAN="${SAN:+$SAN,}$entry"
-  done
-  IFS=$OLDIFS
-  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
-    -keyout /etc/bossmox/tls.key -out /etc/bossmox/tls.crt \
-    -subj "/CN=BossMox" -addext "subjectAltName=$SAN" 2>/dev/null
-fi
-chown root:bossmox /etc/bossmox/tls.key
-chmod 640 /etc/bossmox/tls.key
+# BossMox's CA and certificate (ADR 0040). An update re-runs this: an old self-signed certificate is replaced once,
+# and from then on only renewed, from the same CA, so the Proxmox nodes keep trusting it.
+install -m 755 /opt/bossmox/deploy/bossmox-cert.sh /usr/local/sbin/bossmox-cert
+/usr/local/sbin/bossmox-cert "$PUBLIC_ADDRESS" >/dev/null
+# Busybox's crond runs /etc/periodic/daily: the certificate is renewed when under 60 days are left.
+printf '#!/bin/sh\n/usr/local/sbin/bossmox-cert renew >/dev/null 2>>/var/log/bossmox.log\n' > /etc/periodic/daily/bossmox-cert
+chmod 755 /etc/periodic/daily/bossmox-cert
+rc-update add crond default >/dev/null
+rc-service crond start >/dev/null || true
 # The key BossMox seals saved sign-ins with (ADR 0040). Made once and kept by every update, or a saved sign-in
 # couldn't be opened again. BossMox can read it and can't replace it.
 if [ ! -s /etc/bossmox/secret.key ]; then
