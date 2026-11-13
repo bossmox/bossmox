@@ -52,6 +52,19 @@ Health check: "The cluster can lose a node and keep going: 3 votes, including a 
   - Steps: set it up through the page. Then power one node off hard: the other keeps quorum and can still start a guest. Then power the vote machine off: the cluster keeps running on two votes and Health check says the tie-breaker isn't connected.
   - Afterwards, bmx2's VMs are shut down (not deleted), like bmxlab.
 
+## Lab results (2026-11-13, bmx2lab: two nodes, Proxmox 8.4; vote machine VM 906, Debian 12)
+
+A BossMox VM 200 (10.0.30.253) was installed inside bmx2lab and pointed at it.
+1. Health check: "One node going down would lock the other" with Open Settings. Settings → Redundancy: Tie-breaker vote, Best practice, Set up.
+2. A node's own address (10.0.30.251) was refused, naming bmx2-node1.
+3. Before the vote machine's lines were run, the check stopped at "the vote service doesn't answer there (port 5403). Run the lines above on the vote machine first."
+4. The two lines run on 906 (and a root password set, since 906 had none, like many cloud images). Check and prepare: every node reached port 5403, corosync-qdevice installed on both nodes. The console opened with `pvecm qdevice setup 10.0.30.248` typed in; Enter, yes, the password: Done. `pvecm status`: 3 votes, Quorate Qdevice. Check the vote: "The tie-breaker is voting", with the line to turn root password sign-in off again.
+5. **Failover:** bmx2-node2 powered off hard. node1 stayed quorate on 2 of 3 votes and could start a guest. node2 back: 3 votes.
+6. **Vote machine down:** qnetd stopped on 906. The cluster ran on 2 votes and Health check said "The tie-breaker isn't connected". qnetd started again: 3 votes.
+- Found and fixed: after setup the row showed "Set up" without the reminder to turn password sign-in off on the vote machine; it now shows it, with Check the vote.
+- **Test incident:** the lab test script typed the lab root password at the SSH host-key question instead of the password prompt (its screen reader returned nothing), and printed the console, so the lab password reached the session transcript. Lab only. Scripts now report only whether a prompt appeared.
+- Afterwards: 906 back to key-only root login with a locked password (qnetd left installed); bmx2lab VMs 907-908 shut down, not deleted.
+
 ## Not in this
 
 Removing or replacing a tie-breaker; a vote machine BossMox creates; odd node counts; `--force` over an existing one.
