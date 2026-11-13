@@ -1840,7 +1840,9 @@ const USE_WORDS = { images: "VM disks", rootdir: "Container disks", backup: "Bac
 const onlineNodes = () => (S.data?.nodes ?? []).filter((n) => n.online).map((n) => n.name);
 /* Storage as disks and pools (ADR 0014): one view, shaped like a disk manager, with every action on it. */
 const guestName = (vmid) => S.data?.vms.find((v) => v.id === vmid)?.name ?? `Guest ${vmid}`;
-const sizeWords = (n) => (n >= 1000 ? `${Math.round(n / 100) / 10} TB` : n > 0 && n < 0.1 ? "under 0.1 GB" : `${n >= 10 ? Math.round(n) : n} GB`);
+// Always a number, whatever arrives: the result goes straight into the page (CodeQL #2).
+const sizeWords = (raw) => sizeText(Number(raw));
+const sizeText = (n) => (n >= 1000 ? `${Math.round(n / 100) / 10} TB` : n > 0 && n < 0.1 ? "under 0.1 GB" : `${n >= 10 ? Math.round(n) : n} GB`);
 function diskLine(d) {
   const facts = [d.kind, sizeWords(d.sizeGb)];
   const known = S.diskData?.[S.storeNode]?.find((x) => x.path === d.path);
