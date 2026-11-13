@@ -70,27 +70,53 @@ export function targetForm(input: AlertInput, keepSecrets = false): { type: "web
     const secrets = keepSecrets ? [] : [secret("topic", topic), ...(input.token ? [secret("token", input.token)] : [])];
     const headers = [header("Title", "{{ title }}"), header("Tags", "{{ severity }}")];
     if (input.token) headers.push(header("Authorization", "Bearer {{ secrets.token }}"));
-    return { type: "webhook", form: { method: "post", url: `${server.origin}${server.pathname.replace(/\/$/, "")}/{{ secrets.topic }}`, header: headers, body: b64("{{ message }}"), comment, ...(secrets.length ? { secret: secrets } : {}) } };
+    return {
+      type: "webhook",
+      form: {
+        method: "post",
+        url: `${server.origin}${server.pathname.replace(/\/$/, "")}/{{ secrets.topic }}`,
+        header: headers,
+        body: b64("{{ message }}"),
+        comment,
+        ...(secrets.length ? { secret: secrets } : {}),
+      },
+    };
   }
   const link = parseServer(input.link ?? "", `${KIND_NAMES[input.kind]} link`);
-  if (!keepSecrets && !LINK_HOSTS[input.kind].test(link.hostname)) throw new HttpError(400, `That doesn't look like a ${KIND_NAMES[input.kind]} webhook link. Paste the whole link the channel's webhook settings give.`);
+  if (!keepSecrets && !LINK_HOSTS[input.kind].test(link.hostname))
+    throw new HttpError(400, `That doesn't look like a ${KIND_NAMES[input.kind]} webhook link. Paste the whole link the channel's webhook settings give.`);
   // The link's path (and query, for Teams) is what lets anyone post, so only the host is in Proxmox's readable config.
   const path = `${link.pathname.slice(1)}${link.search}`;
   if (!keepSecrets && path.length < 10) throw new HttpError(400, `That ${KIND_NAMES[input.kind]} link is missing its private part. Paste the whole link.`);
   const body =
-    input.kind === "discord" ? '{"embeds": [{"title": {{ json title }}, "description": {{ json message }}}]}'
-    : input.kind === "slack" ? '{"text": {{ json title }}, "attachments": [{"text": {{ json message }}}]}'
-    : '{"type": "message", "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive", "content": {"type": "AdaptiveCard", "version": "1.4", "body": [{"type": "TextBlock", "text": {{ json title }}, "weight": "bolder", "wrap": true}, {"type": "TextBlock", "text": {{ json message }}, "wrap": true}]}}]}';
+    input.kind === "discord"
+      ? '{"embeds": [{"title": {{ json title }}, "description": {{ json message }}}]}'
+      : input.kind === "slack"
+        ? '{"text": {{ json title }}, "attachments": [{"text": {{ json message }}}]}'
+        : '{"type": "message", "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive", "content": {"type": "AdaptiveCard", "version": "1.4", "body": [{"type": "TextBlock", "text": {{ json title }}, "weight": "bolder", "wrap": true}, {"type": "TextBlock", "text": {{ json message }}, "wrap": true}]}}]}';
   return {
     type: "webhook",
-    form: { method: "post", url: `${link.origin}/{{ secrets.path }}`, header: [header("Content-Type", "application/json")], body: b64(body), comment, ...(keepSecrets ? {} : { secret: [secret("path", path)] }) },
+    form: {
+      method: "post",
+      url: `${link.origin}/{{ secrets.path }}`,
+      header: [header("Content-Type", "application/json")],
+      body: b64(body),
+      comment,
+      ...(keepSecrets ? {} : { secret: [secret("path", path)] }),
+    },
   };
 }
 
 /** Which of Proxmox's messages go to the target: failures and warnings always, the rest by choice. */
 export function matcherForm(input: { updates: boolean; allBackups: boolean }): Form {
   const fields = [...(input.updates ? ["exact:type=package-updates"] : []), ...(input.allBackups ? ["exact:type=vzdump"] : [])];
-  return { target: TARGET, mode: "any", "match-severity": ["warning", "error"], ...(fields.length ? { "match-field": fields } : {}), comment: "Added by BossMox: failures and warnings, and what was chosen in Settings" };
+  return {
+    target: TARGET,
+    mode: "any",
+    "match-severity": ["warning", "error"],
+    ...(fields.length ? { "match-field": fields } : {}),
+    comment: "Added by BossMox: failures and warnings, and what was chosen in Settings",
+  };
 }
 
 interface RawTarget {
@@ -150,7 +176,9 @@ export function scrub(message: string, secrets: string[]): string {
       const u = new URL(s);
       const priv = `${u.pathname.slice(1)}${u.search}`;
       if (priv.length >= 4) for (const form of [priv, b64(priv)]) out = out.split(form).join("[hidden]");
-    } catch { /* not a link */ }
+    } catch {
+      /* not a link */
+    }
   }
   return out;
 }
@@ -174,8 +202,14 @@ export function createAlerts(deps: AlertsDeps) {
       pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2Fmapping%2Fnotifications", t).catch((): Record<string, Record<string, number>> => ({})),
     ]);
     const mine = targets.find((x) => x.name === TARGET);
-    const detail = mine ? await pve.get<{ url?: string; server?: string }>(`/cluster/notifications/endpoints/${mine.type}/${TARGET}`, t).catch(() => ({ url: undefined, server: undefined })) : { url: undefined, server: undefined };
-    return { ...readAlerts(targets, matchers, root.email ?? null, detail.url ?? null, detail.server ?? null), canChange: perms["/mapping/notifications"]?.["Mapping.Modify"] === 1, viaProxy: deps.viaProxy };
+    const detail = mine
+      ? await pve.get<{ url?: string; server?: string }>(`/cluster/notifications/endpoints/${mine.type}/${TARGET}`, t).catch(() => ({ url: undefined, server: undefined }))
+      : { url: undefined, server: undefined };
+    return {
+      ...readAlerts(targets, matchers, root.email ?? null, detail.url ?? null, detail.server ?? null),
+      canChange: perms["/mapping/notifications"]?.["Mapping.Modify"] === 1,
+      viaProxy: deps.viaProxy,
+    };
   }
 
   /** Adds or changes BossMox's target and matcher, with every secret taken out of any error Proxmox gives back. */
@@ -209,7 +243,8 @@ export function createAlerts(deps: AlertsDeps) {
     } else await pve.post<null>(`/cluster/notifications/endpoints/${type}`, session, { name: TARGET, ...form });
     const matchers = await pve.get<RawMatcher[]>("/cluster/notifications/matchers", t);
     const mform = matcherForm(input);
-    if (matchers.some((m) => m.name === MATCHER)) await pve.put<null>(`/cluster/notifications/matchers/${MATCHER}`, session, { ...mform, ...(input.updates || input.allBackups ? {} : { delete: "match-field" }) });
+    if (matchers.some((m) => m.name === MATCHER))
+      await pve.put<null>(`/cluster/notifications/matchers/${MATCHER}`, session, { ...mform, ...(input.updates || input.allBackups ? {} : { delete: "match-field" }) });
     else await pve.post<null>("/cluster/notifications/matchers", session, { name: MATCHER, ...mform });
     deps.audit("alerts-save", session.username, { kind: input.kind, updates: input.updates ? 1 : 0, backups: input.allBackups ? 1 : 0 });
   }

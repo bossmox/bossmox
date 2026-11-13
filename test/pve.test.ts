@@ -17,7 +17,14 @@ function fake(answer: (req: http.IncomingMessage, res: http.ServerResponse) => v
   return new Promise<{ url: URL; seen: string[]; close: () => void }>((resolve) => {
     server.listen(0, "127.0.0.1", () => {
       const { port } = server.address() as AddressInfo;
-      resolve({ url: new URL(`http://127.0.0.1:${port}`), seen, close: () => { server.closeAllConnections(); server.close(); } });
+      resolve({
+        url: new URL(`http://127.0.0.1:${port}`),
+        seen,
+        close: () => {
+          server.closeAllConnections();
+          server.close();
+        },
+      });
     });
   });
 }
@@ -80,7 +87,10 @@ test("reads still fail over after a reset", async () => {
 
 test("an error from Proxmox never carries the query string, where an SMB scan's password travels", async () => {
   // Pre-public review 2026-11-09: a refused SMB scan's error reached the log with the password in it.
-  const refuse = (_: http.IncomingMessage, res: http.ServerResponse) => { res.statusCode = 401; res.end(); };
+  const refuse = (_: http.IncomingMessage, res: http.ServerResponse) => {
+    res.statusCode = 401;
+    res.end();
+  };
   const p = await fake(refuse);
   try {
     await assert.rejects(client(p.url).get("/nodes/a/scan/cifs?server=nas&username=bob&password=hunter2", "t"), (err: Error) => {

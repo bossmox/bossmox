@@ -111,10 +111,15 @@ export class PveClient {
       const req = secure ? https.request(url, options, onResponse) : http.request(url, options, onResponse);
       let connected = false;
       req.on("socket", (socket) => {
-        if (socket.connecting) socket.once("connect", () => { connected = true; });
+        if (socket.connecting)
+          socket.once("connect", () => {
+            connected = true;
+          });
         else connected = true;
       });
-      req.on("timeout", () => req.destroy(new Error(method === "GET" ? "Proxmox took too long to answer" : "Proxmox took too long to answer, and it may still have made the change. Check before trying again.")));
+      req.on("timeout", () =>
+        req.destroy(new Error(method === "GET" ? "Proxmox took too long to answer" : "Proxmox took too long to answer, and it may still have made the change. Check before trying again.")),
+      );
       req.on("error", (err) => reject(Object.assign(err, { unreached: !connected })));
       req.end(body);
     });
@@ -126,8 +131,10 @@ export class PveClient {
    */
   upload(path: string, who: Identity, fields: Record<string, string>, file: { name: string; size: number; stream: NodeJS.ReadableStream }): Promise<string> {
     const boundary = `----BossMox${randomBytes(16).toString("hex")}`;
-    const head = Object.entries(fields).map(([k, v]) => `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`).join("")
-      + `--${boundary}\r\nContent-Disposition: form-data; name="filename"; filename="${file.name}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+    const head =
+      Object.entries(fields)
+        .map(([k, v]) => `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`)
+        .join("") + `--${boundary}\r\nContent-Disposition: form-data; name="filename"; filename="${file.name}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
     const tail = `\r\n--${boundary}--\r\n`;
     const url = new URL(`/api2/json${path}`, this.activeUrl);
     const headers = {
@@ -192,7 +199,11 @@ export class PveClient {
 
 export class PveError extends Error {
   /** `reason` is Proxmox's own explanation, which is worth showing when it refuses an action. */
-  constructor(readonly status: number, message: string, readonly reason?: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly reason?: string,
+  ) {
     super(message);
   }
 }

@@ -63,7 +63,12 @@ export function channelAdds(repos: RawRepositories, target: Channel): string[] {
   const pve = target === "free" ? "no-subscription" : "enterprise";
   if (!isOn(status(pve))) adds.push(pve);
   // Each Ceph release that has a source turned on moves to the same release on the new channel.
-  const releases = new Set(standard.filter((s) => isOn(s.status)).map((s) => CEPH_HANDLE.exec(s.handle)?.[1]).filter((r): r is string => !!r));
+  const releases = new Set(
+    standard
+      .filter((s) => isOn(s.status))
+      .map((s) => CEPH_HANDLE.exec(s.handle)?.[1])
+      .filter((r): r is string => !!r),
+  );
   for (const release of [...releases].sort()) {
     const handle = `ceph-${release}-${CEPH_SUFFIX[target]}`;
     if (!isOn(status(handle))) adds.push(handle);

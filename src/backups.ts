@@ -74,7 +74,14 @@ export function buildBackups(sources: BackupSource[], guests: GuestName[], jobs:
       return {
         id: j.id ?? "",
         when: describeSchedule(j.schedule),
-        what: j.all === 1 ? "Everything" : (j.vmid ?? "").split(",").filter(Boolean).map((v) => names.get(Number(v)) ?? `Guest ${v}`).join(", "),
+        what:
+          j.all === 1
+            ? "Everything"
+            : (j.vmid ?? "")
+                .split(",")
+                .filter(Boolean)
+                .map((v) => names.get(Number(v)) ?? `Guest ${v}`)
+                .join(", "),
         storage: j.storage ?? "",
         on: j.enabled !== 0,
         nextRun: j["next-run"] ?? null,

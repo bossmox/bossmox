@@ -13,14 +13,27 @@ const file = (vmid: number, ctime: number, size = 200 * 1024 ** 2, more = {}) =>
 
 test("backups group by guest, newest first, across servers", () => {
   const view = buildBackups(
-    [{ node: "a", storage: "local", file: file(200, 100) }, { node: "b", storage: "nas", file: file(200, 300) }, { node: "a", storage: "local", file: file(201, 50) }],
-    [{ id: 200, name: "web" }, { id: 201, name: "db" }],
+    [
+      { node: "a", storage: "local", file: file(200, 100) },
+      { node: "b", storage: "nas", file: file(200, 300) },
+      { node: "a", storage: "local", file: file(201, 50) },
+    ],
+    [
+      { id: 200, name: "web" },
+      { id: 201, name: "db" },
+    ],
     [],
     [],
   );
-  assert.deepEqual(view.groups.map((g) => g.name), ["db", "web"]);
+  assert.deepEqual(
+    view.groups.map((g) => g.name),
+    ["db", "web"],
+  );
   const web = view.groups[1];
-  assert.deepEqual(web?.backups.map((b) => b.node), ["b", "a"]);
+  assert.deepEqual(
+    web?.backups.map((b) => b.node),
+    ["b", "a"],
+  );
   assert.equal(web?.backups[0]?.size, "200 MB");
 });
 
@@ -36,12 +49,26 @@ test("a backup with no type gets it from the file name", () => {
 });
 
 test("schedules name their guests and how many they keep", () => {
-  const view = buildBackups([], [{ id: 200, name: "web" }], [
-    { id: "a", schedule: "21:00", all: 1, storage: "nas", enabled: 1, "prune-backups": "keep-last=3" },
-    { id: "b", schedule: "sun 01:00", vmid: "200,201", storage: "nas", enabled: 0, "prune-backups": { "keep-last": 7 } },
-  ], [{ vmid: 200 }]);
-  assert.deepEqual(view.schedules.map((s) => s.what), ["Everything", "web, Guest 201"]);
-  assert.deepEqual(view.schedules.map((s) => s.on), [true, false]);
-  assert.deepEqual(view.schedules.map((s) => s.keep), [3, 7]);
+  const view = buildBackups(
+    [],
+    [{ id: 200, name: "web" }],
+    [
+      { id: "a", schedule: "21:00", all: 1, storage: "nas", enabled: 1, "prune-backups": "keep-last=3" },
+      { id: "b", schedule: "sun 01:00", vmid: "200,201", storage: "nas", enabled: 0, "prune-backups": { "keep-last": 7 } },
+    ],
+    [{ vmid: 200 }],
+  );
+  assert.deepEqual(
+    view.schedules.map((s) => s.what),
+    ["Everything", "web, Guest 201"],
+  );
+  assert.deepEqual(
+    view.schedules.map((s) => s.on),
+    [true, false],
+  );
+  assert.deepEqual(
+    view.schedules.map((s) => s.keep),
+    [3, 7],
+  );
   assert.deepEqual(view.unscheduled, ["web"]);
 });

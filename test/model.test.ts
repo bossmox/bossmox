@@ -32,9 +32,7 @@ test("builds the overview from real-shaped data", () => {
     { type: "storage", storage: "nas", node: "n1", shared: 1, status: "available", disk: G, maxdisk: 10 * G },
     { type: "storage", storage: "nas", node: "n2", shared: 1, status: "available", disk: G, maxdisk: 10 * G },
   ];
-  const guests = new Map([
-    [100, { config: { ostype: "l26", onboot: 1 }, snapshots: [{ name: "current" }, { name: "pre", snaptime: 5 }] }],
-  ]);
+  const guests = new Map([[100, { config: { ostype: "l26", onboot: 1 }, snapshots: [{ name: "current" }, { name: "pre", snaptime: 5 }] }]]);
   const o = buildOverview(res, guests, [{ vmid: 100 }]);
   const ha = o.vms.find((v) => v.id === 100);
   assert.equal(o.vms.find((v) => v.id === 900)?.template, true, "templates are listed, and marked");
@@ -42,9 +40,16 @@ test("builds the overview from real-shaped data", () => {
   const held = o.vms.find((v) => v.id === 901);
   assert.deepEqual([held?.running, held?.paused], [true, true], "a paused guest is on, not shut down");
   assert.equal(ha?.os, "Linux");
-  assert.deepEqual(ha?.snapshots.map((s) => s.name), ["pre"], "the current marker is not a snapshot");
+  assert.deepEqual(
+    ha?.snapshots.map((s) => s.name),
+    ["pre"],
+    "the current marker is not a snapshot",
+  );
   assert.equal(o.storage.length, 2, "shared storage is counted once");
-  assert.deepEqual(o.issues.map((i) => i.kind), ["server-offline", "no-backup", "storage-full"]);
+  assert.deepEqual(
+    o.issues.map((i) => i.kind),
+    ["server-offline", "no-backup", "storage-full"],
+  );
 });
 
 test("refuses to send passwords to Proxmox over plain http", () => {
@@ -54,7 +59,10 @@ test("refuses to send passwords to Proxmox over plain http", () => {
 
 test("accepts several Proxmox addresses and checks each one", () => {
   const c = loadConfig({ PVE_URL: "https://192.0.2.1:8006, https://192.0.2.2:8006" });
-  assert.deepEqual(c.pveUrls.map((u) => u.hostname), ["192.0.2.1", "192.0.2.2"]);
+  assert.deepEqual(
+    c.pveUrls.map((u) => u.hostname),
+    ["192.0.2.1", "192.0.2.2"],
+  );
   assert.throws(() => loadConfig({ PVE_URL: "https://192.0.2.1:8006,http://192.0.2.2:8006" }), /https/);
 });
 
@@ -67,11 +75,15 @@ test("refuses to serve a network without HTTPS", () => {
 });
 
 test("cluster usage weighs nodes by size and skips offline ones", () => {
-  const view = buildOverview([
-    { type: "node", node: "big", status: "online", cpu: 0.1, maxcpu: 30, mem: 8 * 1024 ** 3, maxmem: 32 * 1024 ** 3 },
-    { type: "node", node: "small", status: "online", cpu: 1, maxcpu: 2, mem: 4 * 1024 ** 3, maxmem: 8 * 1024 ** 3 },
-    { type: "node", node: "gone", status: "offline", cpu: 0, maxcpu: 64, mem: 0, maxmem: 512 * 1024 ** 3 },
-  ], new Map(), []);
+  const view = buildOverview(
+    [
+      { type: "node", node: "big", status: "online", cpu: 0.1, maxcpu: 30, mem: 8 * 1024 ** 3, maxmem: 32 * 1024 ** 3 },
+      { type: "node", node: "small", status: "online", cpu: 1, maxcpu: 2, mem: 4 * 1024 ** 3, maxmem: 8 * 1024 ** 3 },
+      { type: "node", node: "gone", status: "offline", cpu: 0, maxcpu: 64, mem: 0, maxmem: 512 * 1024 ** 3 },
+    ],
+    new Map(),
+    [],
+  );
   assert.equal(view.cluster.cores, 32);
   assert.equal(view.cluster.cpuPct, 16);
   assert.equal(view.cluster.memUsedGb, 12);
@@ -81,7 +93,14 @@ test("cluster usage weighs nodes by size and skips offline ones", () => {
 
 test("shared storage counts once in cluster usage", () => {
   const nas = { type: "storage", storage: "nas", shared: 1, status: "available", disk: 10 * 1024 ** 3, maxdisk: 100 * 1024 ** 3 };
-  const view = buildOverview([{ ...nas, node: "a" }, { ...nas, node: "b" }], new Map(), []);
+  const view = buildOverview(
+    [
+      { ...nas, node: "a" },
+      { ...nas, node: "b" },
+    ],
+    new Map(),
+    [],
+  );
   assert.equal(view.cluster.diskTotalGb, 100);
 });
 
@@ -96,11 +115,20 @@ test("only a real disc drive can have its disc changed", () => {
 
 test("every disc drive is listed, on any slot, with what's in it", async () => {
   const { discDrives } = await import("../src/model.js");
-  assert.deepEqual(discDrives({ ide0: "local:iso/virtio.iso,media=cdrom,size=771138K", ide2: "none,media=cdrom", scsi0: "ISCSI:vm-1-disk-0,size=32G", sata3: "cdrom,media=cdrom", ide1: "local:1/vm-1-cloudinit.qcow2,media=cdrom" }), [
-    { slot: "ide0", disc: "local:iso/virtio.iso" },
-    { slot: "ide2", disc: "" },
-    { slot: "sata3", disc: "cdrom" },
-  ]);
+  assert.deepEqual(
+    discDrives({
+      ide0: "local:iso/virtio.iso,media=cdrom,size=771138K",
+      ide2: "none,media=cdrom",
+      scsi0: "ISCSI:vm-1-disk-0,size=32G",
+      sata3: "cdrom,media=cdrom",
+      ide1: "local:1/vm-1-cloudinit.qcow2,media=cdrom",
+    }),
+    [
+      { slot: "ide0", disc: "local:iso/virtio.iso" },
+      { slot: "ide2", disc: "" },
+      { slot: "sata3", disc: "cdrom" },
+    ],
+  );
 });
 
 test("a disc or disk named with a space or '=' still counts as in use (review S3)", () => {

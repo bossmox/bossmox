@@ -26,7 +26,18 @@ function cluster(opts: { nodes?: string[]; guests?: Guest[]; quorate?: boolean; 
   const GB = 1024 ** 3;
   const writes: string[] = [];
   const gates: Promise<void>[] = [];
-  const vm = (g: Guest) => ({ type: g.type ?? "qemu", vmid: g.id, name: g.name, node: g.node, status: g.running === false ? "stopped" : "running", maxmem: 2 * GB, mem: GB, maxcpu: 2, cpu: 0.05, template: 0 });
+  const vm = (g: Guest) => ({
+    type: g.type ?? "qemu",
+    vmid: g.id,
+    name: g.name,
+    node: g.node,
+    status: g.running === false ? "stopped" : "running",
+    maxmem: 2 * GB,
+    mem: GB,
+    maxcpu: 2,
+    cpu: 0.05,
+    template: 0,
+  });
   const node = (n: string) => ({ type: "node", node: n, status: "online", maxcpu: 8, cpu: 0.1, maxmem: 32 * GB, mem: 4 * GB });
   const storage = (n: string) => ({ type: "storage", node: n, storage: "san", status: "available", maxdisk: 1000 * GB, disk: 100 * GB, shared: 1 });
   const answer = async (p: string): Promise<unknown> => {
@@ -84,7 +95,11 @@ function cluster(opts: { nodes?: string[]; guests?: Guest[]; quorate?: boolean; 
     /** Holds every Proxmox answer until the returned function is called, to catch something mid-flight. */
     hold: () => {
       let open = () => {};
-      gates.push(new Promise<void>((r) => { open = r; }));
+      gates.push(
+        new Promise<void>((r) => {
+          open = r;
+        }),
+      );
       return () => open();
     },
     done: () => rmSync(dir, { recursive: true, force: true }),
@@ -99,13 +114,18 @@ test("the run planner lists each running guest on the node with where it would g
     assert.deepEqual(plan.blocked, []);
     const n1 = plan.nodes[0]!;
     assert.equal(n1.name, "n1");
-    assert.deepEqual(n1.vms.map((v) => [v.name, v.choice, v.canMove]), [["db", "move", true], ["web", "move", true]]);
+    assert.deepEqual(
+      n1.vms.map((v) => [v.name, v.choice, v.canMove]),
+      [
+        ["db", "move", true],
+        ["web", "move", true],
+      ],
+    );
     assert.ok(n1.vms.every((v) => v.to === "n2" || v.to === "n3"));
   } finally {
     c.done();
   }
 });
-
 
 test("a move job can't start while a run is still planning (#45)", async () => {
   // A two-vote cluster with an HA guest, so the run is refused once it has planned and nothing keeps running after.
@@ -114,7 +134,10 @@ test("a move job can't start while a run is still planning (#45)", async () => {
     const release = c.hold();
     const run = c.jobs.startRun(person, "restart", "n1", true, {});
     // The run is planning: it has claimed the cluster but hasn't asked Proxmox anything back yet.
-    await assert.rejects(c.jobs.startMoveJob(person, async () => null), (e: Error & { status?: number }) => e.status === 409);
+    await assert.rejects(
+      c.jobs.startMoveJob(person, async () => null),
+      (e: Error & { status?: number }) => e.status === 409,
+    );
     release();
     await assert.rejects(run, /only 2 votes/);
     // And once the run has finished planning (refused here), moves can start again.
@@ -126,7 +149,10 @@ test("a move job can't start while a run is still planning (#45)", async () => {
 
 test("BossMox in a container recognises itself and won't run on its node; in a VM it moves itself (#46)", async () => {
   const mine = "bc:24:11:aa:bb:cc";
-  const guests = [{ id: 200, name: "bossmox", node: "n1", type: "lxc" as const, config: { net0: `name=eth0,bridge=vmbr0,hwaddr=${mine.toUpperCase()},ip=dhcp` } }, { id: 101, name: "db", node: "n1" }];
+  const guests = [
+    { id: 200, name: "bossmox", node: "n1", type: "lxc" as const, config: { net0: `name=eth0,bridge=vmbr0,hwaddr=${mine.toUpperCase()},ip=dhcp` } },
+    { id: 101, name: "db", node: "n1" },
+  ];
   const c = cluster({ guests });
   c.ctx.macs = () => new Set([mine]);
   try {
@@ -151,7 +177,10 @@ test("BossMox in a container recognises itself and won't run on its node; in a V
 
 test("on two votes a run won't restart a node while HA looks after guests; a connected tie-breaker lets it go (#43, #51)", async () => {
   const two = (qdevice?: Record<string, unknown>) => cluster({ nodes: ["n1", "n2"], ha: ["vm:101"], ...(qdevice ? { qdevice } : {}) });
-  for (const [why, q] of [["no tie-breaker", undefined], ["a tie-breaker that isn't connected", { State: "Disconnected" }]] as const) {
+  for (const [why, q] of [
+    ["no tie-breaker", undefined],
+    ["a tie-breaker that isn't connected", { State: "Disconnected" }],
+  ] as const) {
     const c = two(q);
     try {
       const plan = await c.jobs.runPlan("t", "restart", "n1");

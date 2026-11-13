@@ -1,4 +1,3 @@
-
 import { AuthError } from "../auth.js";
 import { KINDS, type AlertKind } from "../alerts.js";
 import { applyChannel, ChannelError } from "../update-channel.js";
@@ -34,7 +33,15 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     "alerts-save": async (_name, who, body) => {
       const kind = text(body.kind, 16) as AlertKind;
       if (!KINDS.includes(kind)) throw new HttpError(400, "Pick where alerts go.");
-      await c.alerts.save(who, { kind, server: text(body.alertServer, 256), topic: text(body.topic, 64), link: text(body.link, 1024), token: text(body.token, 512), updates: body.updates === true, allBackups: body.allBackups === true });
+      await c.alerts.save(who, {
+        kind,
+        server: text(body.alertServer, 256),
+        topic: text(body.topic, 64),
+        link: text(body.link, 1024),
+        token: text(body.token, 512),
+        updates: body.updates === true,
+        allBackups: body.allBackups === true,
+      });
       return null;
     },
     "alerts-test": async (_name, who) => {
@@ -62,11 +69,15 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       const target = body.channel;
       if (target !== "free" && target !== "enterprise") throw new HttpError(400, "That request isn't valid.");
       try {
-        return await applyChannel({
-          get: (p) => pve.get(p, who.ticket),
-          put: (p, form) => pve.put(p, who, form),
-          post: (p, form) => pve.post(p, who, form),
-        }, name, target);
+        return await applyChannel(
+          {
+            get: (p) => pve.get(p, who.ticket),
+            put: (p, form) => pve.put(p, who, form),
+            post: (p, form) => pve.post(p, who, form),
+          },
+          name,
+          target,
+        );
       } catch (err) {
         if (err instanceof ChannelError) throw new HttpError(400, err.message);
         throw err;
@@ -83,9 +94,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       const type = body.type;
       if (!/^\d+$/.test(id) || !NODE_NAME.test(target) || (type !== "qemu" && type !== "lxc")) throw new HttpError(400, "That move request isn't valid.");
       if (body.confirm !== id) throw new HttpError(400, "The move wasn't confirmed.");
-      const form: Record<string, string> = type === "qemu"
-        ? { target, online: "1", "with-local-disks": "1" }
-        : { target, restart: "1" };
+      const form: Record<string, string> = type === "qemu" ? { target, online: "1", "with-local-disks": "1" } : { target, restart: "1" };
       return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${type}/${id}/migrate`, who, form);
     },
     "move-off": async (name, who, body) => {
@@ -140,13 +149,25 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       return null;
     },
     "preferences-set": async (_name, who, body) => {
-      const elsewhere = body.backupsElsewhere, check = body.updateCheck, keep = body.keepFreePct;
-      if ((elsewhere !== undefined && typeof elsewhere !== "boolean") || (check !== undefined && typeof check !== "boolean") || (keep !== undefined && !(typeof keep === "number" && KEEP_FREE_CHOICES.includes(keep))) || (elsewhere === undefined && check === undefined && keep === undefined))
+      const elsewhere = body.backupsElsewhere,
+        check = body.updateCheck,
+        keep = body.keepFreePct;
+      if (
+        (elsewhere !== undefined && typeof elsewhere !== "boolean") ||
+        (check !== undefined && typeof check !== "boolean") ||
+        (keep !== undefined && !(typeof keep === "number" && KEEP_FREE_CHOICES.includes(keep))) ||
+        (elsewhere === undefined && check === undefined && keep === undefined)
+      )
         throw new HttpError(400, "That request isn't valid.");
       // A cluster-wide choice needs the right to change the cluster's own settings in Proxmox (ADR 0018).
       const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", who.ticket).catch((): Record<string, Record<string, number>> => ({}));
       if (!canChangeCluster(perms)) throw new AuthError(403, "Your Proxmox account can't change settings for the whole cluster. That needs the Sys.Modify permission on the whole cluster (/).");
-      const next = { ...c.preferences(), ...(typeof elsewhere === "boolean" ? { backupsElsewhere: elsewhere } : {}), ...(typeof check === "boolean" ? { updateCheck: check } : {}), ...(typeof keep === "number" ? { keepFreePct: keep } : {}) };
+      const next = {
+        ...c.preferences(),
+        ...(typeof elsewhere === "boolean" ? { backupsElsewhere: elsewhere } : {}),
+        ...(typeof check === "boolean" ? { updateCheck: check } : {}),
+        ...(typeof keep === "number" ? { keepFreePct: keep } : {}),
+      };
       try {
         writePreferences(c.preferencesFile, next);
       } catch {

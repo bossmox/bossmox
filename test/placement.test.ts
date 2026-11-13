@@ -93,7 +93,14 @@ test("disks on a node's own storage need room on the target, keeping 10% free", 
   // local-lvm on n2: 200 GB free of 400, keeps 40, so 160 GB can be copied.
   const ok = planMoves("n1", [guest(1, "a", 2, { storages: ["local-lvm"], localDisks: [{ storage: "local-lvm", bytes: 150 * GB }] })], [node("n1", 64, 1), node("n2", 64, 1)]);
   assert.deepEqual(ok.problems, []);
-  const two = planMoves("n1", [guest(1, "a", 2, { storages: ["local-lvm"], localDisks: [{ storage: "local-lvm", bytes: 100 * GB }] }), guest(2, "b", 2, { storages: ["local-lvm"], localDisks: [{ storage: "local-lvm", bytes: 100 * GB }] })], [node("n1", 64, 1), node("n2", 64, 1)]);
+  const two = planMoves(
+    "n1",
+    [
+      guest(1, "a", 2, { storages: ["local-lvm"], localDisks: [{ storage: "local-lvm", bytes: 100 * GB }] }),
+      guest(2, "b", 2, { storages: ["local-lvm"], localDisks: [{ storage: "local-lvm", bytes: 100 * GB }] }),
+    ],
+    [node("n1", 64, 1), node("n2", 64, 1)],
+  );
   assert.equal(two.problems.length, 1, "the second copy doesn't fit once the first is counted");
   assert.match(two.problems[0] as string, /left on local-lvm after copying 100 GB/);
 });
@@ -125,12 +132,22 @@ test("no other node, no moves", () => {
 const sourceStorages = { "local-lvm": { free: 0, total: 0, shared: false }, local: { free: 0, total: 0, shared: false }, nfs: { free: 0, total: 0, shared: true } };
 test("guestNeed reads storages, local disks and sizes from the settings", () => {
   const need = guestNeed({
-    id: 100, name: "web", type: "qemu", mem: 8 * GB, cores: 4, cpuLoad: 1, hasSnapshots: false, sourceStorages,
+    id: 100,
+    name: "web",
+    type: "qemu",
+    mem: 8 * GB,
+    cores: 4,
+    cpuLoad: 1,
+    hasSnapshots: false,
+    sourceStorages,
     config: { scsi0: "local-lvm:vm-100-disk-0,size=32G", scsi1: "nfs:100/vm-100-disk-1.qcow2,size=100G", efidisk0: "local-lvm:vm-100-disk-2,size=4M", ide2: "none,media=cdrom", cpu: "x86-64-v2-AES" },
     precondition: { local_disks: [{ volid: "local-lvm:vm-100-disk-0", size: 30 * GB }] },
   });
   assert.deepEqual(need.storages.sort(), ["local-lvm", "nfs"]);
-  assert.deepEqual(need.localDisks, [{ storage: "local-lvm", bytes: 30 * GB }, { storage: "local-lvm", bytes: 4 * 1024 ** 2 }]);
+  assert.deepEqual(need.localDisks, [
+    { storage: "local-lvm", bytes: 30 * GB },
+    { storage: "local-lvm", bytes: 4 * 1024 ** 2 },
+  ]);
   assert.equal(need.hostCpu, false);
   assert.equal(need.stuck, null);
 });
@@ -152,7 +169,12 @@ test("guestNeed reads Proxmox's refusals, ignoring empty entries, for VMs and co
   const base = { id: 1, name: "g", mem: GB, cores: 1, cpuLoad: 0, hasSnapshots: false, sourceStorages, config: {} };
   const vm = guestNeed({ ...base, type: "qemu", precondition: { not_allowed_nodes: { n2: { unavailable_storages: ["fast"] }, n3: {} } } });
   assert.deepEqual(vm.refused, { n2: "doesn't have the storage fast" });
-  const ct = guestNeed({ ...base, type: "lxc", config: { rootfs: "local-lvm:vm-1-disk-0,size=8G" }, precondition: { "not-allowed-nodes": { n2: { "blocking-ha-resources": [{ sid: "ct:1", cause: "node-affinity" }] } } } });
+  const ct = guestNeed({
+    ...base,
+    type: "lxc",
+    config: { rootfs: "local-lvm:vm-1-disk-0,size=8G" },
+    precondition: { "not-allowed-nodes": { n2: { "blocking-ha-resources": [{ sid: "ct:1", cause: "node-affinity" }] } } },
+  });
   assert.match(ct.refused.n2 ?? "", /HA rule/);
   assert.deepEqual(ct.localDisks, [{ storage: "local-lvm", bytes: 8 * GB }]);
 });
@@ -181,14 +203,27 @@ test("a VM stuck only by a disc from local storage can be freed by ejecting it, 
 });
 
 test("each guest that can't be placed is named, and the rest still get a place", () => {
-  const plan = planMoves("n1", [guest(1, "small", 2), guest(2, "huge", 60), guest(3, "stuck", 1, { stuck: "stuck uses hardware attached to its node, so it can't move." })], [node("n1", 64, 1), node("n2", 64, 30)]);
+  const plan = planMoves(
+    "n1",
+    [guest(1, "small", 2), guest(2, "huge", 60), guest(3, "stuck", 1, { stuck: "stuck uses hardware attached to its node, so it can't move." })],
+    [node("n1", 64, 1), node("n2", 64, 30)],
+  );
   assert.deepEqual(plan.moves, [], "all or nothing for a plain move");
   assert.deepEqual(plan.unplaced?.map((u) => u.id).sort(), [2, 3]);
-  assert.deepEqual(plan.tentative?.map((m) => `${m.id}->${m.target}`), ["1->n2"]);
+  assert.deepEqual(
+    plan.tentative?.map((m) => `${m.id}->${m.target}`),
+    ["1->n2"],
+  );
 });
 
 test("planning as if ejected empties disc drives, keeps cloud-init, and names the slots (#48)", () => {
-  const { config, slots } = asEjected({ ide2: "local:iso/setup.iso,media=cdrom", sata1: "cdrom,media=cdrom", ide0: "local-lvm:vm-1-cloudinit,media=cdrom", ide3: "none,media=cdrom", scsi0: "local-lvm:vm-1-disk-0" });
+  const { config, slots } = asEjected({
+    ide2: "local:iso/setup.iso,media=cdrom",
+    sata1: "cdrom,media=cdrom",
+    ide0: "local-lvm:vm-1-cloudinit,media=cdrom",
+    ide3: "none,media=cdrom",
+    scsi0: "local-lvm:vm-1-disk-0",
+  });
   assert.deepEqual(slots, ["ide2", "sata1"]);
   assert.equal(config.ide2, "none,media=cdrom");
   assert.equal(config.ide0, "local-lvm:vm-1-cloudinit,media=cdrom");
@@ -196,7 +231,17 @@ test("planning as if ejected empties disc drives, keeps cloud-init, and names th
 });
 
 test("the planner marks a guest refused only for a busy processor, and not one short of memory (#64)", () => {
-  const room = (name: string, over: Partial<NodeRoom> = {}): NodeRoom => ({ name, version: "8.4.21", cpuModel: "x", cores: 4, cpuLoad: 0.2, memTotal: 32 * 1024 ** 3, memUsed: 4 * 1024 ** 3, storages: {}, ...over });
+  const room = (name: string, over: Partial<NodeRoom> = {}): NodeRoom => ({
+    name,
+    version: "8.4.21",
+    cpuModel: "x",
+    cores: 4,
+    cpuLoad: 0.2,
+    memTotal: 32 * 1024 ** 3,
+    memUsed: 4 * 1024 ** 3,
+    storages: {},
+    ...over,
+  });
   const g = guestNeed({ id: 1, name: "db", type: "qemu", mem: 2 * 1024 ** 3, cores: 2, cpuLoad: 1, config: {}, hasSnapshots: false, precondition: {}, sourceStorages: {} });
   const busy = planMoves("n1", [g], [room("n1"), room("n2", { cpuLoad: 3.9 })], 10);
   assert.equal(busy.unplaced?.[0]?.busyOnly, true);
@@ -212,7 +257,11 @@ test("a container with a bind mount can't move, and a guest in a restricted HA g
   assert.match(bound.stuck ?? "", /uses a folder on its node \(mp0\)/);
   const grouped = guestNeed({ ...facts, name: "db", type: "qemu", config: {}, haNodes: ["n1", "n3"] });
   const plan = planMoves("n1", [grouped], [room("n1"), room("n2"), room("n3")], 10);
-  assert.deepEqual(plan.moves.map((m) => m.target), ["n3"], "never n2, which its group leaves out");
+  assert.deepEqual(
+    plan.moves.map((m) => m.target),
+    ["n3"],
+    "never n2, which its group leaves out",
+  );
   const nowhere = planMoves("n1", [guestNeed({ ...facts, name: "db", type: "qemu", config: {}, haNodes: ["n1"] })], [room("n1"), room("n2")], 10);
   assert.match(nowhere.problems[0] ?? "", /n2 isn't in db's HA group \(n1\)/);
 });

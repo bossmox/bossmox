@@ -1,6 +1,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildMovePlan, buildRebootPlan, buildRollingPlan, buildTaskFeed, failedCheck, buildTaskLog, buildServerDetail, friendlyUptime, groupUpdates, taskResult, taskView, updateChannel, type RawRepositories, type RawService, type Section } from "../src/server-detail.js";
+import {
+  buildMovePlan,
+  buildRebootPlan,
+  buildRollingPlan,
+  buildTaskFeed,
+  failedCheck,
+  buildTaskLog,
+  buildServerDetail,
+  friendlyUptime,
+  groupUpdates,
+  taskResult,
+  taskView,
+  updateChannel,
+  type RawRepositories,
+  type RawService,
+  type Section,
+} from "../src/server-detail.js";
 
 const repo = (uri: string, component: string, enabled = true): RawRepositories => ({
   files: [{ repositories: [{ Enabled: enabled, URIs: [uri], Components: [component] }] }],
@@ -30,10 +46,16 @@ test("the enterprise channel without a subscription is flagged", () => {
 });
 
 test("having both channels on counts as free, but flags the failing checks without a subscription", () => {
-  const both: RawRepositories = { files: [{ repositories: [
-    { Enabled: true, URIs: [ENT], Components: ["pve-enterprise"] },
-    { Enabled: true, URIs: [PVE], Components: ["pve-no-subscription"] },
-  ] }] };
+  const both: RawRepositories = {
+    files: [
+      {
+        repositories: [
+          { Enabled: true, URIs: [ENT], Components: ["pve-enterprise"] },
+          { Enabled: true, URIs: [PVE], Components: ["pve-no-subscription"] },
+        ],
+      },
+    ],
+  };
   // Measured in the lab: updates still download, but apt-get update exits 100 and the task fails.
   const c = updateChannel(both, { status: "notfound" });
   assert.equal(c.name, "Free (no subscription)");
@@ -72,7 +94,13 @@ test("following a task reports running, success and failure", () => {
 test("a reboot plan lists running jobs and usable backup storage", () => {
   const plan = buildRebootPlan(
     { available: true, value: [{ upid: "x", type: "vzdump", id: "100" }] },
-    { available: true, value: [{ storage: "qcow", avail: 2 * 1024 ** 3, active: 1, enabled: 1 }, { storage: "off", active: 0 }] },
+    {
+      available: true,
+      value: [
+        { storage: "qcow", avail: 2 * 1024 ** 3, active: 1, enabled: 1 },
+        { storage: "off", active: 0 },
+      ],
+    },
   );
   assert.deepEqual(plan.busy, ["Backup on 100"]);
   assert.deepEqual(plan.backupStorages, [{ name: "qcow", freeGb: 2, shared: false }]);
@@ -113,18 +141,33 @@ test("a limited account gets empty sections instead of a failure", () => {
   assert.equal(d.channel, null);
 });
 
-const rolling = (name: string, version: string, updates: number | null = 1, more = {}) => ({ name, online: true, version, updates, rebootNeeded: false, busy: [] as string[], cantMove: [] as string[], ...more });
+const rolling = (name: string, version: string, updates: number | null = 1, more = {}) => ({
+  name,
+  online: true,
+  version,
+  updates,
+  rebootNeeded: false,
+  busy: [] as string[],
+  cantMove: [] as string[],
+  ...more,
+});
 const healthy = { available: true as const, value: true };
 const voteOn = { available: true as const, value: { State: "Connected" } };
 
 test("rolling updates start with the oldest server, by number and not by text", () => {
   const plan = buildRollingPlan([rolling("a", "9.10.1"), rolling("b", "9.2.26"), rolling("c", "9.2.26")], healthy, voteOn);
-  assert.deepEqual(plan.servers.map((s) => s.name), ["b", "c", "a"]);
+  assert.deepEqual(
+    plan.servers.map((s) => s.name),
+    ["b", "c", "a"],
+  );
 });
 
 test("servers with nothing waiting are left out of a rolling update", () => {
   const plan = buildRollingPlan([rolling("a", "9.2.26", 0), rolling("b", "9.2.26", 3)], healthy, voteOn);
-  assert.deepEqual(plan.servers.map((s) => s.name), ["b"]);
+  assert.deepEqual(
+    plan.servers.map((s) => s.name),
+    ["b"],
+  );
   assert.deepEqual(plan.blocked, []);
 });
 
@@ -154,30 +197,37 @@ test("a guest that can't move only blocks a server that's going to restart", () 
 const task = (upid: string, type: string, starttime: number, more = {}) => ({ upid, type, starttime, status: "OK", endtime: starttime + 5, node: "a", ...more });
 
 test("the task feed puts running work first, then the newest", () => {
-  const feed = buildTaskFeed([
-    task("old", "aptupdate", 100),
-    task("new", "vzdump", 300),
-    task("live", "qmigrate", 200, { status: undefined, endtime: undefined }),
-  ], []);
-  assert.deepEqual(feed.items.map((t) => t.upid), ["live", "new", "old"]);
+  const feed = buildTaskFeed([task("old", "aptupdate", 100), task("new", "vzdump", 300), task("live", "qmigrate", 200, { status: undefined, endtime: undefined })], []);
+  assert.deepEqual(
+    feed.items.map((t) => t.upid),
+    ["live", "new", "old"],
+  );
   assert.equal(feed.running, 1);
 });
 
 test("the task feed leaves out console sessions and names guests", () => {
-  const feed = buildTaskFeed([
-    task("a", "vncproxy", 300, { id: "300" }),
-    task("b", "vncshell", 290),
-    task("c", "qmstart", 200, { id: "300" }),
-    task("d", "qmstart", 100, { id: "999" }),
-  ], [{ id: 300, name: "tiny-vm" }]);
-  assert.deepEqual(feed.items.map((t) => t.target), ["tiny-vm", "999"], "a deleted guest keeps its number");
+  const feed = buildTaskFeed(
+    [task("a", "vncproxy", 300, { id: "300" }), task("b", "vncshell", 290), task("c", "qmstart", 200, { id: "300" }), task("d", "qmstart", 100, { id: "999" })],
+    [{ id: 300, name: "tiny-vm" }],
+  );
+  assert.deepEqual(
+    feed.items.map((t) => t.target),
+    ["tiny-vm", "999"],
+    "a deleted guest keeps its number",
+  );
   assert.equal(feed.items[0]?.what, "Start VM");
 });
 
 test("the task feed shows every running task, however many", () => {
   const live = Array.from({ length: 9 }, (_, i) => task(`r${i}`, "vzdump", i, { status: undefined, endtime: undefined }));
   assert.equal(buildTaskFeed([...live, task("x", "aptupdate", 50)], []).items.length, 9);
-  assert.equal(buildTaskFeed(Array.from({ length: 20 }, (_, i) => task(`f${i}`, "vzdump", i)), []).items.length, 6);
+  assert.equal(
+    buildTaskFeed(
+      Array.from({ length: 20 }, (_, i) => task(`f${i}`, "vzdump", i)),
+      [],
+    ).items.length,
+    6,
+  );
 });
 
 test("a failed task shows as failed", () => {
@@ -185,16 +235,45 @@ test("a failed task shows as failed", () => {
 });
 
 test("an open console doesn't count as a node being busy", () => {
-  const plan = buildRebootPlan({ available: true, value: [{ upid: "a", type: "vncproxy", id: "300" }, { upid: "b", type: "termproxy" }, { upid: "c", type: "vzdump", id: "200" }] }, { available: false });
+  const plan = buildRebootPlan(
+    {
+      available: true,
+      value: [
+        { upid: "a", type: "vncproxy", id: "300" },
+        { upid: "b", type: "termproxy" },
+        { upid: "c", type: "vzdump", id: "200" },
+      ],
+    },
+    { available: false },
+  );
   assert.deepEqual(plan.busy, ["Backup on 200"]);
 });
 
 test("the full task list merges every node, newest first, and says what it couldn't reach", () => {
-  const log = buildTaskLog([
-    { node: "a", tasks: [{ upid: "1", type: "qmstart", id: "100", user: "root@pam", starttime: 10, endtime: 11, status: "OK" }, { upid: "2", type: "vncproxy", id: "100", starttime: 5, endtime: 6, status: "OK" }] },
-    { node: "b", tasks: [{ upid: "3", type: "qmstop", id: "7", starttime: 20, endtime: 21, status: "boom" }] },
-  ], ["c"], [{ id: 100, name: "web" }], 2);
-  assert.deepEqual(log.items.map((t) => [t.upid, t.node]), [["3", "b"], ["1", "a"], ["2", "a"]], "console sessions stay in the full list");
+  const log = buildTaskLog(
+    [
+      {
+        node: "a",
+        tasks: [
+          { upid: "1", type: "qmstart", id: "100", user: "root@pam", starttime: 10, endtime: 11, status: "OK" },
+          { upid: "2", type: "vncproxy", id: "100", starttime: 5, endtime: 6, status: "OK" },
+        ],
+      },
+      { node: "b", tasks: [{ upid: "3", type: "qmstop", id: "7", starttime: 20, endtime: 21, status: "boom" }] },
+    ],
+    ["c"],
+    [{ id: 100, name: "web" }],
+    2,
+  );
+  assert.deepEqual(
+    log.items.map((t) => [t.upid, t.node]),
+    [
+      ["3", "b"],
+      ["1", "a"],
+      ["2", "a"],
+    ],
+    "console sessions stay in the full list",
+  );
   assert.equal(log.items[1]?.target, "web");
   assert.equal(log.items[0]?.result, "failed");
   assert.equal(log.more, true, "a node hit the limit, so there may be more");
@@ -203,9 +282,16 @@ test("the full task list merges every node, newest first, and says what it could
 
 test("a node whose update check failed sits the run out and doesn't block the others (#73)", () => {
   const why = "command 'apt-get update' failed: exit code 100";
-  const plan = buildRollingPlan([rolling("a", "9.2.26", 2), rolling("b", "9.2.26", null, { checkFailed: why, busy: ["a backup"], cantMove: ["b: stuck"] }), rolling("c", "9.2.26", 2)], healthy, voteOn);
+  const plan = buildRollingPlan(
+    [rolling("a", "9.2.26", 2), rolling("b", "9.2.26", null, { checkFailed: why, busy: ["a backup"], cantMove: ["b: stuck"] }), rolling("c", "9.2.26", 2)],
+    healthy,
+    voteOn,
+  );
   assert.deepEqual(plan.blocked, [], "b's failed check, busy task and moves don't stop a and c");
-  assert.deepEqual(plan.servers.map((s) => s.name), ["a", "c"]);
+  assert.deepEqual(
+    plan.servers.map((s) => s.name),
+    ["a", "c"],
+  );
   assert.deepEqual(plan.notChecked, [{ name: "b", why }]);
   const unread = buildRollingPlan([rolling("a", "9.2.26", 2), rolling("b", "9.2.26", null)], healthy, voteOn);
   assert.deepEqual(unread.blocked, ["BossMox can't read the updates on: b."], "an unreadable list with no failed check still blocks");

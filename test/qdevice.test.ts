@@ -45,9 +45,18 @@ function fake(opts: { portClosed?: boolean; installFails?: boolean } = {}) {
   const lines: string[] = [];
   const pve = {
     get: async (path: string) => {
-      if (path === "/cluster/status") return [{ type: "cluster", name: "bmx2lab", quorate: 1 }, { type: "node", name: "bmx2-node1", online: 1 }, { type: "node", name: "bmx2-node2", online: 1 }];
+      if (path === "/cluster/status")
+        return [
+          { type: "cluster", name: "bmx2lab", quorate: 1 },
+          { type: "node", name: "bmx2-node1", online: 1 },
+          { type: "node", name: "bmx2-node2", online: 1 },
+        ];
       if (path === "/cluster/config/qdevice") return {};
-      if (path === "/cluster/config/nodes") return [{ node: "bmx2-node1", ring0_addr: "10.0.30.251" }, { node: "bmx2-node2", ring0_addr: "10.0.30.252" }];
+      if (path === "/cluster/config/nodes")
+        return [
+          { node: "bmx2-node1", ring0_addr: "10.0.30.251" },
+          { node: "bmx2-node2", ring0_addr: "10.0.30.252" },
+        ];
       if (/\/network$/.test(path)) return [];
       throw new Error(`unexpected ${path}`);
     },

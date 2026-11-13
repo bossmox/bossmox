@@ -96,12 +96,17 @@ export function runOnNode(config: ShellConfig, node: string, ticket: string, pro
       // Only a finished command gets "exit": while the install still runs, what's typed would go to it.
       try {
         if (!err && ws.readyState === WebSocket.OPEN) send("exit\n");
-      } catch { /* closing anyway */ }
+      } catch {
+        /* closing anyway */
+      }
       ws.close();
       if (err) reject(err);
       else resolve(result as ShellResult);
     };
-    const timer = setTimeout(() => end(new Error(`The install on ${node} didn't finish within ${Math.round(timeoutMs / 60000)} minutes. It carries on there by itself; check the node before restarting it.`)), timeoutMs);
+    const timer = setTimeout(
+      () => end(new Error(`The install on ${node} didn't finish within ${Math.round(timeoutMs / 60000)} minutes. It carries on there by itself; check the node before restarting it.`)),
+      timeoutMs,
+    );
     // The shell needs a moment after the login line; a login prompt in that time means no root shell.
     let typeAfter: NodeJS.Timeout | undefined;
     const typeCommand = () => {

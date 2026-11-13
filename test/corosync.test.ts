@@ -10,7 +10,14 @@ test("reads the lab's real heartbeat file (Proxmox 8.4)", () => {
   const c = readConf(lab);
   assert.equal(c.clusterName, "bmx8lab");
   assert.equal(c.version, 3);
-  assert.deepEqual(c.nodes.map((n) => [n.name, n.nodeid, n.rings[0]]), [["bmx8-node1", 1, "10.0.30.244"], ["bmx8-node2", 2, "10.0.30.245"], ["bmx8-node3", 3, "10.0.30.246"]]);
+  assert.deepEqual(
+    c.nodes.map((n) => [n.name, n.nodeid, n.rings[0]]),
+    [
+      ["bmx8-node1", 1, "10.0.30.244"],
+      ["bmx8-node2", 2, "10.0.30.245"],
+      ["bmx8-node3", 3, "10.0.30.246"],
+    ],
+  );
   assert.deepEqual(linksIn(c), [0]);
 });
 
@@ -18,7 +25,10 @@ test("adding link 1 adds an address per node and a totem interface, raises the v
   const out = addLink(lab, 1, addrs);
   const c = readConf(out);
   assert.equal(c.version, 4);
-  assert.deepEqual(c.nodes.map((n) => n.rings[1]), ["10.0.31.244", "10.0.31.245", "10.0.31.246"]);
+  assert.deepEqual(
+    c.nodes.map((n) => n.rings[1]),
+    ["10.0.31.244", "10.0.31.245", "10.0.31.246"],
+  );
   assert.deepEqual(c.interfaces, [0, 1]);
   assert.deepEqual(linksIn(c), [0, 1]);
   // Only added lines and the version line differ.

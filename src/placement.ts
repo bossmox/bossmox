@@ -139,17 +139,22 @@ export function guestNeed(f: GuestFacts): GuestNeed {
   const storages = [...new Set(volumes.map((v) => v.storage).filter(Boolean))];
   const isLocal = (storage: string) => f.sourceStorages[storage]?.shared !== true;
   const discs = volumes.filter((v) => v.value.includes("media=cdrom") && !v.value.includes("cloudinit"));
-  const physical = Object.entries(f.config).filter(([k, v]) => /^(ide|sata|scsi)\d+$/.test(k) && String(v).startsWith("cdrom")).map(([k]) => k);
+  const physical = Object.entries(f.config)
+    .filter(([k, v]) => /^(ide|sata|scsi)\d+$/.test(k) && String(v).startsWith("cdrom"))
+    .map(([k]) => k);
   const discSlots = [...physical, ...discs.filter((d) => isLocal(d.storage)).map((d) => d.slot)];
   // A container's bind mount is a folder on its node (mp0: /mnt/data,...). It isn't a volume, so it's easy to miss (#59).
-  const bindMounts = Object.entries(f.config).filter(([k, v]) => /^mp\d+$/.test(k) && String(v).startsWith("/")).map(([k]) => k);
+  const bindMounts = Object.entries(f.config)
+    .filter(([k, v]) => /^mp\d+$/.test(k) && String(v).startsWith("/"))
+    .map(([k]) => k);
   let stuck: string | null = null;
   if ((f.precondition.local_resources ?? []).length > 0) stuck = `${f.name} uses hardware attached to its node, so it can't move.`;
   else if (bindMounts.length) stuck = `${f.name} uses a folder on its node (${bindMounts.join(", ")}), so it can't move. Shut it down for the restart instead.`;
   else if (physical.length) stuck = `${f.name} uses its node's own disc drive, so it can't move. Eject it first.`;
   else if (discs.some((d) => isLocal(d.storage))) stuck = `${f.name} has a disc image from its node's own storage in its drive, so it can't move. Eject the disc first.`;
   const copied = volumes.filter((v) => !v.value.includes("media=cdrom") && isLocal(v.storage));
-  if (!stuck && f.hasSnapshots && copied.length > 0 && f.type === "qemu") stuck = `${f.name} has a snapshot on its node's own storage, so it can't move while running. Delete the snapshot or shut it down first.`;
+  if (!stuck && f.hasSnapshots && copied.length > 0 && f.type === "qemu")
+    stuck = `${f.name} has a snapshot on its node's own storage, so it can't move while running. Delete the snapshot or shut it down first.`;
   // Proxmox's own sizes win for VMs; the settings' size= is the fallback and the only source for containers.
   const measured = new Map((f.precondition.local_disks ?? []).filter((d) => d.volid && !d.cdrom).map((d) => [d.volid as string, Number(d.size ?? 0)]));
   const localDisks = copied.map((v) => ({ storage: v.storage, bytes: measured.get(v.value.split(",")[0] ?? "") || parseSize(v.value) }));
@@ -158,13 +163,31 @@ export function guestNeed(f: GuestFacts): GuestNeed {
   for (const [node, why] of Object.entries(notAllowed)) {
     // Proxmox can list a usable node here with an empty entry, so only a stated reason counts.
     if (why.unavailable_storages?.length) refused[node] = `doesn't have the storage ${why.unavailable_storages.join(", ")}`;
-    else if (why["blocking-ha-resources"]?.length) refused[node] = `an HA rule keeps it off (${why["blocking-ha-resources"].map((b) => b.sid).filter(Boolean).join(", ")})`;
+    else if (why["blocking-ha-resources"]?.length)
+      refused[node] = `an HA rule keeps it off (${why["blocking-ha-resources"]
+        .map((b) => b.sid)
+        .filter(Boolean)
+        .join(", ")})`;
   }
   const cpu = String(f.config.cpu ?? "");
   const hostCpu = /^(cputype=)?host(,|$)/.test(cpu);
   // Ejecting only helps when the disc is the whole story: not with passed-through hardware or a snapshot too.
   const discOnly = discSlots.length > 0 && stuck !== null && /disc image|own disc drive/.test(stuck);
-  return { id: f.id, name: f.name, type: f.type, mem: f.mem, cores: f.cores, cpuLoad: f.cpuLoad, storages, localDisks, hostCpu, stuck, refused, discSlots: discOnly ? discSlots : [], ...(f.haNodes ? { onlyNodes: f.haNodes } : {}) };
+  return {
+    id: f.id,
+    name: f.name,
+    type: f.type,
+    mem: f.mem,
+    cores: f.cores,
+    cpuLoad: f.cpuLoad,
+    storages,
+    localDisks,
+    hostCpu,
+    stuck,
+    refused,
+    discSlots: discOnly ? discSlots : [],
+    ...(f.haNodes ? { onlyNodes: f.haNodes } : {}),
+  };
 }
 
 interface Projected extends NodeRoom {
@@ -209,9 +232,7 @@ function roomCheck(g: GuestNeed, n: Projected, from: NodeRoom, keepPct: number):
  */
 export function planMoves(from: string, guests: GuestNeed[], nodes: NodeRoom[], keepPct = 10): MovePlan {
   const source = nodes.find((n) => n.name === from);
-  const others: Projected[] = nodes
-    .filter((n) => n.name !== from)
-    .map((n) => ({ ...n, storages: Object.fromEntries(Object.entries(n.storages).map(([k, s]) => [k, { ...s }])) }));
+  const others: Projected[] = nodes.filter((n) => n.name !== from).map((n) => ({ ...n, storages: Object.fromEntries(Object.entries(n.storages).map(([k, s]) => [k, { ...s }])) }));
   if (!source) return { moves: [], problems: [`BossMox can't read ${from}'s numbers.`] };
   if (!others.length && guests.length) return { moves: [], problems: ["There's no other online node to move anything to."] };
   const moves: Move[] = [];

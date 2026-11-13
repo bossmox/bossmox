@@ -62,13 +62,13 @@ const SLOW_NICS = new Set(["e1000", "e1000e", "vmxnet3", "rtl8139"]);
  * and missing one would make a mounted disc look unused (review S3). Extra matches only make BossMox more careful.
  */
 export const volumeRefs = (config: RawConfig): string[] =>
-  Object.values(config).map((v) => String(v).split(",")[0] as string).filter((v) => /^[A-Za-z][\w.-]*:\S/.test(v));
+  Object.values(config)
+    .map((v) => String(v).split(",")[0] as string)
+    .filter((v) => /^[A-Za-z][\w.-]*:\S/.test(v));
 
 export function vmIssues(id: number, name: string, config: RawConfig = {}): Issue[] {
   const out: Issue[] = [];
-  const disks = Object.entries(config).filter(
-    ([k, v]) => /^(ide|sata)\d+$/.test(k) && typeof v === "string" && !v.includes("media=cdrom"),
-  );
+  const disks = Object.entries(config).filter(([k, v]) => /^(ide|sata)\d+$/.test(k) && typeof v === "string" && !v.includes("media=cdrom"));
   const controller = String(config.scsihw ?? "");
   const hasScsiDisk = Object.keys(config).some((k) => /^scsi\d+$/.test(k));
   if (disks.length > 0 || (hasScsiDisk && SLOW_CONTROLLERS.has(controller))) {
@@ -104,12 +104,7 @@ export function discDrives(config: RawConfig): { slot: string; disc: string }[] 
     .sort((a, b) => a.slot.localeCompare(b.slot, undefined, { numeric: true }));
 }
 
-export function buildOverview(
-  resources: RawResource[],
-  guests: Map<number, Guest>,
-  notBackedUp: { vmid: number }[],
-  now: Date = new Date(),
-) {
+export function buildOverview(resources: RawResource[], guests: Map<number, Guest>, notBackedUp: { vmid: number }[], now: Date = new Date()) {
   const unprotected = new Set(notBackedUp.map((g) => Number(g.vmid)));
   const nodes = resources
     .filter((r) => r.type === "node")
@@ -161,7 +156,13 @@ export function buildOverview(
         template,
         settings: config ? readSettings(r.type === "lxc" ? "lxc" : "qemu", config) : null,
         // Everything that would break if a storage went away, disc drives and left-over disks included.
-        usesStorage: [...new Set(Object.entries(config ?? {}).filter(([k, v]) => /^(scsi|virtio|sata|ide|mp|unused|efidisk|tpmstate)\d+$|^rootfs$/.test(k) && String(v).includes(":")).map(([, v]) => String(v).split(":")[0] as string))],
+        usesStorage: [
+          ...new Set(
+            Object.entries(config ?? {})
+              .filter(([k, v]) => /^(scsi|virtio|sata|ide|mp|unused|efidisk|tpmstate)\d+$|^rootfs$/.test(k) && String(v).includes(":"))
+              .map(([, v]) => String(v).split(":")[0] as string),
+          ),
+        ],
         disks: config ? readDisks(r.type === "lxc" ? "lxc" : "qemu", config) : [],
         nics: config ? readNics(r.type === "lxc" ? "lxc" : "qemu", config) : [],
         agent: String(config?.agent ?? "").startsWith("1") || /enabled=1/.test(String(config?.agent ?? "")),
@@ -176,12 +177,23 @@ export function buildOverview(
         // Every disc drive it has, on any slot. The cloud-init drive isn't one a person changes.
         discDrives: discDrives(config ?? {}),
         // Disks detached from it but still kept on storage (Proxmox's "Unused Disk"), often left by an import.
-        leftover: Object.entries(config ?? {}).filter(([k, v]) => /^unused\d+$/.test(k) && String(v).includes(":")).map(([slot, v]) => ({ slot, volume: String(v).split(",")[0] as string })),
-        bridges: [...new Set(Object.entries(config ?? {}).filter(([k]) => /^net\d+$/.test(k)).map(([, v]) => String(v).match(/bridge=([^,]+)/)?.[1]).filter((b): b is string => Boolean(b)))],
+        leftover: Object.entries(config ?? {})
+          .filter(([k, v]) => /^unused\d+$/.test(k) && String(v).includes(":"))
+          .map(([slot, v]) => ({ slot, volume: String(v).split(",")[0] as string })),
+        bridges: [
+          ...new Set(
+            Object.entries(config ?? {})
+              .filter(([k]) => /^net\d+$/.test(k))
+              .map(([, v]) => String(v).match(/bridge=([^,]+)/)?.[1])
+              .filter((b): b is string => Boolean(b)),
+          ),
+        ],
         configLoaded: config !== undefined,
         // Every volume its settings name (disks, disc drives, a linked clone's base), so nothing in use gets deleted.
         // Drives handed to it directly, which look unused from the node.
-        devices: Object.entries(config ?? {}).filter(([k, v]) => /^(scsi|virtio|sata|ide|mp)\d+$|^rootfs$/.test(k) && String(v).startsWith("/dev/")).map(([, v]) => String(v).split(",")[0] as string),
+        devices: Object.entries(config ?? {})
+          .filter(([k, v]) => /^(scsi|virtio|sata|ide|mp)\d+$|^rootfs$/.test(k) && String(v).startsWith("/dev/"))
+          .map(([, v]) => String(v).split(",")[0] as string),
         refs: volumeRefs(config ?? {}),
         tech: {
           "Machine type": config?.machine ?? "i440fx (default)",
@@ -190,9 +202,7 @@ export function buildOverview(
           "CPU type": config?.cpu ?? "kvm64 (default)",
           "VM ID": id,
         },
-        snapshots: (guest?.snapshots ?? [])
-          .filter((s) => s.name !== "current")
-          .map((s) => ({ name: s.name, description: s.description ?? "", takenAt: s.snaptime ?? null })),
+        snapshots: (guest?.snapshots ?? []).filter((s) => s.name !== "current").map((s) => ({ name: s.name, description: s.description ?? "", takenAt: s.snaptime ?? null })),
         issues,
       };
     })
@@ -251,5 +261,4 @@ export function buildOverview(
 export type Overview = ReturnType<typeof buildOverview>;
 
 /** Linked clones of a template: their disks are built on its base disks, so it can't go while they exist. */
-export const clonesOf = (id: number, vms: { id: number; name: string; refs: string[] }[]) =>
-  vms.filter((v) => v.id !== id && v.refs.some((r) => r.includes(`base-${id}-disk-`))).map((v) => v.name);
+export const clonesOf = (id: number, vms: { id: number; name: string; refs: string[] }[]) => vms.filter((v) => v.id !== id && v.refs.some((r) => r.includes(`base-${id}-disk-`))).map((v) => v.name);

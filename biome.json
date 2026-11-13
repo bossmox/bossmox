@@ -15,7 +15,11 @@
     ]
   },
   "formatter": {
-    "enabled": false
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "lineWidth": 200
   },
   "assist": {
     "enabled": false
@@ -47,6 +51,22 @@
           }
         }
       }
+    },
+    {
+      "includes": [
+        "**/*.json"
+      ],
+      "formatter": {
+        "enabled": false
+      }
     }
-  ]
+  ],
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all",
+      "arrowParentheses": "always"
+    }
+  }
 }

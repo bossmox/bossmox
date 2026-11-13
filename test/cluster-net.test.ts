@@ -48,8 +48,20 @@ test("a network only some nodes have isn't offered", () => {
 
 test("can't judge: one node, a heartbeat given as a name, an address the node doesn't list", () => {
   assert.equal(checkNetworks(maverick.slice(0, 1), null).known, false);
-  assert.equal(checkNetworks(maverick.map((n) => ({ ...n, links: [n.name] })), null).known, false);
-  assert.equal(checkNetworks(maverick.map((n) => ({ ...n, links: ["192.168.9.9"] })), null).known, false);
+  assert.equal(
+    checkNetworks(
+      maverick.map((n) => ({ ...n, links: [n.name] })),
+      null,
+    ).known,
+    false,
+  );
+  assert.equal(
+    checkNetworks(
+      maverick.map((n) => ({ ...n, links: ["192.168.9.9"] })),
+      null,
+    ).known,
+    false,
+  );
   assert.equal(checkNetworks(maverick, "not-a-net").known, false);
   assert.equal(checkNetworks(maverick.slice(0, 1), null).batch, 1, "unknown means the careful batch");
 });

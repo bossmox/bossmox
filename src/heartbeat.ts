@@ -72,13 +72,20 @@ export function createHeartbeat(deps: HeartbeatDeps) {
     const offline = status.filter((s) => s.type === "node" && s.online !== 1).map((s) => s.name ?? "");
     const base = { clusterName: cluster?.name ?? "", quorate: cluster?.quorate === 1, offline, canSetUp: session.username === "root@pam" };
     if (!cluster || members.length < 2) return { state: "single", ...base };
-    if (offline.length) return { state: "unknown", why: `${offline.join(", ")} ${offline.length === 1 ? "is" : "are"} offline, so BossMox can't see ${offline.length === 1 ? "its" : "their"} network ports.`, ...base };
-    const nodes = await Promise.all(members.map(async (m) => {
-      const name = String(m.node ?? m.name ?? "");
-      const rings = Object.fromEntries(Object.entries(m).filter(([k]) => /^ring\d+_addr$/.test(k)).map(([k, v]) => [Number(/\d+/.exec(k)?.[0]), String(v)]));
-      const ifaces = await pve.get<RawIface[]>(`/nodes/${encodeURIComponent(name)}/network`, t);
-      return { name, rings, ifaces };
-    }));
+    if (offline.length)
+      return { state: "unknown", why: `${offline.join(", ")} ${offline.length === 1 ? "is" : "are"} offline, so BossMox can't see ${offline.length === 1 ? "its" : "their"} network ports.`, ...base };
+    const nodes = await Promise.all(
+      members.map(async (m) => {
+        const name = String(m.node ?? m.name ?? "");
+        const rings = Object.fromEntries(
+          Object.entries(m)
+            .filter(([k]) => /^ring\d+_addr$/.test(k))
+            .map(([k, v]) => [Number(/\d+/.exec(k)?.[0]), String(v)]),
+        );
+        const ifaces = await pve.get<RawIface[]>(`/nodes/${encodeURIComponent(name)}/network`, t);
+        return { name, rings, ifaces };
+      }),
+    );
     return { ...heartbeatState(nodes, migrationNetwork(options.migration)), ...base };
   }
 
@@ -93,16 +100,18 @@ export function createHeartbeat(deps: HeartbeatDeps) {
     if (confirm !== v.clusterName) throw new HttpError(400, `Type the cluster's name, ${v.clusterName}, to confirm.`);
     job = { running: true, by: session.username, startedAt: deps.now(), steps: [], result: null, error: null };
     deps.audit("heartbeat-link-start", session.username, { network });
-    void run(job, session, v).catch((err: Error) => {
-      if (!job) return;
-      job.error = err.message;
-      job.result ??= "failed";
-    }).finally(() => {
-      if (!job) return;
-      job.running = false;
-      for (const s of job.steps) if (s.state === "doing") s.state = "failed";
-      deps.audit("heartbeat-link-end", session.username, { result: job.result ?? "failed" });
-    });
+    void run(job, session, v)
+      .catch((err: Error) => {
+        if (!job) return;
+        job.error = err.message;
+        job.result ??= "failed";
+      })
+      .finally(() => {
+        if (!job) return;
+        job.running = false;
+        for (const s of job.steps) if (s.state === "doing") s.state = "failed";
+        deps.audit("heartbeat-link-end", session.username, { result: job.result ?? "failed" });
+      });
   }
 
   async function run(j: HeartbeatJob, session: Session, v: Extract<HeartbeatView, { state: "offer" }>) {
@@ -143,7 +152,10 @@ export function createHeartbeat(deps: HeartbeatDeps) {
     // 2. Every node reaches every other node on the new network.
     s = step(`Checking every node reaches the others on ${v.network}`);
     for (const node of nodes) {
-      const others = nodes.filter((n) => n !== node).map((n) => v.addresses[n]).join(" ");
+      const others = nodes
+        .filter((n) => n !== node)
+        .map((n) => v.addresses[n])
+        .join(" ");
       const r = await deps.console(node, session, `bad=""; for a in ${others}; do ping -c1 -W2 $a >/dev/null 2>&1 || bad="$bad $a"; done; printf '\\n__BMX_PING__\\n%s\\n__BMX_END__\\n' "$bad"`);
       const missed = between(r.output, "__BMX_PING__", "__BMX_END__");
       if (missed === null) return fail(s, `BossMox couldn't check the network from ${node}.`);
@@ -155,7 +167,11 @@ export function createHeartbeat(deps: HeartbeatDeps) {
     // 3. The change, only if the file is still the one read.
     s = step(`Adding the backup link on ${v.network}`);
     const write = (from: string, to: string) =>
-      deps.console(first, session, `[ "$(sha256sum ${CONF} | cut -c1-64)" = "${sha(from)}" ] || exit 3; echo ${b64(to)} | base64 -d > ${CONF}.new && [ "$(sha256sum ${CONF}.new | cut -c1-64)" = "${sha(to)}" ] || exit 4; cp ${CONF} ${CONF}.bak && mv ${CONF}.new ${CONF}`);
+      deps.console(
+        first,
+        session,
+        `[ "$(sha256sum ${CONF} | cut -c1-64)" = "${sha(from)}" ] || exit 3; echo ${b64(to)} | base64 -d > ${CONF}.new && [ "$(sha256sum ${CONF}.new | cut -c1-64)" = "${sha(to)}" ] || exit 4; cp ${CONF} ${CONF}.bak && mv ${CONF}.new ${CONF}`,
+      );
     const w = await write(before, after);
     if (w.exitCode === 3) return fail(s, "The heartbeat settings changed while BossMox was working. Nothing was changed; look again.");
     if (w.exitCode !== 0) return fail(s, `BossMox couldn't write the new settings on ${first}. Nothing was changed.`);
@@ -194,9 +210,11 @@ export function createHeartbeat(deps: HeartbeatDeps) {
       return;
     }
     const blamed = culprits();
-    s.fail(blamed.length && blamed.length < ids.length
-      ? `After a minute, ${blamed.join(", ")} couldn't connect to the other nodes over the backup link.`
-      : `After a minute, ${down.join(", ")} ${down.length === 1 ? "isn't" : "aren't"} connected over the backup link.`);
+    s.fail(
+      blamed.length && blamed.length < ids.length
+        ? `After a minute, ${blamed.join(", ")} couldn't connect to the other nodes over the backup link.`
+        : `After a minute, ${down.join(", ")} ${down.length === 1 ? "isn't" : "aren't"} connected over the backup link.`,
+    );
 
     // 5. Not up everywhere: the old file goes back, with a higher version so corosync loads it.
     s = step("Putting the old heartbeat settings back");

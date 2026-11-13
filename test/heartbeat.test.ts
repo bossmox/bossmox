@@ -24,7 +24,11 @@ function fake(opts: { linkWorks?: boolean; unreachable?: string; changeBeforeWri
       const m = /^\/nodes\/(bmx8-node\d)\/network$/.exec(path);
       if (m) {
         const n = nodes.find((x) => x.name === m[1])!;
-        return [{ iface: "eth0", type: "eth" }, { iface: "ens19", type: "eth", cidr: `${n.b}/24` }, { iface: "vmbr0", type: "bridge", bridge_ports: "eth0", cidr: `${n.hb}/24` }];
+        return [
+          { iface: "eth0", type: "eth" },
+          { iface: "ens19", type: "eth", cidr: `${n.b}/24` },
+          { iface: "vmbr0", type: "bridge", bridge_ports: "eth0", cidr: `${n.hb}/24` },
+        ];
       }
       throw new Error(`unexpected ${path}`);
     },
@@ -43,12 +47,21 @@ function fake(opts: { linkWorks?: boolean; unreachable?: string; changeBeforeWri
     if (line.includes("__BMX_CFG__")) {
       const me = Number(node.slice(-1));
       const links = Object.keys(readConf(st.file).nodes[0]!.rings).map(Number);
-      const block = (l: number) => `LINK ID ${l} udp\n\tstatus:\n${[1, 2, 3].map((id) => `\t\tnodeid: ${id}:\t${id === me ? "localhost" : l === 0 || (opts.linkWorks !== false && !(opts.cutOff && (me === opts.cutOff || id === opts.cutOff))) ? "connected" : "disconnected"}`).join("\n")}`;
+      const block = (l: number) =>
+        `LINK ID ${l} udp\n\tstatus:\n${[1, 2, 3].map((id) => `\t\tnodeid: ${id}:\t${id === me ? "localhost" : l === 0 || (opts.linkWorks !== false && !(opts.cutOff && (me === opts.cutOff || id === opts.cutOff))) ? "connected" : "disconnected"}`).join("\n")}`;
       return { exitCode: 0, output: `\n__BMX_CFG__\nLocal node ID ${me}, transport knet\n${links.map(block).join("\n")}\n__BMX_END__\n` };
     }
     throw new Error(`unexpected console line ${line}`);
   };
-  const hb = createHeartbeat({ pve, console: cons, audit: (e) => st.audits.push(e), wait: async (ms) => { clock += ms; }, now: () => clock });
+  const hb = createHeartbeat({
+    pve,
+    console: cons,
+    audit: (e) => st.audits.push(e),
+    wait: async (ms) => {
+      clock += ms;
+    },
+    now: () => clock,
+  });
   const done = async () => {
     for (let i = 0; i < 200 && hb.job()?.running; i++) await new Promise((r) => setImmediate(r));
     return hb.job()!;
@@ -64,7 +77,10 @@ test("the lab gets link 1 on 10.0.31.0/24, written once, up on every node (ADR 0
   const j = await done();
   assert.equal(j.result, "added", j.error ?? "");
   assert.equal(st.writes, 1);
-  assert.deepEqual(readConf(st.file).nodes.map((n) => n.rings[1]), ["10.0.31.244", "10.0.31.245", "10.0.31.246"]);
+  assert.deepEqual(
+    readConf(st.file).nodes.map((n) => n.rings[1]),
+    ["10.0.31.244", "10.0.31.245", "10.0.31.246"],
+  );
   assert.ok(j.steps.every((s) => s.state === "ok"));
   assert.deepEqual(st.audits, ["heartbeat-link-start", "heartbeat-link-written", "heartbeat-link-end"]);
 });

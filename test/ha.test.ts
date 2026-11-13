@@ -40,23 +40,40 @@ function fake(opts: { disk?: string; lock?: string; hastate?: string; votes?: nu
   const pve = {
     get: async (path: string) => {
       if (path === "/cluster/resources?type=vm") return [{ type: "qemu", vmid: 101, name: "web", node: "n3", status: "running", ...(hastate ? { hastate } : {}) }];
-      if (path === "/cluster/resources?type=storage") return [{ type: "storage", storage: "ISCSI_SHARE", node: "n3", shared: 1 }, { type: "storage", storage: "local-lvm", node: "n3", shared: 0 }];
+      if (path === "/cluster/resources?type=storage")
+        return [
+          { type: "storage", storage: "ISCSI_SHARE", node: "n3", shared: 1 },
+          { type: "storage", storage: "local-lvm", node: "n3", shared: 0 },
+        ];
       if (path === "/nodes/n3/qemu/101/config") return { scsi0: opts.disk ?? "ISCSI_SHARE:vm-101-disk-0", ...(opts.lock ? { lock: opts.lock } : {}) };
-      if (path === "/cluster/config/nodes") return Array((opts.votes ?? 3)).fill({ quorum_votes: 1 });
+      if (path === "/cluster/config/nodes") return Array(opts.votes ?? 3).fill({ quorum_votes: 1 });
       if (path === "/cluster/config/qdevice") return {};
       if (path === "/cluster/ha/resources") return Array(opts.haGuests ?? 0).fill({ sid: "vm:102" });
       throw new Error(`unexpected ${path}`);
     },
-    post: async (path: string, _w: unknown, form: Record<string, string>) => { calls.push(`POST ${path} ${JSON.stringify(form)}`); return null; },
+    post: async (path: string, _w: unknown, form: Record<string, string>) => {
+      calls.push(`POST ${path} ${JSON.stringify(form)}`);
+      return null;
+    },
     put: async (path: string, _w: unknown, form: Record<string, string>) => {
       calls.push(`PUT ${path} ${JSON.stringify(form)}`);
       // HA takes the new state on its next cycle, and reports disabled as its own state, stopped. A stuck one stays in error.
       if (path.startsWith("/cluster/ha/resources/") && !opts.stuck) hastate = form.state === "disabled" ? "stopped" : form.state;
       return null;
     },
-    delete: async (path: string) => { calls.push(`DELETE ${path}`); return null; },
+    delete: async (path: string) => {
+      calls.push(`DELETE ${path}`);
+      return null;
+    },
   } as unknown as PveClient;
-  const ha = createHa({ pve, cantMove: async () => opts.cantMove ?? null, heartbeat: async () => ({ state: "backed-up", links: 2 }), netCheck: async () => null, audit: () => {}, wait: async () => {} });
+  const ha = createHa({
+    pve,
+    cantMove: async () => opts.cantMove ?? null,
+    heartbeat: async () => ({ state: "backed-up", links: 2 }),
+    netCheck: async () => null,
+    audit: () => {},
+    wait: async () => {},
+  });
   return { ha, calls };
 }
 const root = { username: "root@pam", ticket: "T" } as Session;

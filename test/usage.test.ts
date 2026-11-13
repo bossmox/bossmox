@@ -10,7 +10,10 @@ test("a node's day of minutes is thinned to a chart's worth of points, in time o
   assert.equal(raw.length, 1440);
   const u = buildUsage([...raw].reverse(), "node", "day");
   assert.equal(u.points.length, MAX_POINTS);
-  assert.ok(u.points.every((p, i) => i === 0 || p.t > u.points[i - 1]!.t), "oldest first, whatever order Proxmox sent");
+  assert.ok(
+    u.points.every((p, i) => i === 0 || p.t > u.points[i - 1]!.t),
+    "oldest first, whatever order Proxmox sent",
+  );
   assert.equal(u.cores, 2);
   assert.ok(u.memTotalGb! > 2 && u.memTotalGb! < 4, "the test node has about 3 GB");
   assert.equal("diskRead" in u.points[0]!, false, "Proxmox keeps no disk activity for a node");

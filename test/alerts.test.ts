@@ -12,7 +12,10 @@ test("Discord: only the host is readable; the private path is a Proxmox secret; 
   const { type, form } = targetForm({ kind: "discord", link: DISCORD, ...base });
   assert.equal(type, "webhook");
   assert.equal(form.url, "https://discord.com/{{ secrets.path }}");
-  assert.deepEqual((form.secret as string[]).map((s) => s.split(",value=").map((x, i) => (i ? unb64(x) : x))), [["name=path", "api/webhooks/123456789/AbCdEfSecretToken"]]);
+  assert.deepEqual(
+    (form.secret as string[]).map((s) => s.split(",value=").map((x, i) => (i ? unb64(x) : x))),
+    [["name=path", "api/webhooks/123456789/AbCdEfSecretToken"]],
+  );
   assert.equal(JSON.stringify(form).includes("AbCdEfSecretToken"), false, "the token appears only base64'd, inside the secret");
   assert.match(unb64(form.body as string), /^\{"embeds": \[\{"title": \{\{ json title \}\}/);
 });
@@ -29,14 +32,29 @@ test("ntfy: the topic is a secret, the token goes in a header by reference; Goti
   const n = targetForm({ kind: "ntfy", topic: "rocky-lab-x9", token: "tk_123", ...base });
   assert.equal(n.form.url, "https://ntfy.sh/{{ secrets.topic }}");
   const headers = (n.form.header as string[]).map((h) => [h.split(",")[0], unb64(h.split(",value=")[1] ?? "")]);
-  assert.deepEqual(headers, [["name=Title", "{{ title }}"], ["name=Tags", "{{ severity }}"], ["name=Authorization", "Bearer {{ secrets.token }}"]]);
+  assert.deepEqual(headers, [
+    ["name=Title", "{{ title }}"],
+    ["name=Tags", "{{ severity }}"],
+    ["name=Authorization", "Bearer {{ secrets.token }}"],
+  ]);
   assert.equal(JSON.stringify(n.form).includes("tk_123") || JSON.stringify(n.form).includes("rocky-lab-x9"), false);
-  assert.equal(targetForm({ kind: "ntfy", server: "http://10.0.30.248:8080", topic: "lab", ...base }).form.url, "http://10.0.30.248:8080/{{ secrets.topic }}", "plain http only on the person's own network");
-  assert.deepEqual(targetForm({ kind: "gotify", server: "https://push.example.org/", token: "AppTok", ...base }), { type: "gotify", form: { server: "https://push.example.org", comment: "Added by BossMox: Gotify", token: "AppTok" } });
+  assert.equal(
+    targetForm({ kind: "ntfy", server: "http://10.0.30.248:8080", topic: "lab", ...base }).form.url,
+    "http://10.0.30.248:8080/{{ secrets.topic }}",
+    "plain http only on the person's own network",
+  );
+  assert.deepEqual(targetForm({ kind: "gotify", server: "https://push.example.org/", token: "AppTok", ...base }), {
+    type: "gotify",
+    form: { server: "https://push.example.org", comment: "Added by BossMox: Gotify", token: "AppTok" },
+  });
 });
 
 test("refused: plain http to the internet, a link from the wrong service, a link without its private part, a bad topic", () => {
-  const bad = (input: Parameters<typeof targetForm>[0]) => assert.throws(() => targetForm(input), (e: { status: number }) => e.status === 400);
+  const bad = (input: Parameters<typeof targetForm>[0]) =>
+    assert.throws(
+      () => targetForm(input),
+      (e: { status: number }) => e.status === 400,
+    );
   bad({ kind: "ntfy", server: "http://ntfy.example.com", topic: "x1", ...base });
   bad({ kind: "discord", link: "https://hooks.slack.com/services/T0/B0/X", ...base });
   bad({ kind: "slack", link: "https://hooks.slack.com/", ...base });
@@ -57,9 +75,18 @@ test("reading what's set up: a fresh Proxmox delivers nowhere; BossMox's target,
   assert.equal(readAlerts([builtin], [defaultMatcher], null, null, null).nothingDelivers, true);
   assert.equal(readAlerts([builtin], [defaultMatcher], "ops@example.org", null, null).nothingDelivers, false, "root has an email address");
   const mine = { name: "bossmox-alerts-target", type: "webhook", comment: "Added by BossMox: Discord" };
-  const v = readAlerts([builtin, mine], [defaultMatcher, { name: "bossmox-alerts", target: ["bossmox-alerts-target"], "match-field": ["exact:type=package-updates"] }], null, "https://discord.com/{{ secrets.path }}", null);
+  const v = readAlerts(
+    [builtin, mine],
+    [defaultMatcher, { name: "bossmox-alerts", target: ["bossmox-alerts-target"], "match-field": ["exact:type=package-updates"] }],
+    null,
+    "https://discord.com/{{ secrets.path }}",
+    null,
+  );
   assert.deepEqual([v.kind, v.where, v.confirmed, v.updates, v.allBackups, v.nothingDelivers], ["discord", "discord.com", false, true, false, false]);
-  assert.equal(readAlerts([builtin, { ...mine, comment: "Added by BossMox: Discord; test arrived 2026-11-13" }], [{ name: "bossmox-alerts", target: "bossmox-alerts-target" }], null, null, null).confirmed, true);
+  assert.equal(
+    readAlerts([builtin, { ...mine, comment: "Added by BossMox: Discord; test arrived 2026-11-13" }], [{ name: "bossmox-alerts", target: "bossmox-alerts-target" }], null, null, null).confirmed,
+    true,
+  );
   assert.deepEqual(readAlerts([builtin, { name: "ops-gotify", type: "gotify" }], [{ name: "m", target: ["ops-gotify"] }], null, null, null).others, ["ops-gotify"]);
 });
 
@@ -101,17 +128,34 @@ const root = { username: "root@pam", ticket: "T" } as Session;
 test("save: a webhook target then the matcher; the audit line never holds a secret", async () => {
   const { a, calls, audits } = fake();
   await a.save(root, { kind: "discord", link: DISCORD, ...base });
-  assert.deepEqual(calls.map((c) => `${c.m} ${c.path}`), ["POST /cluster/notifications/endpoints/webhook", "POST /cluster/notifications/matchers"]);
-  assert.equal(audits.some((x) => x.includes("AbCdEf") || x.includes("webhooks")), false);
+  assert.deepEqual(
+    calls.map((c) => `${c.m} ${c.path}`),
+    ["POST /cluster/notifications/endpoints/webhook", "POST /cluster/notifications/matchers"],
+  );
+  assert.equal(
+    audits.some((x) => x.includes("AbCdEf") || x.includes("webhooks")),
+    false,
+  );
 });
 
 test("save: only the choices changed keeps the target and its secrets; a new kind replaces it", async () => {
   const same = fake({ existing: "Discord" });
   await same.a.save(root, { kind: "discord", updates: false, allBackups: false });
-  assert.deepEqual(same.calls.map((c) => `${c.m} ${c.path}`), ["PUT /cluster/notifications/matchers/bossmox-alerts"]);
+  assert.deepEqual(
+    same.calls.map((c) => `${c.m} ${c.path}`),
+    ["PUT /cluster/notifications/matchers/bossmox-alerts"],
+  );
   const other = fake({ existing: "Discord" });
   await other.a.save(root, { kind: "ntfy", topic: "lab-topic-1", ...base });
-  assert.deepEqual(other.calls.map((c) => `${c.m} ${c.path}`), ["DELETE /cluster/notifications/matchers/bossmox-alerts", "DELETE /cluster/notifications/endpoints/webhook/bossmox-alerts-target", "POST /cluster/notifications/endpoints/webhook", "POST /cluster/notifications/matchers"]);
+  assert.deepEqual(
+    other.calls.map((c) => `${c.m} ${c.path}`),
+    [
+      "DELETE /cluster/notifications/matchers/bossmox-alerts",
+      "DELETE /cluster/notifications/endpoints/webhook/bossmox-alerts-target",
+      "POST /cluster/notifications/endpoints/webhook",
+      "POST /cluster/notifications/matchers",
+    ],
+  );
 });
 
 test("an error from Proxmox comes back without the secret in it", async () => {

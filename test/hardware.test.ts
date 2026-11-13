@@ -2,12 +2,21 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { snapshotFix, addDiskForm, addNicForm, bootDisk, growForm, pickAddresses, readDisks, readNics, removeDiskForm, removeNicForm } from "../src/hardware.js";
 
-const vm = { boot: "order=scsi0;ide2", scsi0: "local:300/vm-300-disk-0.qcow2,iothread=1,size=32G", scsi1: "local-lvm:vm-300-disk-1,size=512M", ide2: "local:iso/a.iso,media=cdrom,size=67M", net0: "virtio=BC:24:11:00:00:01,bridge=vmbr0,tag=30" };
+const vm = {
+  boot: "order=scsi0;ide2",
+  scsi0: "local:300/vm-300-disk-0.qcow2,iothread=1,size=32G",
+  scsi1: "local-lvm:vm-300-disk-1,size=512M",
+  ide2: "local:iso/a.iso,media=cdrom,size=67M",
+  net0: "virtio=BC:24:11:00:00:01,bridge=vmbr0,tag=30",
+};
 const ct = { rootfs: "local:200/vm-200-disk-0.raw,size=8G", mp0: "local:200/vm-200-disk-1.raw,mp=/data,size=2G", net0: "name=eth0,bridge=vmbr0,hwaddr=BC:24:11:00:00:02,ip=dhcp,type=veth" };
 
 test("a VM's disks are read, disc drives left out, and the boot disk first", () => {
   const disks = readDisks("qemu", vm);
-  assert.deepEqual(disks.map((d) => d.slot), ["scsi0", "scsi1"]);
+  assert.deepEqual(
+    disks.map((d) => d.slot),
+    ["scsi0", "scsi1"],
+  );
   assert.equal(disks[0]?.boot, true);
   assert.equal(disks[0]?.sizeGb, 32);
   assert.equal(disks[1]?.sizeGb, 0.5);
@@ -16,7 +25,13 @@ test("a VM's disks are read, disc drives left out, and the boot disk first", () 
 
 test("a container's disks show where they appear", () => {
   const disks = readDisks("lxc", ct);
-  assert.deepEqual(disks.map((d) => [d.slot, d.mount, d.boot]), [["rootfs", "", true], ["mp0", "/data", false]]);
+  assert.deepEqual(
+    disks.map((d) => [d.slot, d.mount, d.boot]),
+    [
+      ["rootfs", "", true],
+      ["mp0", "/data", false],
+    ],
+  );
 });
 
 test("network cards are read for both kinds", () => {
@@ -69,8 +84,19 @@ test("new network cards match the guest, and can't smuggle options", () => {
 });
 
 test("addresses leave out what nobody can connect to", () => {
-  assert.deepEqual(pickAddresses("lxc", [{ name: "lo", inet: "127.0.0.1/8" }, { name: "eth0", inet: "10.0.30.61/24", inet6: "fe80::1/64" }]), ["10.0.30.61"]);
-  const agent = { result: [{ name: "lo", "ip-addresses": [{ "ip-address": "127.0.0.1" }] }, { name: "ens18", "ip-addresses": [{ "ip-address": "10.0.30.5" }, { "ip-address": "fe80::2" }, { "ip-address": "2001:db8::5" }] }] };
+  assert.deepEqual(
+    pickAddresses("lxc", [
+      { name: "lo", inet: "127.0.0.1/8" },
+      { name: "eth0", inet: "10.0.30.61/24", inet6: "fe80::1/64" },
+    ]),
+    ["10.0.30.61"],
+  );
+  const agent = {
+    result: [
+      { name: "lo", "ip-addresses": [{ "ip-address": "127.0.0.1" }] },
+      { name: "ens18", "ip-addresses": [{ "ip-address": "10.0.30.5" }, { "ip-address": "fe80::2" }, { "ip-address": "2001:db8::5" }] },
+    ],
+  };
   assert.deepEqual(pickAddresses("qemu", agent), ["10.0.30.5", "2001:db8::5"]);
   assert.deepEqual(pickAddresses("qemu", {}), []);
 });
@@ -83,7 +109,12 @@ test("an added VM disk on a folder or share asks for qcow2, a container's doesn'
 test("raw disks on a folder are the ones to convert for snapshots, and only when that's enough", () => {
   // Measured on bmx-node2: these three as raw files block snapshots, and as qcow2 they don't.
   const types = { files: "dir", fast: "lvmthin", lvm: "lvm" };
-  const vm = { scsi0: "files:962/vm-962-disk-1.raw,size=1G", efidisk0: "files:962/vm-962-disk-0.raw,efitype=4m", tpmstate0: "files:962/vm-962-disk-2.raw,size=4M", ide2: "local:iso/x.iso,media=cdrom" };
+  const vm = {
+    scsi0: "files:962/vm-962-disk-1.raw,size=1G",
+    efidisk0: "files:962/vm-962-disk-0.raw,efitype=4m",
+    tpmstate0: "files:962/vm-962-disk-2.raw,size=4M",
+    ide2: "local:iso/x.iso,media=cdrom",
+  };
   assert.deepEqual(snapshotFix(vm, types), ["scsi0", "efidisk0", "tpmstate0"]);
   assert.deepEqual(snapshotFix({ scsi0: "files:962/vm-962-disk-1.raw", scsi1: "fast:vm-962-disk-5" }, types), ["scsi0"]);
   assert.deepEqual(snapshotFix({ scsi0: "files:962/vm-962-disk-1.raw", scsi1: "lvm:vm-962-disk-5" }, types), [], "a thick LVM disk still blocks it, so converting wouldn't help");

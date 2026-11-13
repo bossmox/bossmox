@@ -6,12 +6,18 @@ import { heartbeatState, portsOf, type NodeIfaces, type RawIface } from "../src/
 const lab = (n: number, extra: RawIface[] = []): NodeIfaces => ({
   name: `bmx8-node${n}`,
   rings: { 0: `10.0.30.${243 + n}` },
-  ifaces: [{ iface: "eth0", type: "eth" }, { iface: "ens19", type: "eth", cidr: `10.0.31.${243 + n}/24` }, { iface: "vmbr0", type: "bridge", bridge_ports: "eth0", cidr: `10.0.30.${243 + n}/24` }, ...extra],
+  ifaces: [
+    { iface: "eth0", type: "eth" },
+    { iface: "ens19", type: "eth", cidr: `10.0.31.${243 + n}/24` },
+    { iface: "vmbr0", type: "bridge", bridge_ports: "eth0", cidr: `10.0.30.${243 + n}/24` },
+    ...extra,
+  ],
 });
 
 test("ports: a bridge over a bond over two cards, a VLAN on a bridge, a VLAN named after its parent", () => {
   const ifaces: RawIface[] = [
-    { iface: "eno1", type: "eth" }, { iface: "eno2", type: "eth" },
+    { iface: "eno1", type: "eth" },
+    { iface: "eno2", type: "eth" },
     { iface: "bond0", type: "bond", slaves: "eno1 eno2" },
     { iface: "vmbr0", type: "bridge", bridge_ports: "bond0" },
     { iface: "vmbr0.20", type: "vlan", "vlan-raw-device": "vmbr0" },
@@ -36,8 +42,13 @@ test("the lab gets the offer: 10.0.31.0/24 on its own port, an address per node 
 
 test("a VLAN on the heartbeat's own port isn't a backup (Rocky: no second link, no)", () => {
   const vlanOnly = (n: number): NodeIfaces => ({
-    name: `n${n}`, rings: { 0: `10.0.30.${n}` },
-    ifaces: [{ iface: "eth0", type: "eth" }, { iface: "vmbr0", type: "bridge", bridge_ports: "eth0", cidr: `10.0.30.${n}/24` }, { iface: "vmbr0.31", type: "vlan", cidr: `10.0.31.${n}/24` }],
+    name: `n${n}`,
+    rings: { 0: `10.0.30.${n}` },
+    ifaces: [
+      { iface: "eth0", type: "eth" },
+      { iface: "vmbr0", type: "bridge", bridge_ports: "eth0", cidr: `10.0.30.${n}/24` },
+      { iface: "vmbr0.31", type: "vlan", cidr: `10.0.31.${n}/24` },
+    ],
   });
   assert.deepEqual(heartbeatState([vlanOnly(1), vlanOnly(2)], null), { state: "no-port", nodes: ["n1", "n2"] });
   // One node without a second port names that node.

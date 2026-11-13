@@ -1,4 +1,3 @@
-
 import { assertCanWipe, setupPlan, deviceIsValid, diskStorageForm, networkForm, storageBlockers, usesForm, type RawStorageConfig } from "../storage.js";
 import { poolItems, poolRemoval, type RawVolume } from "../storage-map.js";
 import { STORAGE, text } from "../checks.js";
@@ -10,7 +9,18 @@ export function storageActions(c: ActionContext): Record<string, Action> {
   const { finishTask, guestRefs, loadOverview, nodeDisks, rule, seesAllGuests, storageMapFor, usesStorageNames, pve } = c;
   return {
     "storage-add": async (name, who, body) => {
-      const form = rule(() => networkForm({ kind: text(body.kind, 8), id: text(body.id, 64), host: text(body.host, 253), path: text(body.path, 255), username: text(body.username, 64), password: text(body.password, 256), domain: text(body.domain, 64), uses: body.uses }));
+      const form = rule(() =>
+        networkForm({
+          kind: text(body.kind, 8),
+          id: text(body.id, 64),
+          host: text(body.host, 253),
+          path: text(body.path, 255),
+          username: text(body.username, 64),
+          password: text(body.password, 256),
+          domain: text(body.domain, 64),
+          uses: body.uses,
+        }),
+      );
       await pve.post<null>("/storage", who, form);
       // Saving doesn't prove it works, so ask a node to use it. One that can't connect isn't left behind.
       const path = `/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(form.storage as string)}/status`;
@@ -29,7 +39,12 @@ export function storageActions(c: ActionContext): Record<string, Action> {
       const base = `/nodes/${encodeURIComponent(name)}/storage/${encodeURIComponent(storage)}`;
       // Fresh, not the cached overview: a guest made a moment ago must count.
       const [volumes, data] = await Promise.all([pve.get<RawVolume[]>(`${base}/content`, who.ticket), loadOverview(who.ticket)]);
-      const item = poolItems(volumes, guestRefs(data), data.nodes.every((n) => n.online), await seesAllGuests(who.ticket)).find((i) => i.volid === volid);
+      const item = poolItems(
+        volumes,
+        guestRefs(data),
+        data.nodes.every((n) => n.online),
+        await seesAllGuests(who.ticket),
+      ).find((i) => i.volid === volid);
       if (!item) throw new HttpError(400, `That isn't on ${storage} anymore.`);
       if (!item.canDelete) throw new HttpError(400, item.whyNot);
       return pve.delete<string>(`${base}/content/${encodeURIComponent(volid)}`, who);
@@ -63,7 +78,14 @@ export function storageActions(c: ActionContext): Record<string, Action> {
       const usedBy = storageBlockers(id, data.vms, backupJobs);
       let removal: { path: string; disks: string[] };
       try {
-        removal = poolRemoval(map, id, config.find((c) => c.storage === id), directory, usedBy, config);
+        removal = poolRemoval(
+          map,
+          id,
+          config.find((c) => c.storage === id),
+          directory,
+          usedBy,
+          config,
+        );
       } catch (err) {
         throw new HttpError(400, (err as Error).message);
       }

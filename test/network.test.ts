@@ -11,14 +11,21 @@ const raw = [
 
 test("virtual switches come first, then ports in use, then spare ones", () => {
   const view = buildNetwork("a", raw, null, []);
-  assert.deepEqual(view.interfaces.map((i) => i.name), ["vmbr0", "nic0", "nic1"]);
+  assert.deepEqual(
+    view.interfaces.map((i) => i.name),
+    ["vmbr0", "nic0", "nic1"],
+  );
   assert.equal(view.interfaces[0]?.kind, "Virtual switch");
   assert.equal(view.interfaces[1]?.partOf, "vmbr0");
   assert.equal(view.interfaces[2]?.active, false);
 });
 
 test("a switch lists only the guests on this server", () => {
-  const guests = [{ name: "here", node: "a", bridges: ["vmbr0"] }, { name: "elsewhere", node: "b", bridges: ["vmbr0"] }, { name: "other", node: "a", bridges: ["vmbr1"] }];
+  const guests = [
+    { name: "here", node: "a", bridges: ["vmbr0"] },
+    { name: "elsewhere", node: "b", bridges: ["vmbr0"] },
+    { name: "other", node: "a", bridges: ["vmbr1"] },
+  ];
   assert.deepEqual(buildNetwork("a", raw, null, guests).interfaces[0]?.guests, ["here"]);
 });
 

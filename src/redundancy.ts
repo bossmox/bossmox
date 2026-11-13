@@ -100,7 +100,9 @@ export function heartbeatState(nodes: NodeIfaces[], moveNet: string | null): Hea
   }
   if (without.length) return { state: "no-port", nodes: without };
   // Networks every node has on a second port, one moves don't use first.
-  const shared = [...(choices.get(nodes[0]?.name as string) as Map<string, string>).keys()].filter((net) => nodes.every((n) => choices.get(n.name)?.has(net))).sort((a, b) => Number(a === moveNet) - Number(b === moveNet) || a.localeCompare(b));
+  const shared = [...(choices.get(nodes[0]?.name as string) as Map<string, string>).keys()]
+    .filter((net) => nodes.every((n) => choices.get(n.name)?.has(net)))
+    .sort((a, b) => Number(a === moveNet) - Number(b === moveNet) || a.localeCompare(b));
   const network = shared[0];
   if (!network) return { state: "no-port", nodes: [] };
   return {

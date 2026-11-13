@@ -87,17 +87,20 @@ const FREE = "Free (no subscription)";
  * install turns on Ceph's paid source even without Ceph, and that alone makes every check end in an error.
  */
 export function updateChannel(repos: RawRepositories, subscription?: RawSubscription) {
-  const enabled = (repos.files ?? [])
-    .flatMap((f) => f.repositories ?? [])
-    .filter((r) => r.Enabled && (r.URIs ?? []).some((u) => /proxmox\.com\/debian\/(pve|ceph-[a-z]+)\/?$/.test(u)));
+  const enabled = (repos.files ?? []).flatMap((f) => f.repositories ?? []).filter((r) => r.Enabled && (r.URIs ?? []).some((u) => /proxmox\.com\/debian\/(pve|ceph-[a-z]+)\/?$/.test(u)));
   const pveOnly = enabled.filter((r) => (r.URIs ?? []).some((u) => /\/debian\/pve\/?$/.test(u)));
   const components = pveOnly.flatMap((r) => r.Components ?? []);
   const known = subscription !== undefined;
   const active = subscription?.status?.toLowerCase() === "active";
   const paid = enabled.filter((r) => (r.URIs ?? []).some((u) => u.includes("enterprise.proxmox.com")));
-  const name = components.includes("pve-enterprise") && (active || !components.includes("pve-no-subscription"))
-    ? "Enterprise"
-    : components.includes("pve-no-subscription") ? FREE : components.includes("pve-test") ? "Test" : "None";
+  const name =
+    components.includes("pve-enterprise") && (active || !components.includes("pve-no-subscription"))
+      ? "Enterprise"
+      : components.includes("pve-no-subscription")
+        ? FREE
+        : components.includes("pve-test")
+          ? "Test"
+          : "None";
   const offer = (ok: boolean) => (active ? (name === "Enterprise" ? null : "enterprise") : known && (!ok || name !== FREE) ? "free" : null);
   const result = (ok: boolean, headline: string, note: string) => ({ name, ok, headline, note, offer: offer(ok) as "free" | "enterprise" | null });
   if (name === "None") return result(false, "Updates can't download", "No Proxmox update channel is turned on, so Proxmox can't update.");
@@ -164,32 +167,36 @@ const QUIET_TASKS = new Set(["vncproxy", "vncshell", "termproxy", "spiceproxy"])
 export function buildTaskLog(perNode: { node: string; tasks: RawTask[] }[], unreachable: string[], guests: { id: number; name: string }[], limit: number) {
   const names = new Map(guests.map((g) => [String(g.id), g.name]));
   const items = perNode
-    .flatMap(({ node, tasks }) => tasks.map((t) => ({
-      upid: t.upid,
-      node,
-      what: friendlyTask(t),
-      target: names.get(t.id ?? "") ?? t.id ?? "",
-      who: t.user ?? "",
-      startedAt: t.starttime ?? null,
-      endedAt: t.endtime ?? null,
-      result: taskResult(t),
-    })))
+    .flatMap(({ node, tasks }) =>
+      tasks.map((t) => ({
+        upid: t.upid,
+        node,
+        what: friendlyTask(t),
+        target: names.get(t.id ?? "") ?? t.id ?? "",
+        who: t.user ?? "",
+        startedAt: t.starttime ?? null,
+        endedAt: t.endtime ?? null,
+        result: taskResult(t),
+      })),
+    )
     .sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
   return { items, more: perNode.some((p) => p.tasks.length >= limit), unreachable };
 }
 
 export function buildTaskFeed(tasks: (RawTask & { node?: string })[], guests: { id: number; name: string }[], limit = 6) {
   const names = new Map(guests.map((g) => [String(g.id), g.name]));
-  const shown = tasks.filter((t) => !QUIET_TASKS.has(t.type ?? "")).map((t) => ({
-    upid: t.upid,
-    node: t.node ?? "",
-    what: friendlyTask(t),
-    target: names.get(t.id ?? "") ?? t.id ?? "",
-    who: t.user ?? "",
-    startedAt: t.starttime ?? null,
-    endedAt: t.endtime ?? null,
-    result: taskResult(t),
-  }));
+  const shown = tasks
+    .filter((t) => !QUIET_TASKS.has(t.type ?? ""))
+    .map((t) => ({
+      upid: t.upid,
+      node: t.node ?? "",
+      what: friendlyTask(t),
+      target: names.get(t.id ?? "") ?? t.id ?? "",
+      who: t.user ?? "",
+      startedAt: t.starttime ?? null,
+      endedAt: t.endtime ?? null,
+      result: taskResult(t),
+    }));
   const newest = (a: { startedAt: number | null }, b: { startedAt: number | null }) => (b.startedAt ?? 0) - (a.startedAt ?? 0);
   const running = shown.filter((t) => t.result === "running").sort(newest);
   const finished = shown.filter((t) => t.result !== "running").sort(newest);
@@ -215,7 +222,10 @@ export function taskView(status: RawTaskStatus, log: { n?: number; t?: string }[
     finished,
     result: !finished ? "running" : exit === "OK" ? "ok" : exit.startsWith("WARNINGS") ? "warning" : "failed",
     message: finished && exit !== "OK" ? plainError(exit) : "",
-    lines: log.map((l) => l.t ?? "").filter((l) => l !== "no content").slice(-max),
+    lines: log
+      .map((l) => l.t ?? "")
+      .filter((l) => l !== "no content")
+      .slice(-max),
   };
 }
 
@@ -233,9 +243,7 @@ export function buildRebootPlan(active: Section<RawTask[]>, storages: Section<Ra
     // Someone's open console isn't work in progress, and it shouldn't hold up a restart.
     busy: active.available ? active.value.filter((t) => !QUIET_TASKS.has(t.type ?? "")).map((t) => `${friendlyTask(t)}${t.id ? ` on ${t.id}` : ""}`) : [],
     busyKnown: active.available,
-    backupStorages: storages.available
-      ? storages.value.filter((s) => s.active !== 0 && s.enabled !== 0).map((s) => ({ name: s.storage, freeGb: gb(s.avail), shared: s.shared === 1 }))
-      : [],
+    backupStorages: storages.available ? storages.value.filter((s) => s.active !== 0 && s.enabled !== 0).map((s) => ({ name: s.storage, freeGb: gb(s.avail), shared: s.shared === 1 })) : [],
   };
 }
 
@@ -250,9 +258,7 @@ export interface RawMovePrecondition {
 export function buildMovePlan(type: "qemu" | "lxc", from: string, nodes: string[], raw: RawMovePrecondition, running: boolean) {
   const others = nodes.filter((n) => n !== from);
   // Proxmox can list a usable server here with an empty entry, so only a stated reason counts.
-  const blocked = Object.fromEntries(
-    Object.entries(raw.not_allowed_nodes ?? {}).filter(([, b]) => Object.keys(b).length > 0),
-  );
+  const blocked = Object.fromEntries(Object.entries(raw.not_allowed_nodes ?? {}).filter(([, b]) => Object.keys(b).length > 0));
   const targets = (raw.allowed_nodes ?? others).filter((n) => n !== from && !blocked[n]);
   const local = (raw.local_resources ?? []).length > 0;
   return {
@@ -337,7 +343,10 @@ export function buildRollingPlan(servers: RollingInput[], quorate: Section<boole
     votes,
     keepsMajority: votes >= 3,
     notChecked,
-    servers: [...checked].sort(olderFirst).filter((s) => (s.updates ?? 0) > 0).map(({ name, version, updates, rebootNeeded }) => ({ name, version, updates, rebootNeeded })),
+    servers: [...checked]
+      .sort(olderFirst)
+      .filter((s) => (s.updates ?? 0) > 0)
+      .map(({ name, version, updates, rebootNeeded }) => ({ name, version, updates, rebootNeeded })),
   };
 }
 
@@ -379,9 +388,7 @@ export function buildServerDetail(
           .map((v) => ({ name: v.desc || v.name || v.service || "Unknown", running: v.state === "running", enabled: v["unit-state"] === "enabled" && !expectedOff(v) }))
           .sort((a, b) => a.name.localeCompare(b.name))
       : null,
-    tasks: tasks.available
-      ? tasks.value.map((t) => ({ upid: t.upid, what: friendlyTask(t), target: t.id ?? "", who: t.user ?? "", startedAt: t.starttime ?? null, result: taskResult(t) }))
-      : null,
+    tasks: tasks.available ? tasks.value.map((t) => ({ upid: t.upid, what: friendlyTask(t), target: t.id ?? "", who: t.user ?? "", startedAt: t.starttime ?? null, result: taskResult(t) })) : null,
   };
 }
 export type ServerDetail = ReturnType<typeof buildServerDetail>;

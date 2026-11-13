@@ -56,14 +56,16 @@ export function readConf(text: string): Conf {
   if (!totem) throw new CorosyncError("The heartbeat settings file has no totem section.");
   const version = Number(totem.values.get("config_version")?.value);
   if (!Number.isInteger(version)) throw new CorosyncError("The heartbeat settings file has no config_version.");
-  const nodes = all.filter((b) => b.path.join("/") === "nodelist/node").map((b) => {
-    const rings: Record<number, string> = {};
-    for (const [k, v] of b.values) {
-      const m = /^ring(\d+)_addr$/.exec(k);
-      if (m) rings[Number(m[1])] = v.value;
-    }
-    return { name: b.values.get("name")?.value ?? "", nodeid: Number(b.values.get("nodeid")?.value), rings };
-  });
+  const nodes = all
+    .filter((b) => b.path.join("/") === "nodelist/node")
+    .map((b) => {
+      const rings: Record<number, string> = {};
+      for (const [k, v] of b.values) {
+        const m = /^ring(\d+)_addr$/.exec(k);
+        if (m) rings[Number(m[1])] = v.value;
+      }
+      return { name: b.values.get("name")?.value ?? "", nodeid: Number(b.values.get("nodeid")?.value), rings };
+    });
   if (!nodes.length || nodes.some((n) => !n.name || !Number.isInteger(n.nodeid))) throw new CorosyncError("The heartbeat settings file's node list isn't complete.");
   const interfaces = all.filter((b) => b.path.join("/") === "totem/interface").map((b) => Number(b.values.get("linknumber")?.value ?? 0));
   return { clusterName: totem.values.get("cluster_name")?.value ?? "", version, nodes, interfaces };

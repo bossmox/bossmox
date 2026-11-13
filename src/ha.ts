@@ -55,10 +55,15 @@ export function voteProblem(votes: number, nodes: number): HaProblem | null {
  */
 export function fencingWarnings(heartbeat: HeartbeatState | null, net: NetCheck | null): { lines: string[]; safe: boolean } {
   const lines: string[] = [];
-  if (heartbeat?.state === "offer") lines.push(`The heartbeat has one network. If that network has a hiccup, HA can restart guests that didn't need it. Give it a backup network first: every node has ${heartbeat.network} on a second port (Settings, Redundancy).`);
-  else if (heartbeat?.state === "no-port") lines.push("The heartbeat has one network, and not every node has a second port for a backup. If that network has a hiccup, HA can restart guests that didn't need it.");
+  if (heartbeat?.state === "offer")
+    lines.push(
+      `The heartbeat has one network. If that network has a hiccup, HA can restart guests that didn't need it. Give it a backup network first: every node has ${heartbeat.network} on a second port (Settings, Redundancy).`,
+    );
+  else if (heartbeat?.state === "no-port")
+    lines.push("The heartbeat has one network, and not every node has a second port for a backup. If that network has a hiccup, HA can restart guests that didn't need it.");
   else if (heartbeat?.state === "unknown") lines.push(`BossMox can't tell whether the heartbeat has a backup network: ${heartbeat.why}`);
-  if (net?.known && net.shared) lines.push(`VM moves run on ${net.moveNet}, the heartbeat's only network. Moves can fill it, and that's what restarted guests that didn't need it on 2026-11-10. Health check has the fix.`);
+  if (net?.known && net.shared)
+    lines.push(`VM moves run on ${net.moveNet}, the heartbeat's only network. Moves can fill it, and that's what restarted guests that didn't need it on 2026-11-10. Health check has the fix.`);
   const safe = heartbeat?.state === "backed-up" && !(net?.known && net.shared);
   if (safe) lines.push("The heartbeat has a backup network, and moves don't share its only one. That's what keeps HA from restarting guests that didn't need it.");
   return { lines, safe };
@@ -168,7 +173,10 @@ export function createHa(deps: HaDeps) {
   /** The protected guests with HA's state each, for Settings. */
   async function list(ticket: string) {
     const all = await pve.get<RawResource[]>("/cluster/resources?type=vm", ticket);
-    return all.filter((r) => r.hastate).map((r) => ({ id: Number(r.vmid), name: r.name ?? `VM ${r.vmid}`, node: r.node ?? "", state: r.hastate as string })).sort((a, b) => a.name.localeCompare(b.name));
+    return all
+      .filter((r) => r.hastate)
+      .map((r) => ({ id: Number(r.vmid), name: r.name ?? `VM ${r.vmid}`, node: r.node ?? "", state: r.hastate as string }))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   return { check, protect, unprotect, recover, list };

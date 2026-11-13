@@ -9,28 +9,28 @@ import { clientAddress, loadConfig, sameOrigin } from "./config.js";
 import { Terminals, type TermProxy } from "./terminal.js";
 import { buildOverview, type Guest, type Overview, type RawConfig, type RawResource, type RawSnapshot } from "./model.js";
 import { buildBackups, type BackupSource, type RawBackupFile, type RawBackupJob } from "./backups.js";
-import { FILE_STORAGE, installerLabel, } from "./create.js";
+import { FILE_STORAGE, installerLabel } from "./create.js";
 import { buildNetwork, type RawDns, type RawInterface } from "./network.js";
 import { eraseBlocker, hostIsValid, readHardDisks, StorageError, type RawDisk, type RawStorageConfig } from "./storage.js";
-import { pickAddresses, snapshotFix, HardwareError, } from "./hardware.js";
+import { pickAddresses, snapshotFix, HardwareError } from "./hardware.js";
 import { networkInterfaces } from "node:os";
 import { PveClient, PveError, type Identity } from "./pve.js";
 import { plainError } from "./plain-errors.js";
 import { buildHealth, type Leftover } from "./health.js";
 import { canChangeCluster, preferencesPath, seesAllGuestsFrom, readPreferences, scheduleWarnings, type Preferences } from "./preferences.js";
 import { settingsPath } from "./settings.js";
-import { movesPath, } from "./moves.js";
+import { movesPath } from "./moves.js";
 import { createJobs } from "./jobs.js";
-import { migrationNetwork, } from "./cluster-net.js";
-import { buildRecommended, props, } from "./recommended.js";
-import { runsPath, } from "./run.js";
+import { migrationNetwork } from "./cluster-net.js";
+import { buildRecommended, props } from "./recommended.js";
+import { runsPath } from "./run.js";
 import { UPDATE_COMMAND, UpdateChecker, versionNumbers } from "./update-check.js";
 import { buildStorageMap, type GuestRefs, type RawLvm, type RawMount, type RawStorageStatus, type RawVolume, type RawZfsDetail } from "./storage-map.js";
 import { auditLine } from "./audit.js";
 import { sharedLoad } from "./shared-load.js";
 import { readJsonBody } from "./body.js";
 import {
-  buildTaskFeed, 
+  buildTaskFeed,
   buildServerDetail,
   section,
   tieBreakerVotes,
@@ -142,12 +142,14 @@ const tieBreaker = createTieBreaker({
   guestAddresses: async (session) => {
     const vms = (await pve.get<RawResource[]>("/cluster/resources?type=vm", session.ticket)).filter((r) => r.status === "running" && r.node);
     const out: Record<string, string[]> = {};
-    await Promise.all(vms.map(async (r) => {
-      const type = r.type === "lxc" ? "lxc" : "qemu";
-      const path = `/nodes/${encodeURIComponent(r.node as string)}/${type}/${r.vmid}`;
-      const raw = await pve.get<unknown>(type === "lxc" ? `${path}/interfaces` : `${path}/agent/network-get-interfaces`, session.ticket).catch(() => null);
-      if (raw) out[r.name ?? `VM ${r.vmid}`] = pickAddresses(type, raw);
-    }));
+    await Promise.all(
+      vms.map(async (r) => {
+        const type = r.type === "lxc" ? "lxc" : "qemu";
+        const path = `/nodes/${encodeURIComponent(r.node as string)}/${type}/${r.vmid}`;
+        const raw = await pve.get<unknown>(type === "lxc" ? `${path}/interfaces` : `${path}/agent/network-get-interfaces`, session.ticket).catch(() => null);
+        if (raw) out[r.name ?? `VM ${r.vmid}`] = pickAddresses(type, raw);
+      }),
+    );
     return out;
   },
   audit: (event, who, detail) => audit(event, who, "settings", detail),
@@ -190,10 +192,7 @@ const updateView = () => (HAS_VERSION ? { on: updates.state.on, available: updat
 
 async function fetchGuest(r: RawResource, ticket: string): Promise<[number, Guest]> {
   const base = `/nodes/${encodeURIComponent(r.node ?? "")}/${r.type}/${r.vmid}`;
-  const [cfg, snaps] = await Promise.allSettled([
-    pve.get<RawConfig>(`${base}/config`, ticket),
-    pve.get<RawSnapshot[]>(`${base}/snapshot`, ticket),
-  ]);
+  const [cfg, snaps] = await Promise.allSettled([pve.get<RawConfig>(`${base}/config`, ticket), pve.get<RawSnapshot[]>(`${base}/snapshot`, ticket)]);
   const guest: Guest = {};
   if (cfg.status === "fulfilled") guest.config = cfg.value;
   if (snaps.status === "fulfilled") guest.snapshots = snaps.value;
@@ -250,11 +249,13 @@ async function loadBackups(ticket: string) {
   const data = await loadOverview(ticket);
   const online = data.nodes.filter((n) => n.online).map((n) => n.name);
   const sharedSeen = new Set<string>();
-  const perNode = await Promise.all(online.map(async (node) => {
-    const base = `/nodes/${encodeURIComponent(node)}/storage`;
-    const storages = (await pve.get<RawStorage[]>(`${base}?content=backup`, ticket)).filter(usable);
-    return { node, base, storages };
-  }));
+  const perNode = await Promise.all(
+    online.map(async (node) => {
+      const base = `/nodes/${encodeURIComponent(node)}/storage`;
+      const storages = (await pve.get<RawStorage[]>(`${base}?content=backup`, ticket)).filter(usable);
+      return { node, base, storages };
+    }),
+  );
   const reads: Promise<BackupSource[]>[] = [];
   for (const { node, base, storages } of perNode) {
     for (const s of storages) {
@@ -263,7 +264,12 @@ async function loadBackups(ticket: string) {
         if (sharedSeen.has(s.storage)) continue;
         sharedSeen.add(s.storage);
       }
-      reads.push(pve.get<RawBackupFile[]>(`${base}/${encodeURIComponent(s.storage)}/content?content=backup`, ticket).then((files) => files.map((file) => ({ node, storage: s.storage, file }))).catch(() => []));
+      reads.push(
+        pve
+          .get<RawBackupFile[]>(`${base}/${encodeURIComponent(s.storage)}/content?content=backup`, ticket)
+          .then((files) => files.map((file) => ({ node, storage: s.storage, file })))
+          .catch(() => []),
+      );
     }
   }
   const [files, backupJobs, notBackedUp] = await Promise.all([
@@ -271,25 +277,26 @@ async function loadBackups(ticket: string) {
     pve.get<RawBackupJob[]>("/cluster/backup", ticket).catch(() => []),
     pve.get<{ vmid: number }[]>("/cluster/backup-info/not-backed-up", ticket).catch(() => []),
   ]);
-  return { ...buildBackups(files.flat(), data.vms.map((v) => ({ id: v.id, name: v.name })), backupJobs, scheduleWarnings(preferences, notBackedUp)), backupsElsewhere: preferences.backupsElsewhere };
+  return {
+    ...buildBackups(
+      files.flat(),
+      data.vms.map((v) => ({ id: v.id, name: v.name })),
+      backupJobs,
+      scheduleWarnings(preferences, notBackedUp),
+    ),
+    backupsElsewhere: preferences.backupsElsewhere,
+  };
 }
 
 async function loadRestorePlan(name: string, type: "qemu" | "lxc", ticket: string) {
   const content = type === "qemu" ? "images" : "rootdir";
-  const [storages, nextId] = await Promise.all([
-    pve.get<RawStorage[]>(`/nodes/${encodeURIComponent(name)}/storage?content=${content}`, ticket),
-    pve.get<string | number>("/cluster/nextid", ticket),
-  ]);
+  const [storages, nextId] = await Promise.all([pve.get<RawStorage[]>(`/nodes/${encodeURIComponent(name)}/storage?content=${content}`, ticket), pve.get<string | number>("/cluster/nextid", ticket)]);
   return { nextId: Number(nextId), storages: storages.filter(usable).map((s) => s.storage) };
 }
 
 async function loadNetwork(name: string, ticket: string) {
   const base = `/nodes/${encodeURIComponent(name)}`;
-  const [data, interfaces, dns] = await Promise.all([
-    loadOverview(ticket),
-    pve.get<RawInterface[]>(`${base}/network`, ticket),
-    pve.get<RawDns>(`${base}/dns`, ticket).catch(() => null),
-  ]);
+  const [data, interfaces, dns] = await Promise.all([loadOverview(ticket), pve.get<RawInterface[]>(`${base}/network`, ticket), pve.get<RawDns>(`${base}/dns`, ticket).catch(() => null)]);
   return buildNetwork(name, interfaces, dns, data.vms);
 }
 
@@ -343,13 +350,14 @@ async function loadRecommended(session: Session) {
     noBoot: data.vms.filter((v) => v.running && !v.template && !v.startsAtBoot).map((v) => ({ id: v.id, name: v.name })),
     canChange: canChangeCluster(perms),
     // An iSCSI portal ("10.0.100.31:3260") or a NAS address. Host names are left out: nothing to compare.
-    storage: stores.filter((x) => x.disable !== 1).flatMap((x) => {
-      const ip = /^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/.exec((x.portal ?? x.server ?? "").trim())?.[1];
-      return ip && x.storage ? [{ id: x.storage, ip }] : [];
-    }),
+    storage: stores
+      .filter((x) => x.disable !== 1)
+      .flatMap((x) => {
+        const ip = /^(\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?$/.exec((x.portal ?? x.server ?? "").trim())?.[1];
+        return ip && x.storage ? [{ id: x.storage, ip }] : [];
+      }),
   });
 }
-
 
 /** The sign-in realms. Anyone can ask for them, so one load a minute is shared by everyone (#59). */
 const realms = sharedLoad(60 * 1000, () => pve.get<{ realm: string; comment?: string; default?: number }[]>("/access/domains"));
@@ -358,9 +366,7 @@ function send(res: http.ServerResponse, status: number, type: string, body: stri
   res.writeHead(status, { ...HEADERS, ...(secureCookie ? { "Strict-Transport-Security": "max-age=31536000" } : {}), "Content-Type": type, "Cache-Control": "no-store", ...extra });
   res.end(body);
 }
-const json = (res: http.ServerResponse, status: number, value: unknown, extra?: Record<string, string>) =>
-  send(res, status, "application/json; charset=utf-8", JSON.stringify(value), extra);
-
+const json = (res: http.ServerResponse, status: number, value: unknown, extra?: Record<string, string>) => send(res, status, "application/json; charset=utf-8", JSON.stringify(value), extra);
 
 const MAX_UPLOAD = 200 * 1024 ** 3;
 const FULL_LOG = 20000;
@@ -370,9 +376,18 @@ const UPLOAD_NAME = /^[\w.-]{1,200}\.(iso|img)$/i;
 /** Turns a hardware rule into a plain 400, and reads the guest's settings the rule needs. */
 /** The IPv4 addresses BossMox answers on from the network. Loopback (127.0.0.1) is left out: every guest has it too. */
 function ownAddresses(): Set<string> {
-  return new Set(Object.values(networkInterfaces()).flat().filter((i) => i && i.family === "IPv4" && !i.internal && !i.address.startsWith("127.")).map((i) => i!.address));
+  return new Set(
+    Object.values(networkInterfaces())
+      .flat()
+      .filter((i) => i && i.family === "IPv4" && !i.internal && !i.address.startsWith("127."))
+      .map((i) => i!.address),
+  );
 }
-const part = (value: string, key: string) => value.split(",").find((p) => p.startsWith(`${key}=`))?.slice(key.length + 1) ?? "";
+const part = (value: string, key: string) =>
+  value
+    .split(",")
+    .find((p) => p.startsWith(`${key}=`))
+    ?.slice(key.length + 1) ?? "";
 async function withConfig<T>(path: string, who: Identity, run: (config: RawConfig) => T): Promise<T> {
   const config = await pve.get<RawConfig>(`${path}/config`, who.ticket);
   try {
@@ -402,7 +417,7 @@ const nodeDisks = async (name: string, ticket: string, data: Overview) => {
   return readHardDisks(raw, passedThrough(name, data), eraseBlocker(guestRefs(data), seesAll));
 };
 const usesStorageNames = (body: unknown) => (Array.isArray(body) ? body.filter((d): d is string => typeof d === "string").slice(0, 32) : []);
-const kindOf = (body: Record<string, unknown>) => (body.type === "lxc" ? "lxc" as const : "qemu" as const);
+const kindOf = (body: Record<string, unknown>) => (body.type === "lxc" ? ("lxc" as const) : ("qemu" as const));
 // Dot-only names ("." and "..") are refused: addresses fold them into the path around them (pre-public review 2026-11-09).
 
 /** The address of one VM or container, checked, for actions that take one. */
@@ -445,7 +460,13 @@ async function loadHealth(session: Session) {
     pve.get<{ id?: string; storage?: string; enabled?: number }[]>("/cluster/backup", t).catch(() => []),
     pve.get<(RawTask & { node?: string })[]>("/cluster/tasks", t).catch(() => []),
     Promise.all(online.map((n) => loadServerDetail(n, t).catch(() => null))),
-    Promise.all(online.map((n) => storageMapFor(n, t, data).then((r) => r.map).catch(() => null))),
+    Promise.all(
+      online.map((n) =>
+        storageMapFor(n, t, data)
+          .then((r) => r.map)
+          .catch(() => null),
+      ),
+    ),
     jobs.readNetCheck(t),
     pve.get<Record<string, unknown>>("/cluster/options", t).catch((): Record<string, unknown> => ({})),
     pve.get<{ sid?: string }[]>("/cluster/ha/resources", t).catch(() => []),
@@ -485,11 +506,13 @@ async function loadHealth(session: Session) {
 /** Every leftover disk with its size, asked of the storage that holds it. A size it can't read is left as unknown. */
 async function leftoverDisks(vms: Overview["vms"], ticket: string): Promise<Leftover[]> {
   const list = vms.flatMap((v) => v.leftover.map((d) => ({ vmid: v.id, guest: v.name, node: v.node, type: (v.type === "lxc" ? "lxc" : "qemu") as Leftover["type"], slot: d.slot, volume: d.volume })));
-  return Promise.all(list.map(async (d) => {
-    const storage = d.volume.split(":")[0] ?? "";
-    const info = await pve.get<{ size?: number }>(`/nodes/${encodeURIComponent(d.node)}/storage/${encodeURIComponent(storage)}/content/${encodeURIComponent(d.volume)}`, ticket).catch(() => null);
-    return { ...d, sizeGb: info?.size ? Math.round((info.size / 1024 ** 3) * 10) / 10 : null };
-  }));
+  return Promise.all(
+    list.map(async (d) => {
+      const storage = d.volume.split(":")[0] ?? "";
+      const info = await pve.get<{ size?: number }>(`/nodes/${encodeURIComponent(d.node)}/storage/${encodeURIComponent(storage)}/content/${encodeURIComponent(d.volume)}`, ticket).catch(() => null);
+      return { ...d, sizeGb: info?.size ? Math.round((info.size / 1024 ** 3) * 10) / 10 : null };
+    }),
+  );
 }
 
 /** Waits for a Proxmox task to finish, and fails with its own words if it didn't end OK. */
@@ -517,10 +540,11 @@ async function loadStorageMap(name: string, session: Session) {
 }
 async function storageMapFor(name: string, t: string, data: Overview) {
   const base = `/nodes/${encodeURIComponent(name)}`;
-  const quiet = <T>(p: Promise<T>, fallback: T) => p.catch((err) => {
-    if (err instanceof PveError && err.status === 401) throw err;
-    return fallback;
-  });
+  const quiet = <T>(p: Promise<T>, fallback: T) =>
+    p.catch((err) => {
+      if (err instanceof PveError && err.status === 401) throw err;
+      return fallback;
+    });
   const [disks, lvm, zfsList, directory, config, status, nodeStatus, seesAll] = await Promise.all([
     quiet(pve.get<RawDisk[]>(`${base}/disks/list?include-partitions=1`, t), []),
     quiet(pve.get<RawLvm>(`${base}/disks/lvm`, t), null),
@@ -534,26 +558,37 @@ async function storageMapFor(name: string, t: string, data: Overview) {
   const zfsEntries = await Promise.all(zfsList.map(async (z) => [z.name, await quiet(pve.get<RawZfsDetail>(`${base}/disks/zfs/${encodeURIComponent(z.name)}`, t), {})] as const));
   const active = status.filter((s) => s.enabled !== 0 && s.active === 1);
   const unreadable: string[] = [];
-  const contentEntries = await Promise.all(active.map(async (s) => [s.storage, await quiet(pve.get<RawVolume[]>(`${base}/storage/${encodeURIComponent(s.storage)}/content`, t), null).then((v) => {
-    if (v === null) unreadable.push(s.storage);
-    return v ?? [];
-  })] as const));
-  const map = buildStorageMap({
-    node: name,
-    disks,
-    lvm,
-    zfs: Object.fromEntries(zfsEntries),
-    directory,
-    config,
-    status,
-    rootfs: nodeStatus.rootfs ?? null,
-    content: Object.fromEntries(contentEntries),
-    contentUnknown: unreadable,
-    passedThrough: passedThrough(name, data),
-    guests: guestRefs(data),
-    allNodesOnline: data.nodes.every((n) => n.online),
-    seesAllGuests: seesAll,
-  }, data.nodes.length > 1);
+  const contentEntries = await Promise.all(
+    active.map(
+      async (s) =>
+        [
+          s.storage,
+          await quiet(pve.get<RawVolume[]>(`${base}/storage/${encodeURIComponent(s.storage)}/content`, t), null).then((v) => {
+            if (v === null) unreadable.push(s.storage);
+            return v ?? [];
+          }),
+        ] as const,
+    ),
+  );
+  const map = buildStorageMap(
+    {
+      node: name,
+      disks,
+      lvm,
+      zfs: Object.fromEntries(zfsEntries),
+      directory,
+      config,
+      status,
+      rootfs: nodeStatus.rootfs ?? null,
+      content: Object.fromEntries(contentEntries),
+      contentUnknown: unreadable,
+      passedThrough: passedThrough(name, data),
+      guests: guestRefs(data),
+      allNodesOnline: data.nodes.every((n) => n.online),
+      seesAllGuests: seesAll,
+    },
+    data.nodes.length > 1,
+  );
   return { map, diskList: readHardDisks(disks, passedThrough(name, data), eraseBlocker(guestRefs(data), seesAll)), config, directory };
 }
 
@@ -603,8 +638,25 @@ const actionContext = {
     preferencesEpoch += 1;
   },
   preferencesFile: PREFERENCES_FILE,
-  audit, finishTask, guestPath, guestRefs, keepsFiles, kindOf, loadOverview, nodeDisks, overview, ownAddresses, part, readOptions,
-  rule, seesAllGuests, snapshotFixFor, snapshotName, storageMapFor, usesStorageNames, withConfig,
+  audit,
+  finishTask,
+  guestPath,
+  guestRefs,
+  keepsFiles,
+  kindOf,
+  loadOverview,
+  nodeDisks,
+  overview,
+  ownAddresses,
+  part,
+  readOptions,
+  rule,
+  seesAllGuests,
+  snapshotFixFor,
+  snapshotName,
+  storageMapFor,
+  usesStorageNames,
+  withConfig,
 };
 export type ActionContext = typeof actionContext;
 
@@ -702,7 +754,6 @@ function setCookie(id: string, maxAge: number): Record<string, string> {
 }
 
 const readJson = (req: http.IncomingMessage) => readJsonBody(req, { maxBytes: MAX_BODY, waitMs: BODY_WAIT_MS });
-
 
 /** Who did what, for anyone looking into an incident. Names and addresses only, never tickets, passwords or request bodies. */
 function audit(event: string, who: string, address: string, fields: Record<string, string | number> = {}) {
@@ -823,9 +874,36 @@ async function handlePost(req: http.IncomingMessage, res: http.ServerResponse, r
   return json(res, 404, { error: "Not found." });
 }
 
-
 /** What the GET routes get from the server (review #61). */
-const routeContext = { FULL_LOG, HEALTH_CACHE_MS, VERSION, cache, guestPath, alerts, healthCache, ha, heartbeat, jobs, tieBreaker, json, loadBackups, loadCreatePlan, loadHealth, loadNetwork, loadRecommended, loadRestorePlan, loadServerDetail, loadStorageMap, nodeDisks, overview, pve, snapshotFixFor, updateView, viewerOf, epoch: () => preferencesEpoch };
+const routeContext = {
+  FULL_LOG,
+  HEALTH_CACHE_MS,
+  VERSION,
+  cache,
+  guestPath,
+  alerts,
+  healthCache,
+  ha,
+  heartbeat,
+  jobs,
+  tieBreaker,
+  json,
+  loadBackups,
+  loadCreatePlan,
+  loadHealth,
+  loadNetwork,
+  loadRecommended,
+  loadRestorePlan,
+  loadServerDetail,
+  loadStorageMap,
+  nodeDisks,
+  overview,
+  pve,
+  snapshotFixFor,
+  updateView,
+  viewerOf,
+  epoch: () => preferencesEpoch,
+};
 export type RouteContext = typeof routeContext;
 const GET_ROUTES = getRoutes(routeContext);
 

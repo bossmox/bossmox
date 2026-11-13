@@ -29,7 +29,8 @@ export function addressProblem(address: string, nodes: Record<string, string[]>,
   const m = IPV4.exec(address);
   if (!m || m.slice(1).some((p) => Number(p) > 255)) return "Type the vote machine's IPv4 address, like 192.168.1.50.";
   for (const [name, ips] of Object.entries(nodes)) if (ips.includes(address)) return `${address} is ${name}, one of the cluster's own nodes. The vote has to come from a machine outside the cluster.`;
-  for (const [name, ips] of Object.entries(guests)) if (ips.includes(address)) return `${address} is ${name}, a guest on this cluster. If its node went down, the vote would go with it, so it has to be a machine outside the cluster.`;
+  for (const [name, ips] of Object.entries(guests))
+    if (ips.includes(address)) return `${address} is ${name}, a guest on this cluster. If its node went down, the vote would go with it, so it has to be a machine outside the cluster.`;
   return null;
 }
 
@@ -90,7 +91,15 @@ export function createTieBreaker(deps: TbDeps) {
     const cluster = status.find((s) => s.type === "cluster");
     const nodes = status.filter((s) => s.type === "node");
     const s = cluster ? tieBreakerState(nodes.length, qdevice) : ({ state: "single" } as const);
-    return { ...s, clusterName: cluster?.name ?? "", quorate: cluster?.quorate === 1, offline: nodes.filter((n) => n.online !== 1).map((n) => n.name ?? ""), canSetUp: session.username === "root@pam", lines: VOTE_MACHINE_LINES, after: VOTE_MACHINE_AFTER };
+    return {
+      ...s,
+      clusterName: cluster?.name ?? "",
+      quorate: cluster?.quorate === 1,
+      offline: nodes.filter((n) => n.online !== 1).map((n) => n.name ?? ""),
+      canSetUp: session.username === "root@pam",
+      lines: VOTE_MACHINE_LINES,
+      after: VOTE_MACHINE_AFTER,
+    };
   }
 
   /** Every node's addresses, from Proxmox's interface lists. */
@@ -100,7 +109,12 @@ export function createTieBreaker(deps: TbDeps) {
     for (const m of members) {
       const name = String(m.node ?? m.name ?? "");
       const ifaces = await pve.get<{ cidr?: string }[]>(`/nodes/${encodeURIComponent(name)}/network`, session.ticket).catch(() => []);
-      out[name] = [...ifaces.flatMap((i) => (i.cidr ? [i.cidr.split("/")[0] as string] : [])), ...Object.entries(m).filter(([k]) => /^ring\d+_addr$/.test(k)).map(([, v]) => String(v))];
+      out[name] = [
+        ...ifaces.flatMap((i) => (i.cidr ? [i.cidr.split("/")[0] as string] : [])),
+        ...Object.entries(m)
+          .filter(([k]) => /^ring\d+_addr$/.test(k))
+          .map(([, v]) => String(v)),
+      ];
     }
     return out;
   }
@@ -110,7 +124,11 @@ export function createTieBreaker(deps: TbDeps) {
     if (job?.running) throw new HttpError(409, "The tie-breaker setup is already running.");
     if (session.username !== "root@pam") throw new HttpError(403, "Setting up a tie-breaker needs a root console on the nodes, so sign in as root@pam.");
     const v = await view(session);
-    if (v.state !== "offer") throw new HttpError(400, v.state === "set" ? "This cluster already has a tie-breaker." : v.state === "odd" ? "A tie-breaker only helps with an even number of nodes." : "A tie-breaker needs a cluster.");
+    if (v.state !== "offer")
+      throw new HttpError(
+        400,
+        v.state === "set" ? "This cluster already has a tie-breaker." : v.state === "odd" ? "A tie-breaker only helps with an even number of nodes." : "A tie-breaker needs a cluster.",
+      );
     if (v.offline.length) throw new HttpError(400, `Bring ${v.offline.join(", ")} back online first.`);
     if (!v.quorate) throw new HttpError(400, "The cluster has lost its majority, so nothing should change now.");
     if (confirm !== v.clusterName) throw new HttpError(400, `Type the cluster's name, ${v.clusterName}, to confirm.`);
@@ -134,7 +152,11 @@ export function createTieBreaker(deps: TbDeps) {
       };
       let s = step(`Checking every node reaches ${address}`);
       for (const node of names) {
-        const r = await deps.console(node, session, `ping -c1 -W2 ${address} >/dev/null 2>&1 && p=yes || p=no; timeout 3 bash -c '</dev/tcp/${address}/5403' 2>/dev/null && q=yes || q=no; printf '\\n__BMX_PING__:%s\\n__BMX_PORT__:%s\\n' $p $q`);
+        const r = await deps.console(
+          node,
+          session,
+          `ping -c1 -W2 ${address} >/dev/null 2>&1 && p=yes || p=no; timeout 3 bash -c '</dev/tcp/${address}/5403' 2>/dev/null && q=yes || q=no; printf '\\n__BMX_PING__:%s\\n__BMX_PORT__:%s\\n' $p $q`,
+        );
         const ping = marker(r.output, "PING");
         const port = marker(r.output, "PORT");
         if (ping === null || port === null) return fail(s, `BossMox couldn't check the way from ${node}.`);
@@ -144,7 +166,11 @@ export function createTieBreaker(deps: TbDeps) {
       Object.assign(s, { state: "ok", text: `Every node reaches the vote service on ${address}` });
       s = step("Installing the tie-breaker software on every node");
       for (const node of names) {
-        const r = await deps.console(node, session, "DEBIAN_FRONTEND=noninteractive apt-get install -y -q corosync-qdevice >/dev/null 2>&1; dpkg -s corosync-qdevice >/dev/null 2>&1 && printf '\\n__BMX_QD__:yes\\n' || printf '\\n__BMX_QD__:no\\n'");
+        const r = await deps.console(
+          node,
+          session,
+          "DEBIAN_FRONTEND=noninteractive apt-get install -y -q corosync-qdevice >/dev/null 2>&1; dpkg -s corosync-qdevice >/dev/null 2>&1 && printf '\\n__BMX_QD__:yes\\n' || printf '\\n__BMX_QD__:no\\n'",
+        );
         if (marker(r.output, "QD") !== "yes") return fail(s, `corosync-qdevice didn't install on ${node}. Check that node's update channel in Health check.`);
       }
       Object.assign(s, { state: "ok", text: "The tie-breaker software is on every node" });

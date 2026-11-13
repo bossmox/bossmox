@@ -249,12 +249,17 @@ export function poolRemoval(map: StorageMap, id: string, config: RawStorageConfi
   if (!p.contentKnown) throw new Error(`BossMox couldn't read what's on ${id}, so it won't erase it. Try again in a moment.`);
   const unseen = p.thin ? p.usedGb : p.otherGb;
   const allowance = p.thin ? 0.1 : Math.max(1, p.totalGb * 0.015);
-  if (!p.items.length && unseen > allowance) throw new Error(`Something Proxmox doesn't keep track of is using ${unseen} GB of ${id}, such as files or other data put there outside Proxmox. BossMox won't erase what it can't see. Check it in Proxmox's own screen.`);
+  if (!p.items.length && unseen > allowance)
+    throw new Error(
+      `Something Proxmox doesn't keep track of is using ${unseen} GB of ${id}, such as files or other data put there outside Proxmox. BossMox won't erase what it can't see. Check it in Proxmox's own screen.`,
+    );
   if (p.items.length) {
-    const counts = Object.entries(p.items.reduce<Record<string, number>>((a, i) => {
-      a[i.kind] = (a[i.kind] ?? 0) + 1;
-      return a;
-    }, {})).map(([k, n]) => `${n} ${k}${n === 1 ? "" : "s"}`);
+    const counts = Object.entries(
+      p.items.reduce<Record<string, number>>((a, i) => {
+        a[i.kind] = (a[i.kind] ?? 0) + 1;
+        return a;
+      }, {}),
+    ).map(([k, n]) => `${n} ${k}${n === 1 ? "" : "s"}`);
     throw new Error(`There's still something on it: ${counts.join(", ")}. Delete or move ${p.items.length === 1 ? "it" : "them"} first.`);
   }
   const cleanup = "cleanup-config=1&cleanup-disks=1";
@@ -264,7 +269,10 @@ export function poolRemoval(map: StorageMap, id: string, config: RawStorageConfi
     // Destroying the pool destroys every dataset in it. Another storage kept inside it, even a nearly empty one the
     // space check lets through, would go too (review S2).
     const inside = allConfigs.filter((c) => c.storage !== id && ((c.pool ?? "").startsWith(`${pool}/`) || c.path === `/${pool}` || (c.path ?? "").startsWith(`/${pool}/`)));
-    if (inside.length) throw new Error(`${inside.map((c) => c.storage).join(", ")} ${inside.length === 1 ? "is" : "are"} kept inside ${pool}, so deleting ${id} would erase ${inside.length === 1 ? "it" : "them"} too. Remove ${inside.length === 1 ? "it" : "them"} first.`);
+    if (inside.length)
+      throw new Error(
+        `${inside.map((c) => c.storage).join(", ")} ${inside.length === 1 ? "is" : "are"} kept inside ${pool}, so deleting ${id} would erase ${inside.length === 1 ? "it" : "them"} too. Remove ${inside.length === 1 ? "it" : "them"} first.`,
+      );
     return { path: `disks/zfs/${encodeURIComponent(pool)}?${cleanup}`, disks: g.disks.map((d) => d.path) };
   }
   if (config.type === "lvmthin") {
@@ -285,8 +293,16 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
   const whole = input.disks.filter((d) => !d.parent && d.devpath);
   const parts = input.disks.filter((d) => d.parent);
   const vgDisks = (vg: string) =>
-    (input.lvm?.children ?? []).filter((g) => g.name === vg).flatMap((g) => (g.children ?? []).map((pv) => find(pv.name))).filter((p): p is string => !!p);
-  const zfsDisks = (pool: string) => (input.zfs[pool] ? leaves(input.zfs[pool]).map(find).filter((p): p is string => !!p) : []);
+    (input.lvm?.children ?? [])
+      .filter((g) => g.name === vg)
+      .flatMap((g) => (g.children ?? []).map((pv) => find(pv.name)))
+      .filter((p): p is string => !!p);
+  const zfsDisks = (pool: string) =>
+    input.zfs[pool]
+      ? leaves(input.zfs[pool])
+          .map(find)
+          .filter((p): p is string => !!p)
+      : [];
 
   // The system disk: Proxmox's own volume group, else its ZFS pool, else the mounted file system the size of root.
   const rootGb = gb(input.rootfs?.total);
@@ -398,10 +414,11 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
     groups.push(merged);
     for (const d of merged) groupOf.set(d, groups.length - 1);
   }
-  for (const d of system) if (!groupOf.has(d)) {
-    groups.push([d]);
-    groupOf.set(d, groups.length - 1);
-  }
+  for (const d of system)
+    if (!groupOf.has(d)) {
+      groups.push([d]);
+      groupOf.set(d, groups.length - 1);
+    }
   const used = new Set(parts.filter((p) => claimed.has(p.devpath as string)).map((p) => p.devpath));
   const claimedDisks = new Set(local.flatMap((p) => p.disks));
   const givenTo = (d: RawDisk) => {
@@ -412,9 +429,10 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
     const path = d.devpath as string;
     const mine = parts.filter((p) => p.parent === path);
     const vm = givenTo(d);
-    const otherUses = system.includes(path) || claimedDisks.has(path)
-      ? mine.filter((p) => p.mounted && MOUNTED_FS.has(p.used ?? "") && !used.has(p.devpath) && !system.includes(path)).map((p) => `${p.used} partition ${p.devpath}`)
-      : mine.filter((p) => p.used && !/^(EFI|BIOS boot)$/.test(p.used)).map((p) => `${p.used} partition ${p.devpath}`);
+    const otherUses =
+      system.includes(path) || claimedDisks.has(path)
+        ? mine.filter((p) => p.mounted && MOUNTED_FS.has(p.used ?? "") && !used.has(p.devpath) && !system.includes(path)).map((p) => `${p.used} partition ${p.devpath}`)
+        : mine.filter((p) => p.used && !/^(EFI|BIOS boot)$/.test(p.used)).map((p) => `${p.used} partition ${p.devpath}`);
     return {
       path,
       model: d.model && d.model !== "unknown" ? d.model.replace(/_/g, " ") : "",
@@ -434,7 +452,11 @@ export function buildStorageMap(input: NodeStorageInput, clustered: boolean) {
     groups: groups
       .filter((g) => g.length)
       .map((g) => ({
-        disks: g.map((p) => byPath.get(p)).filter((d): d is RawDisk => !!d).map(disk).sort((a, b) => Number(b.system) - Number(a.system) || a.path.localeCompare(b.path)),
+        disks: g
+          .map((p) => byPath.get(p))
+          .filter((d): d is RawDisk => !!d)
+          .map(disk)
+          .sort((a, b) => Number(b.system) - Number(a.system) || a.path.localeCompare(b.path)),
         pools: local.filter((p) => p.disks.some((d) => g.includes(d))).sort((a, b) => a.id.localeCompare(b.id)),
       }))
       .sort((a, b) => Number(b.disks.some((d) => d.system)) - Number(a.disks.some((d) => d.system)) || (a.disks[0]?.path ?? "").localeCompare(b.disks[0]?.path ?? "")),

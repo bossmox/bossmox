@@ -20,7 +20,8 @@ const COOKIE = "__Host-bossmox_setup";
 const MAX_BODY = 8 * 1024;
 const CA_FILE = path.join(path.dirname(settingsPath(env)), "pve-root-ca.pem");
 const HEADERS = {
-  "Content-Security-Policy": "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "Content-Security-Policy":
+    "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
   "Cache-Control": "no-store",
@@ -41,15 +42,16 @@ const STATIC: Record<string, [string, string]> = {
 const wizard = new Wizard(env.BOSSMOX_SETUP_HASH ?? path.join(path.dirname(settingsPath(env)), "setup.hash"), {
   probe,
   call,
-  verifies: (host, port, ca, name) => new Promise((resolve) => {
-    const identity = name ? { checkServerIdentity: (_h: string, cert: tls.PeerCertificate) => tls.checkServerIdentity(name, cert) } : {};
-    const socket = tls.connect({ ...tlsTarget(host), port, ca, timeout: 8000, ...identity }, () => {
-      socket.destroy();
-      resolve(socket.authorized);
-    });
-    socket.once("error", () => resolve(false));
-    socket.once("timeout", () => resolve(false));
-  }),
+  verifies: (host, port, ca, name) =>
+    new Promise((resolve) => {
+      const identity = name ? { checkServerIdentity: (_h: string, cert: tls.PeerCertificate) => tls.checkServerIdentity(name, cert) } : {};
+      const socket = tls.connect({ ...tlsTarget(host), port, ca, timeout: 8000, ...identity }, () => {
+        socket.destroy();
+        resolve(socket.authorized);
+      });
+      socket.once("error", () => resolve(false));
+      socket.once("timeout", () => resolve(false));
+    }),
   saveCa(pem) {
     writeFileSync(CA_FILE, pem, { mode: 0o644 });
     chmodSync(CA_FILE, 0o644);

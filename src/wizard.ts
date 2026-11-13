@@ -18,7 +18,10 @@ const VERIFY_WAIT_MS = 60 * 1000;
 const CLUSTER_NAME = /^[A-Za-z0-9][A-Za-z0-9-]{0,14}$/;
 
 export class WizardError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
     super(message);
   }
 }
@@ -55,7 +58,10 @@ export interface NodeView {
   online: boolean;
 }
 
-const hashCode = (code: string) => createHash("sha256").update(code.toUpperCase().replace(/[^0-9A-Z]/g, "")).digest();
+const hashCode = (code: string) =>
+  createHash("sha256")
+    .update(code.toUpperCase().replace(/[^0-9A-Z]/g, ""))
+    .digest();
 
 /** Holds a setup in progress. Passwords live here only until it finishes, and never reach a file or a log. */
 export class Wizard {
@@ -78,7 +84,10 @@ export class Wizard {
   private otherAddress = "";
   finished = false;
 
-  constructor(private readonly hashFile: string, private readonly out: Outside) {}
+  constructor(
+    private readonly hashFile: string,
+    private readonly out: Outside,
+  ) {}
 
   /**
    * Wrong codes are counted per address (security review 2026-11-09, L1), so one machine sending junk can't lock
@@ -95,7 +104,8 @@ export class Wizard {
     if (mine >= MAX_CODE_TRIES || this.tries >= MAX_CODE_TRIES_ALL) throw new WizardError(429, "Too many wrong codes. Wait 5 minutes and try again.");
     this.tries += 1;
     this.triesBy.set(from, mine + 1);
-    if (!existsSync(this.hashFile)) throw new WizardError(400, "No setup code exists on this machine. On the Proxmox node, run qm guest exec followed by this VM's ID and -- bossmox-reset to make one.");
+    if (!existsSync(this.hashFile))
+      throw new WizardError(400, "No setup code exists on this machine. On the Proxmox node, run qm guest exec followed by this VM's ID and -- bossmox-reset to make one.");
     const want = Buffer.from(readFileSync(this.hashFile, "utf8").trim(), "hex");
     const got = hashCode(code);
     if (want.length !== got.length || !timingSafeEqual(want, got)) throw new WizardError(401, "That code didn't match. Check the VM's console and try again.");
@@ -201,7 +211,7 @@ export class Wizard {
     const reported = nodes.find((n) => n.name === this.nodeName)?.ip ?? "";
     // Only two addresses can be compared. A name the person typed says nothing about the address behind it.
     this.otherAddress = reported && reported !== reached && isIP(reached) ? reported : "";
-    this.nodes = nodes.map((n) => ({ name: n.name ?? "", address: n.name === this.nodeName ? reached : n.ip ?? "", online: n.online === 1 }));
+    this.nodes = nodes.map((n) => ({ name: n.name ?? "", address: n.name === this.nodeName ? reached : (n.ip ?? ""), online: n.online === 1 }));
   }
 
   async state() {
@@ -243,7 +253,9 @@ export class Wizard {
   private async settle(done: (s: { clusterName: string; nodes: NodeView[] }) => boolean) {
     const until = this.out.now() + JOIN_WAIT_MS;
     while (this.out.now() < until) {
-      const ok = await this.refresh().then(() => done({ clusterName: this.clusterName, nodes: this.nodes })).catch(() => false);
+      const ok = await this.refresh()
+        .then(() => done({ clusterName: this.clusterName, nodes: this.nodes }))
+        .catch(() => false);
       if (ok) return;
       await this.out.wait(3000);
     }
@@ -294,12 +306,17 @@ export class Wizard {
     if (!this.clusterName || this.nodes.length < 2) return none;
     const get = <T>(p: string) => this.out.call<T>(to, "GET", p, this.auth());
     const [config, options] = await Promise.all([get<Record<string, unknown>[]>("/cluster/config/nodes"), get<{ migration?: string | { network?: string } }>("/cluster/options")]);
-    const nodes = await Promise.all(config.map(async (c) => {
-      const name = String(c.node ?? c.name ?? "");
-      const links = Object.keys(c).filter((k) => /^ring\d+_addr$/.test(k)).sort().map((k) => String(c[k]));
-      const ifaces = await get<{ cidr?: string }[]>(`/nodes/${encodeURIComponent(name)}/network`);
-      return { name, links, addresses: ifaces.flatMap((i) => (i.cidr ? [i.cidr] : [])) };
-    }));
+    const nodes = await Promise.all(
+      config.map(async (c) => {
+        const name = String(c.node ?? c.name ?? "");
+        const links = Object.keys(c)
+          .filter((k) => /^ring\d+_addr$/.test(k))
+          .sort()
+          .map((k) => String(c[k]));
+        const ifaces = await get<{ cidr?: string }[]>(`/nodes/${encodeURIComponent(name)}/network`);
+        return { name, links, addresses: ifaces.flatMap((i) => (i.cidr ? [i.cidr] : [])) };
+      }),
+    );
     const current = migrationNetwork(options.migration);
     const check = checkNetworks(nodes, current);
     // Only networks the heartbeat doesn't use: moves on another heartbeat link would share it all the same.
@@ -340,7 +357,11 @@ export class Wizard {
         const sub = await io.get<{ status?: string }>(`/nodes/${encodeURIComponent(n.name)}/subscription`);
         if (sub.status?.toLowerCase() !== "active") without.push(n.name);
       }
-      if (without.length) throw new WizardError(400, `${without.join(", ")} ${without.length === 1 ? "doesn't" : "don't"} have an active subscription. Add the key on the node's Subscription page in Proxmox, or use the free channel.`);
+      if (without.length)
+        throw new WizardError(
+          400,
+          `${without.join(", ")} ${without.length === 1 ? "doesn't" : "don't"} have an active subscription. Add the key on the node's Subscription page in Proxmox, or use the free channel.`,
+        );
     }
     const problems = this.nodes.filter((n) => !n.online).map((n) => `${n.name} is offline, so it wasn't changed.`);
     for (const n of online) {
@@ -388,7 +409,11 @@ export class Wizard {
       }
     }
     if (!ca) throw new WizardError(502, "BossMox couldn't read this cluster's certificate authority.");
-    if (failed.length) throw new WizardError(502, `BossMox couldn't verify ${failed.join(", ")}, the address Proxmox gives for that node. If it's out of date, correct it in /etc/hosts on that node, then run pvecm updatecerts --force there.`);
+    if (failed.length)
+      throw new WizardError(
+        502,
+        `BossMox couldn't verify ${failed.join(", ")}, the address Proxmox gives for that node. If it's out of date, correct it in /etc/hosts on that node, then run pvecm updatecerts --force there.`,
+      );
     this.out.saveSettings({
       PVE_URL: hosts.map((h) => `https://${urlHost(h)}:${first.port}`).join(","),
       PVE_CA_FILE: this.out.saveCa(ca),

@@ -2,7 +2,7 @@
  * Cluster-wide preferences (ADR 0018): choices that apply to everyone using this BossMox, in every browser, kept
  * on the server beside its settings file. Separate from settings.json, whose existence is what locks setup.
  */
-import { readFileSync, } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { writeJsonAtomic } from "./json-file.js";
 
@@ -48,7 +48,6 @@ export const scheduleWarnings = <T>(prefs: Preferences, notBackedUp: T[]): T[] =
  * those guests while /vms still shows VM.Audit (review 2, S1). Any narrower path without VM.Audit means no.
  */
 export const seesAllGuestsFrom = (perms: Record<string, Record<string, number>> | null | undefined) =>
-  perms?.["/vms"]?.["VM.Audit"] === 1 &&
-  Object.entries(perms).every(([path, privs]) => !(path.startsWith("/vms/") || path.startsWith("/pool/")) || privs["VM.Audit"] === 1);
+  perms?.["/vms"]?.["VM.Audit"] === 1 && Object.entries(perms).every(([path, privs]) => !(path.startsWith("/vms/") || path.startsWith("/pool/")) || privs["VM.Audit"] === 1);
 
 export const canChangeCluster = (perms: Record<string, Record<string, number>> | null | undefined) => perms?.["/"]?.["Sys.Modify"] === 1;
