@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildHealth, type HealthInput } from "../src/health.js";
 import { lifeOf, longDate, NOTICE_DAYS } from "../src/lifecycle.js";
+import { buildNotice } from "../src/proxmox-notice.js";
 
 const day = (iso: string) => new Date(`${iso}T12:00:00Z`);
 
@@ -69,4 +70,24 @@ test("half way through an upgrade, each version gets its own line", () => {
     ],
   );
   assert.match(c[1]?.detail ?? "", /hasn't announced an end date/);
+});
+
+test("the header notice names the oldest ended version and the nodes with updates waiting", () => {
+  const n = buildNotice(
+    [
+      { node: "a", version: "8.4.21", waiting: 12 },
+      { node: "b", version: "9.1.4", waiting: 0 },
+      { node: "c", version: "8.4.21", waiting: null },
+    ],
+    day("2026-11-13"),
+  );
+  assert.equal(n?.ended?.major, 8);
+  assert.equal(n?.ended?.text, "Proxmox VE 8 has ended (August 31, 2026)");
+  assert.equal(n?.ended?.newer, 9);
+  assert.deepEqual(n?.updates, { nodes: ["a"], total: 12 }, "a node whose list couldn't be read isn't counted");
+});
+
+test("nothing to say means no notice at all", () => {
+  assert.equal(buildNotice([{ node: "b", version: "9.1.4", waiting: 0 }], day("2026-11-13")), null);
+  assert.equal(buildNotice([{ node: "a", version: "8.4.21", waiting: 0 }], day("2026-08-31")), null, "the last day of updates isn't ended yet");
 });

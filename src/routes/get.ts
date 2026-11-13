@@ -275,7 +275,7 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
     },
     "/api/overview": async (_route, session, _params, _req, res) => {
       // Only after sign-in: the exact version tells an attacker what to try.
-      return json(res, 200, { ...(await overview(session)), username: session.username, version: VERSION, update: updateView() });
+      return json(res, 200, { ...(await overview(session)), username: session.username, version: VERSION, update: updateView(), proxmox: c.proxmoxNotice.get(session) });
     },
   };
   return routes;

@@ -261,6 +261,14 @@ summary{cursor:pointer;font-weight:650}
 /* Live version additions */
 .ro{font-size:12.5px;font-weight:700;padding:3px 9px;border-radius:var(--r-s);background:var(--surface2);color:var(--muted);margin-right:10px;white-space:nowrap}
 .stale{color:var(--bad);font-size:13px;margin-right:10px}
+/* Proxmox notice in the middle of the bar (ADR 0042): the open-app tabs give way to it. */
+#bar.noticed #tasks{flex:0 1 auto}
+.pvenote{margin:0 auto;display:inline-flex;align-items:center;gap:7px;padding:4px 12px;border-radius:999px;font-size:13px;font-weight:650;white-space:nowrap;border:1px solid transparent;cursor:pointer}
+.pvenote.bad{background:var(--bad);color:#fff}
+.pvenote.warn{background:var(--warn-bg);color:var(--ink);border-color:var(--warn)}
+.pvedot{width:8px;height:8px;border-radius:50%;background:currentColor;flex:none}
+.pvenote.warn .pvedot{background:var(--warn)}
+@media (max-width:760px){.pvenote{padding:4px 8px}.pvenote .pvetext{display:none}}
 .meta{color:var(--muted);font-size:13px;margin-top:12px}
 .stbox{padding:18px 24px;overflow:auto;height:100%}
 .stcard{padding:14px 0;border-bottom:1px solid var(--line);display:grid;gap:6px}

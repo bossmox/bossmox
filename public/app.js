@@ -357,7 +357,7 @@ function renderHealth() {
   }
   const { nodes, vms, storage } = S.data;
   const avail = S.data.update?.available;
-  const issues = [...(avail ? [{ kind: "bossmox-update", title: `BossMox ${avail.version} is available`, detail: "" }] : []), ...S.data.issues, ...diskIssues()];
+  const issues = [...(avail ? [{ kind: "bossmox-update", title: `BossMox ${avail.version} is available`, detail: "" }] : []), ...proxmoxIssues(), ...S.data.issues, ...diskIssues()];
   const up = nodes.filter((n) => n.online).length;
   const guests = vms.filter((v) => !v.template);
   const run = guests.filter((v) => v.running).length;
@@ -390,7 +390,7 @@ function renderHealth() {
         <small>${n.online ? `${n.cpuPct}% busy` : "Offline"}</small></button>`;
       })
       .join("")}</div>
-    ${shown.length && !notes.collapsed ? `<div class="look-items">${shown.map((i) => `<div class="look-row"><button class="look-item" ${i.vmId ? `data-vm="${i.vmId}"` : i.kind === "bossmox-update" ? 'data-bmupdate="1"' : 'data-open="storage"'}><span class="dot warn"></span><span>${esc(i.title)}</span></button><button class="look-x" data-noticex="${esc(noticeKey(i))}" aria-label="Dismiss ${esc(i.title)}" title="Dismiss">&times;</button></div>`).join("")}</div>` : ""}
+    ${shown.length && !notes.collapsed ? `<div class="look-items">${shown.map((i) => `<div class="look-row"><button class="look-item" ${i.vmId ? `data-vm="${i.vmId}"` : i.kind === "bossmox-update" ? 'data-bmupdate="1"' : i.kind === "pve-ended" ? 'data-open="health"' : i.kind === "pve-updates" ? 'data-rolling="1"' : 'data-open="storage"'}><span class="dot warn"></span><span>${esc(i.title)}</span></button><button class="look-x" data-noticex="${esc(noticeKey(i))}" aria-label="Dismiss ${esc(i.title)}" title="Dismiss">&times;</button></div>`).join("")}</div>` : ""}
     ${controls ? `<div class="look-controls">${controls}</div>` : ""}`;
 }
 
@@ -1224,6 +1224,33 @@ function openWin(app) {
 function focusWin(app) {
   wins[app].style.zIndex = ++S.z;
   renderTasks(app);
+}
+/*
+ * The header's notice about Proxmox itself (ADR 0042): a version whose updates have stopped (red, opens Health
+ * check) and nodes with updates waiting (amber, opens Update all nodes). In the middle of the bar, because it matters;
+ * it can't be dismissed, and goes away once there's nothing to do.
+ */
+const updatesText = (u) => `Updates on ${u.nodes.length === 1 ? u.nodes[0] : `${u.nodes.length} nodes`}`;
+function proxmoxIssues() {
+  const p = S.data?.proxmox;
+  if (!p) return [];
+  return [
+    ...(p.ended ? [{ kind: "pve-ended", title: `${p.ended.text}${p.ended.newer ? `: upgrade to Proxmox VE ${p.ended.newer}` : ""}`, detail: "" }] : []),
+    ...(p.updates ? [{ kind: "pve-updates", title: `${updatesText(p.updates)} (${p.updates.total} waiting)`, detail: "" }] : []),
+  ];
+}
+function renderProxmoxNotice() {
+  const el = $("#pvenote");
+  const p = S.data?.proxmox;
+  const parts = p ? [...(p.ended ? [`Proxmox VE ${p.ended.major} has ended`] : []), ...(p.updates ? [updatesText(p.updates)] : [])] : [];
+  el.hidden = !parts.length;
+  $("#bar").classList.toggle("noticed", parts.length > 0);
+  if (!parts.length) return;
+  el.className = `pvenote ${p.ended ? "bad" : "warn"}`;
+  el.dataset.pvenote = p.ended ? "ended" : "updates";
+  el.title = [...(p.ended ? [`${p.ended.text}. It gets no security fixes.`] : []), ...(p.updates ? [`${p.updates.total} updates waiting on ${p.updates.nodes.join(", ")}.`] : [])].join(" ");
+  el.innerHTML = `<span class="pvedot" aria-hidden="true"></span><span class="pvetext">${esc(parts.join(" · "))}</span>`;
+  el.setAttribute("aria-label", el.title);
 }
 function renderTasks(active) {
   const top =
@@ -4478,6 +4505,7 @@ document.addEventListener("click", (e) => {
     return runAction("move-guest", v.node, `Moving ${v.name} to ${target}`, { guest: String(v.id), type: v.type, target, confirm: String(v.id) }, () => refresh());
   }
   if (d.rolling) return openRunStart("update");
+  if (d.pvenote) return d.pvenote === "ended" ? openWin("health") : openRunStart("update");
   if (d.runstart) {
     t.disabled = true;
     return startRun();
@@ -4871,6 +4899,7 @@ async function refresh() {
   const stale = $("#stale");
   stale.hidden = !(error && S.data);
   stale.textContent = "Showing old data, lost contact with Proxmox";
+  renderProxmoxNotice();
   renderHealth();
   // The Health check window's gauges follow the live numbers; the rest of it changes only on Check again.
   const hcGauges = $("#hcbox .overall");
