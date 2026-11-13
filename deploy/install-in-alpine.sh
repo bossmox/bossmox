@@ -41,7 +41,8 @@ chmod 750 /var/lib/bossmox
 # BossMox's CA and certificate (ADR 0040). An update re-runs this: an old self-signed certificate is replaced once,
 # and from then on only renewed, from the same CA, so the Proxmox nodes keep trusting it.
 install -m 755 /opt/bossmox/deploy/bossmox-cert.sh /usr/local/sbin/bossmox-cert
-/usr/local/sbin/bossmox-cert "$PUBLIC_ADDRESS" >/dev/null
+# It says "new CA" when the nodes need it again; that line lands in the install or update log.
+/usr/local/sbin/bossmox-cert "$PUBLIC_ADDRESS"
 # Busybox's crond runs /etc/periodic/daily: the certificate is renewed when under 60 days are left.
 printf '#!/bin/sh\n/usr/local/sbin/bossmox-cert renew >/dev/null 2>>/var/log/bossmox.log\n' > /etc/periodic/daily/bossmox-cert
 chmod 755 /etc/periodic/daily/bossmox-cert

@@ -43,12 +43,13 @@ install -m 644 "$HERE/pve-root-ca.pem" /etc/bossmox/pve-root-ca.pem
 # BossMox's CA and certificate (ADR 0040). An update re-runs this: an old self-signed certificate is replaced once,
 # and from then on only renewed, from the same CA, so the Proxmox nodes keep trusting it.
 install -m 755 /opt/bossmox/deploy/bossmox-cert.sh /usr/local/sbin/bossmox-cert
-/usr/local/sbin/bossmox-cert "$PUBLIC_ADDRESS" >/dev/null
+# It says "new CA" when the nodes need it again; that line lands in the install or update log.
+/usr/local/sbin/bossmox-cert "$PUBLIC_ADDRESS"
 # A daily timer renews the certificate when under 60 days are left.
 printf '[Unit]\nDescription=Renew BossMox certificate when due\n\n[Service]\nType=oneshot\nExecStart=/usr/local/sbin/bossmox-cert renew\n' > /etc/systemd/system/bossmox-cert.service
 printf '[Unit]\nDescription=Renew BossMox certificate when due\n\n[Timer]\nOnCalendar=daily\nRandomizedDelaySec=1h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n' > /etc/systemd/system/bossmox-cert.timer
 systemctl daemon-reload
-systemctl enable --now bossmox-cert.timer >/dev/null 2>&1
+systemctl enable --now bossmox-cert.timer >/dev/null
 # The key BossMox seals saved sign-ins with (ADR 0040). Made once and kept by every update, or a saved sign-in
 # couldn't be opened again. BossMox can read it and can't replace it.
 if [ ! -s /etc/bossmox/secret.key ]; then
