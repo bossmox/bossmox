@@ -52,6 +52,7 @@ import { guestActions } from "./actions/guests.js";
 import { storageActions } from "./actions/storage.js";
 import { backupActions } from "./actions/backups.js";
 import { createAlerts } from "./alerts.js";
+import { releaseMismatch } from "./release-guard.js";
 import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
 import { createHeartbeat, nodeConsole } from "./heartbeat.js";
@@ -714,6 +715,11 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
     const name = text(body.server, 64);
     if (action === "install-updates" || action === "node-console") {
       if (!NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
+      if (action === "install-updates") {
+        // Proxmox's own updater would carry out a major upgrade just the same (ADR 0039).
+        const mismatch = releaseMismatch(name, await pve.get<RawRepositories>(`/nodes/${encodeURIComponent(name)}/apt/repositories`, session.ticket).catch(() => null));
+        if (mismatch) return json(res, 400, { error: mismatch });
+      }
       audit(action === "install-updates" ? "updater" : "console", session.username, addressOf(req), { node: name });
       return await openNodeTerminal(res, name, session, action === "install-updates" ? { cmd: "upgrade" } : {});
     }

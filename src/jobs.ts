@@ -10,6 +10,7 @@ import { checkNetworks, migrationNetwork, SAFE_BATCH, type NetCheck } from "./cl
 import type { Overview, RawConfig, RawResource, RawSnapshot } from "./model.js";
 import { readMoves, runMoveHome, runMoveOff, writeMoves, type MoveDeps } from "./moves.js";
 import { INSTALL_COMMAND, runOnNode, STILL_RUNNING, type ShellConfig } from "./node-shell.js";
+import { releaseMismatch } from "./release-guard.js";
 import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type Pending, type RawPrecondition } from "./placement.js";
 import type { Preferences } from "./preferences.js";
 import { PveError, type PveClient } from "./pve.js";
@@ -22,6 +23,7 @@ import {
   haQuorumBlock,
   section,
   tieBreakerVotes,
+  type RawRepositories,
   type RawStatus,
   type RawTask,
   type RawTaskStatus,
@@ -241,11 +243,12 @@ export function createJobs(ctx: JobsContext) {
         data.nodes.map(async (n): Promise<RollingInput> => {
           if (!n.online) return { name: n.name, online: false, version: null, updates: null, rebootNeeded: false, busy: [], cantMove: [], ejectable: [] };
           const base = `/nodes/${encodeURIComponent(n.name)}`;
-          const [status, updates, active, checks] = await Promise.all([
+          const [status, updates, active, checks, repos] = await Promise.all([
             section(pve.get<RawStatus>(`${base}/status`, ticket)),
             section(pve.get<RawUpdate[]>(`${base}/apt/update`, ticket)),
             section(pve.get<RawTask[]>(`${base}/tasks?source=active`, ticket)),
             section(pve.get<RawTask[]>(`${base}/tasks?typefilter=aptupdate&limit=1`, ticket)),
+            section(pve.get<RawRepositories>(`${base}/apt/repositories`, ticket)),
           ]);
           // A check that failed leaves a stale list; that node sits the run out instead of looking up to date (#55, #73).
           const checkFailed = checks.available ? failedCheck(checks.value) : null;
@@ -267,6 +270,7 @@ export function createJobs(ctx: JobsContext) {
             cantMove,
             ejectable,
             checkFailed,
+            releaseMismatch: releaseMismatch(n.name, repos.available ? repos.value : null),
           };
         }),
       ),
@@ -466,6 +470,9 @@ export function createJobs(ctx: JobsContext) {
         return { went, error: moveRecord.job?.error ?? null };
       },
       install: async (node) => {
+        // The sources can change during a long run, so they're read again right before this node installs.
+        const mismatch = releaseMismatch(node, await pve.get<RawRepositories>(`/nodes/${enc(node)}/apt/repositories`, t()).catch(() => null));
+        if (mismatch) throw new Error(mismatch);
         const proxy = await pve.post<TermProxy>(`/nodes/${enc(node)}/termproxy`, session);
         const r = await runOnNode(ctx.shell(), node, t(), proxy, INSTALL_COMMAND);
         if (r.exitCode === STILL_RUNNING) throw new Error(`An earlier update is still installing on ${node}, so BossMox didn't start another. Wait for it to finish, then run again.`);
