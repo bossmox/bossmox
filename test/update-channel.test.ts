@@ -94,3 +94,20 @@ test("without the subscription answer, an enterprise node isn't flagged or offer
   assert.equal(c.ok, true);
   assert.equal(c.offer, null);
 });
+
+test("only Proxmox's own host counts as a Proxmox source, not an address that merely contains the name", () => {
+  const repos: RawRepositories = {
+    files: [
+      {
+        path: "/etc/apt/sources.list.d/odd.list",
+        repositories: [
+          { Enabled: true, URIs: ["https://evil.example/enterprise.proxmox.com/debian/pve"], Components: ["pve-enterprise"] },
+          { Enabled: true, URIs: ["http://notproxmox.com/debian/pve"], Components: ["pve-no-subscription"] },
+        ],
+      },
+    ],
+  };
+  const c = updateChannel(repos, ACTIVE);
+  assert.notEqual(c.name, "Enterprise");
+  assert.notEqual(c.name, "No-Subscription");
+});

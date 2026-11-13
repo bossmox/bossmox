@@ -97,13 +97,26 @@ const FREE = "Free (no subscription)";
  * The node's update channel in plain words, and which switch to offer (ADR 0013). Ceph counts too: a fresh
  * install turns on Ceph's paid source even without Ceph, and that alone makes every check end in an error.
  */
+/** A source's address split once: Proxmox's own only when the host really is proxmox.com, not when it just appears in the address (CodeQL #4). */
+function sourceUrl(u: string): { host: string; path: string } {
+  try {
+    const url = new URL(u);
+    return { host: url.hostname.toLowerCase(), path: url.pathname };
+  } catch {
+    return { host: "", path: "" };
+  }
+}
+const isProxmoxHost = (host: string) => /(^|\.)proxmox\.com$/.test(host);
+
 export function updateChannel(repos: RawRepositories, subscription?: RawSubscription) {
-  const enabled = (repos.files ?? []).flatMap((f) => f.repositories ?? []).filter((r) => r.Enabled && (r.URIs ?? []).some((u) => /proxmox\.com\/debian\/(pve|ceph-[a-z]+)\/?$/.test(u)));
-  const pveOnly = enabled.filter((r) => (r.URIs ?? []).some((u) => /\/debian\/pve\/?$/.test(u)));
+  const enabled = (repos.files ?? [])
+    .flatMap((f) => f.repositories ?? [])
+    .filter((r) => r.Enabled && (r.URIs ?? []).map(sourceUrl).some((u) => isProxmoxHost(u.host) && /^\/debian\/(pve|ceph-[a-z]+)\/?$/.test(u.path)));
+  const pveOnly = enabled.filter((r) => (r.URIs ?? []).some((u) => /^\/debian\/pve\/?$/.test(sourceUrl(u).path)));
   const components = pveOnly.flatMap((r) => r.Components ?? []);
   const known = subscription !== undefined;
   const active = subscription?.status?.toLowerCase() === "active";
-  const paid = enabled.filter((r) => (r.URIs ?? []).some((u) => u.includes("enterprise.proxmox.com")));
+  const paid = enabled.filter((r) => (r.URIs ?? []).some((u) => sourceUrl(u).host === "enterprise.proxmox.com"));
   const name =
     components.includes("pve-enterprise") && (active || !components.includes("pve-no-subscription"))
       ? "Enterprise"
