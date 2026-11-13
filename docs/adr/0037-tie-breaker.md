@@ -48,7 +48,7 @@ Health check: "The cluster can lose a node and keep going: 3 votes, including a 
 
 - **Unit:** offered only on an even node count with no QDevice; refusing a node's or a guest's address; reading `pvecm status` for the tie-breaker's vote; the steps' messages.
 - **Lab:** a **two-node lab** is needed, and the vote machine must be outside it.
-  - **Proposed:** two new nested Proxmox VMs on Maverick pve-node3, `bmx2-node1`/`bmx2-node2` (VM IDs 907-908, 10.0.30.248-249, 3 GB each), made by the same scripts as bmx8, joined as a cluster `bmx2lab`. The vote machine is the iSCSI target VM 906 (Debian, outside both labs), as the plan said.
+  - **Proposed:** two new nested Proxmox VMs on Maverick pve-node3, `bmx2-node1`/`bmx2-node2` (VM IDs 907-908, 10.0.30.251-252, 3 GB each; Rocky OK 2026-11-13), made by the same scripts as bmx8, joined as a cluster `bmx2lab`. The vote machine is the iSCSI target VM 906 (Debian, outside both labs), as the plan said.
   - Steps: set it up through the page. Then power one node off hard: the other keeps quorum and can still start a guest. Then power the vote machine off: the cluster keeps running on two votes and Health check says the tie-breaker isn't connected.
   - Afterwards, bmx2's VMs are shut down (not deleted), like bmxlab.
 
