@@ -548,13 +548,15 @@ function supportSection() {
 }
 
 /* Alerts (ADR 0038): Proxmox's own notifications, sent to a phone or a chat. Secrets go to Proxmox and are kept nowhere here. */
-const AL_NAMES = { ntfy: "ntfy (phone push)", discord: "Discord", slack: "Slack", teams: "Microsoft Teams", gotify: "Gotify" };
+const AL_NAMES = { ntfy: "ntfy (phone push)", email: "Email (Outlook)", discord: "Discord", slack: "Slack", teams: "Microsoft Teams", gotify: "Gotify" };
 const AL_HELP = {
   ntfy: "Free phone push. Install the ntfy app, subscribe to a topic name only you know, and type the same name here. Use your own ntfy server if you have one.",
   discord: "In the Discord channel: Edit channel, Integrations, Webhooks, New webhook, Copy webhook URL. Paste it here.",
   slack: "In Slack: create an incoming webhook for the channel (Slack's Incoming Webhooks app) and paste its link here.",
   teams: 'In the Teams channel: Workflows, "Post to a channel when a webhook request is received", then copy the link it gives and paste it here.',
   gotify: "Your Gotify server's address and an app token from its Apps page.",
+  email:
+    "Sends from an Outlook.com, Hotmail or Microsoft 365 account you sign in with. BossMox can send as that account and can't read its mail. A Microsoft 365 work account needs its admin to approve BossMox once.",
 };
 function alertsSection() {
   const a = S.alerts;
@@ -566,7 +568,8 @@ function alertsSection() {
     tag = a.confirmed ? `<span class="rec ok">Set up</span>` : `<span class="rec">Not checked yet</span>`;
     const what = ["failures and warnings", ...(a.updates ? ["new updates"] : []), ...(a.allBackups ? ["every backup"] : [])];
     const said = what.length > 1 ? `${what.slice(0, -1).join(", ")} and ${what.at(-1)}` : what[0];
-    detail = `Proxmox sends ${said} to ${AL_NAMES[a.kind]}${a.where ? ` (${a.where})` : ""}.${a.confirmed ? "" : " Send a test, and say whether it came."}`;
+    const to = a.kind === "email" && S.email?.account ? `${S.email.to.join(", ")}, from ${S.email.account}` : `${AL_NAMES[a.kind]}${a.where ? ` (${a.where})` : ""}`;
+    detail = `${a.kind === "email" ? "BossMox emails" : "Proxmox sends"} ${said} to ${to}.${a.confirmed ? "" : " Send a test, and say whether it came."}`;
     if (a.canChange) action = `<button class="btn" data-altest="1">Send a test</button><button class="btn" data-alsetup="1">Change</button><button class="btn" data-aloff="1">Turn off</button>`;
   } else if (a.others.length) {
     tag = `<span class="rec ok">Set up</span>`;
@@ -593,16 +596,18 @@ function openAlertsSetup(kind = null) {
       : k === "gotify"
         ? `<label class="field restartname"><span>Gotify address</span><input id="alserver" autocomplete="off" spellcheck="false" placeholder="https://push.example.org"></label>
        <label class="field restartname"><span>App token</span><input id="altoken" type="password" autocomplete="off"></label>`
-        : `<label class="field restartname"><span>Webhook link</span><input id="allink" type="password" autocomplete="off" spellcheck="false"></label>`;
+        : k === "email"
+          ? emailFields()
+          : `<label class="field restartname"><span>Webhook link</span><input id="allink" type="password" autocomplete="off" spellcheck="false"></label>`;
   dialog(`<h3>${changing ? "Change alerts" : "Send Proxmox's alerts somewhere"}</h3>
-    <p>Proxmox itself sends these, so they arrive even when BossMox is down.</p>
+    <p>${k === "email" ? "Proxmox hands these to BossMox, which emails them. While BossMox is down they don't arrive: for alerts that do, pick one of the others." : "Proxmox itself sends these, so they arrive even when BossMox is down."}</p>
     <label class="field restartname"><span>Send them to</span><select id="alkind">${Object.entries(AL_NAMES)
       .map(([v, l]) => `<option value="${v}" ${v === k ? "selected" : ""}>${esc(l)}</option>`)
       .join("")}</select></label>
     <p class="meta">${esc(AL_HELP[k])}</p>
     ${fields}
-    ${keepNote}
-    <p class="meta">${a.viaProxy ? "BossMox runs behind your own proxy here: what you type is encrypted to that proxy, and the step from it to BossMox is yours to secure. " : "What you type goes to Proxmox encrypted. "}Proxmox keeps it in its own private settings to send the alerts; BossMox doesn't keep it anywhere.</p>
+    ${k === "email" ? "" : keepNote}
+    <p class="meta">${k === "email" ? "Saving gives each node BossMox's certificate, so Proxmox can reach BossMox over HTTPS. It can vouch for BossMox's own address and nothing else. Sign in as root@pam to do it. BossMox keeps the Outlook sign-in encrypted." : `${a.viaProxy ? "BossMox runs behind your own proxy here: what you type is encrypted to that proxy, and the step from it to BossMox is yours to secure. " : "What you type goes to Proxmox encrypted. "}Proxmox keeps it in its own private settings to send the alerts; BossMox doesn't keep it anywhere.`}</p>
     <label class="check"><input type="checkbox" checked disabled> Failures and warnings: fenced nodes, failed backups, failed replication</label>
     <label class="check"><input type="checkbox" id="alupdates" ${a.kind ? (a.updates ? "checked" : "") : "checked"}> New updates are available</label>
     <label class="check"><input type="checkbox" id="albackups" ${a.allBackups ? "checked" : ""}> Every backup, including the ones that worked</label>
@@ -621,6 +626,19 @@ async function saveAlerts() {
     updates: $("#alupdates").checked,
     allBackups: $("#albackups").checked,
   };
+  if (body.kind === "email") {
+    if (!S.email?.account) return formError("Connect an Outlook account first.");
+    const to = v("#alto");
+    if (to !== S.email.to.join(", ")) {
+      const r = await post("api/action/email-recipients", { server: body.server, to });
+      if (!r.ok) return formError((await r.json()).error);
+    }
+    const go = document.querySelector("[data-algo]");
+    if (go) {
+      go.disabled = true;
+      go.textContent = "Setting up the nodes";
+    }
+  }
   try {
     const res = await post("api/action/alerts-save", body);
     const out = await res.json();
@@ -641,7 +659,7 @@ async function sendAlertTest() {
   } catch (err) {
     S.afterTask = () => loadSettings();
     return dialog(
-      `<h3>The test didn't send</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><p class="meta">Check the link or token, and that the node can reach the service.</p>${closeRow}`,
+      `<h3>The test didn't send</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><p class="meta">${S.alerts?.kind === "email" ? "Check Health check for a node without BossMox's certificate, and that the Outlook account is still connected." : "Check the link or token, and that the node can reach the service."}</p>${closeRow}`,
     );
   }
   dialog(`<h3>Did the test arrive?</h3><p>Proxmox sent a test alert. It should show up within a minute.</p>
@@ -651,7 +669,7 @@ async function confirmAlerts(arrived) {
   if (!arrived) {
     S.afterTask = () => loadSettings();
     return dialog(
-      `<h3>It didn't arrive</h3><p>Usual causes: a typo in the link, topic or token; the ntfy app subscribed to a different topic; or the nodes can't reach the service (a firewall, or no internet). Change fixes the first two.</p>${closeRow}`,
+      `<h3>It didn't arrive</h3><p>${S.alerts?.kind === "email" ? "Look in the junk folder first: a first email from a new sender often lands there. Then check the addresses under Change." : "Usual causes: a typo in the link, topic or token; the ntfy app subscribed to a different topic; or the nodes can't reach the service (a firewall, or no internet). Change fixes the first two."}</p>${closeRow}`,
     );
   }
   try {
@@ -662,6 +680,58 @@ async function confirmAlerts(arrived) {
   }
   S.healthChecks = null;
   S.healthAgain = true;
+  closeDialog();
+  loadSettings();
+}
+
+/* Email through Outlook (ADR 0040): connect by code, then the addresses alerts go to. */
+function emailFields() {
+  const m = S.email;
+  if (!m?.ready) return `<p class="loginerr">This BossMox install needs updating before it can send email.</p>`;
+  if (!m.account) return `<p>No account is connected yet.</p><div class="actions"><button class="btn primary" data-emconnect="1">Connect an Outlook account</button></div>`;
+  return `<p class="meta">Sends from <b>${esc(m.account)}</b>. <button class="btn" data-emconnect="1">Use another account</button></p>
+    <label class="field restartname"><span>Send to</span><input id="alto" autocomplete="off" spellcheck="false" value="${esc(m.to.join(", "))}"></label>
+    <p class="meta">Up to 10 addresses, separated by commas.</p>`;
+}
+async function connectOutlook() {
+  dialog(`<h3>Connecting Outlook</h3><p>Asking Microsoft for a sign-in code.</p>`);
+  try {
+    const res = await post("api/action/email-start", { server: onlineNodes()[0] });
+    const out = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) throw new Error(out.error);
+  } catch (err) {
+    S.afterTask = () => loadSettings();
+    return dialog(`<h3>Microsoft didn't start the sign-in</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Microsoft.")}</p>${closeRow}`);
+  }
+  waitForOutlook();
+}
+async function waitForOutlook() {
+  S.emailWait = (S.emailWait ?? 0) + 1;
+  const run = S.emailWait;
+  for (;;) {
+    const m = await signal("api/email").catch(() => null);
+    if (run !== S.emailWait) return;
+    if (m) S.email = m;
+    const s = m?.signIn;
+    if (m?.account && !s) return openAlertsSetup("email");
+    if (s?.error) {
+      S.afterTask = () => loadSettings();
+      return dialog(`<h3>The sign-in didn't finish</h3><p class="loginerr">${esc(s.error)}</p>${closeRow}`);
+    }
+    if (s?.code && !$("#emcode"))
+      dialog(`<h3>Sign in to Outlook</h3>
+        <p>On any device, open <a href="${esc(s.link)}" target="_blank" rel="noopener noreferrer">${esc(s.link.replace(/^https:\/\//, ""))}</a> and enter this code:</p>
+        <p class="emcode" id="emcode">${esc(s.code)}</p>
+        <p class="meta">Sign in with the account alerts should come from, and approve BossMox. It asks to send mail as you and to stay signed in; it can't read your mail. This window moves on by itself.</p>
+        <div class="row-end"><button class="btn" data-emcancel="1">Cancel</button></div>`);
+    await new Promise((r) => setTimeout(r, 3000));
+    if (run !== S.emailWait || !$("#emcode")) return;
+  }
+}
+async function cancelOutlook() {
+  S.emailWait = (S.emailWait ?? 0) + 1;
+  await post("api/action/email-cancel", { server: onlineNodes()[0] }).catch(() => null);
   closeDialog();
   loadSettings();
 }
@@ -900,12 +970,13 @@ async function watchHeartbeat() {
 async function loadSettings() {
   const run = S.loadRun;
   try {
-    const [{ settings }, heartbeat, ha, tb, alerts] = await Promise.all([
+    const [{ settings }, heartbeat, ha, tb, alerts, email] = await Promise.all([
       signal("api/recommended"),
       signal("api/heartbeat").catch(() => null),
       signal("api/ha").catch(() => null),
       signal("api/tiebreaker").catch(() => null),
       signal("api/alerts").catch(() => null),
+      signal("api/email").catch(() => null),
     ]);
     if (run !== S.loadRun) return;
     S.recommended = settings;
@@ -913,6 +984,7 @@ async function loadSettings() {
     S.haList = ha?.guests ?? null;
     S.tieBreaker = tb;
     S.alerts = alerts;
+    S.email = email;
     S.recommendedError = "";
   } catch (err) {
     if (err.message === "signed out" || run !== S.loadRun) return;
@@ -4236,9 +4308,14 @@ document.addEventListener("click", (e) => {
   if (d.altest) return sendAlertTest();
   if (d.alyes) return confirmAlerts(true);
   if (d.alno) return confirmAlerts(false);
+  if (d.emconnect) return connectOutlook();
+  if (d.emcancel) return cancelOutlook();
   if (d.aloff)
-    return confirmAction("Turn off alerts?", "BossMox removes the alert target and rule it added in Proxmox. Anything set up outside BossMox stays.", "Turn off", () =>
-      runAction("alerts-remove", onlineNodes()[0], "Turning off alerts", {}, () => loadSettings()),
+    return confirmAction(
+      "Turn off alerts?",
+      `BossMox removes the alert target and rule it added in Proxmox. Anything set up outside BossMox stays.${S.email?.account ? ` BossMox also forgets the Outlook sign-in for ${S.email.account}.` : ""}`,
+      "Turn off",
+      () => runAction("alerts-remove", onlineNodes()[0], "Turning off alerts", {}, () => loadSettings()),
     );
   if (d.tbsetup) return openTieBreakerSetup();
   if (d.tbgo) return startTieBreaker();

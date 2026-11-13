@@ -41,6 +41,9 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
         await c.alerts.save(who, { kind, server: url, token: key, ...choices });
         return null;
       }
+      // Away from email: the sign-in and the key for it aren't needed any more.
+      if (c.email.view().account) await c.email.remove(who);
+      c.alertLink.forget();
       await c.alerts.save(who, {
         kind,
         server: text(body.alertServer, 256),
@@ -62,6 +65,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     "alerts-remove": async (_name, who) => {
       await c.alerts.remove(who);
       c.alertLink.forget();
+      if (c.email.view().account) await c.email.remove(who);
       return null;
     },
     "email-start": async (_name, who) => {
