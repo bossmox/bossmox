@@ -65,8 +65,9 @@ function fakeOutlook(opts: { pendingPolls?: number; renewRefuses?: boolean } = {
   return { outlook, sent, live };
 }
 
-const settle = async (email: { view(): { signIn: unknown } }) => {
-  for (let i = 0; i < 50 && email.view().signIn && !("error" in (email.view().signIn as object)); i++) await new Promise((r) => setTimeout(r, 2));
+const ROOT = { username: "root@pam", canChange: true };
+const settle = async (email: { view(v: typeof ROOT): { signIn: unknown } }) => {
+  for (let i = 0; i < 50 && email.view(ROOT).signIn && !("error" in (email.view(ROOT).signIn as object)); i++) await new Promise((r) => setTimeout(r, 2));
 };
 
 function setup(opts: Parameters<typeof fakeOutlook>[0] = {}, extra: { key?: Buffer | null; canChange?: boolean } = {}) {
@@ -89,7 +90,7 @@ test("signing in by code keeps the account and its token sealed, never in plain 
   const started = await s.email.start(who);
   assert.equal(started.code, "ABC123");
   await settle(s.email);
-  const v = s.email.view();
+  const v = s.email.view(ROOT);
   assert.equal(v.account, "rocky@outlook.com");
   assert.deepEqual(v.to, ["rocky@outlook.com"], "the signed-in account is the first recipient");
   assert.equal(v.signIn, null);
@@ -124,7 +125,7 @@ test("a refused renewal is written down for Health check, and sending says why",
   saved.renewedAt = 0;
   writeFileSync(s.file, JSON.stringify(saved));
   await s.email.keepAlive();
-  assert.match(s.email.view().failed ?? "", /Connect the account again/);
+  assert.match(s.email.view(ROOT).failed ?? "", /Connect the account again/);
   await assert.rejects(s.email.send("x", "y"), /grant expired/);
   assert.equal(s.sent.length, 0);
 });
@@ -138,7 +139,7 @@ test("a sign-in sealed with another key isn't used", async () => {
   saved.renewedAt = 0;
   writeFileSync(s.file, JSON.stringify(saved));
   await s.email.keepAlive();
-  assert.match(s.email.view().failed ?? "", /can't open/);
+  assert.match(s.email.view(ROOT).failed ?? "", /can't open/);
 });
 
 test("without a key, or without permission, nothing starts", async () => {
@@ -153,7 +154,7 @@ test("turning email off deletes the sealed token", async () => {
   assert.ok(existsSync(s.file));
   await s.email.remove(who);
   assert.ok(!existsSync(s.file));
-  assert.equal(s.email.view().account, null);
+  assert.equal(s.email.view(ROOT).account, null);
 });
 
 test("recipients replace the list and are checked first", async () => {
@@ -161,9 +162,57 @@ test("recipients replace the list and are checked first", async () => {
   await s.email.start(who);
   await settle(s.email);
   await s.email.recipients(who, "ops@example.com, rocky@outlook.com");
-  assert.deepEqual(s.email.view().to, ["ops@example.com", "rocky@outlook.com"]);
+  assert.deepEqual(s.email.view(ROOT).to, ["ops@example.com", "rocky@outlook.com"]);
   await assert.rejects(s.email.recipients(who, "bad"), /isn't an email/);
-  assert.deepEqual(s.email.view().to, ["ops@example.com", "rocky@outlook.com"]);
+  assert.deepEqual(s.email.view(ROOT).to, ["ops@example.com", "rocky@outlook.com"]);
+});
+
+test("the sign-in code is shown only to the person who asked for it", async () => {
+  const s = setup({ pendingPolls: 1000 });
+  await s.email.start(who);
+  assert.equal((s.email.view(ROOT).signIn as { code: string }).code, "ABC123");
+  assert.equal(s.email.view({ username: "admin@pve", canChange: true }).signIn, null, "another admin can't take it");
+  await s.email.cancel(who);
+});
+
+test("who it sends from and to is hidden from people who can't change alerts", async () => {
+  const s = setup();
+  await s.email.start(who);
+  await settle(s.email);
+  const v = s.email.view({ username: "viewer@pve", canChange: false });
+  assert.equal(v.account, null);
+  assert.deepEqual(v.to, []);
+});
+
+test("only root@pam can connect an account, since only root@pam can finish the setup", async () => {
+  await assert.rejects(setup().email.start({ username: "admin@pve", ticket: "t" } as Session), /root@pam/);
+});
+
+test("removing while a renewal is under way doesn't bring the sign-in back", async () => {
+  const fake = fakeOutlook();
+  let release: () => Promise<void> = async () => {};
+  const slow: Outlook = { ...fake.outlook, renew: (r) => new Promise((ok, no) => (release = () => fake.outlook.renew(r).then(ok, no))) };
+  const file = path.join(dir(), "email.json");
+  const email = createEmail({ file, key: KEY, outlook: slow, canChange: async () => true, audit: () => {}, wait: () => new Promise((r) => setTimeout(r, 1)) });
+  await email.start(who);
+  await settle(email);
+  const saved = JSON.parse(readFileSync(file, "utf8"));
+  saved.renewedAt = 0;
+  writeFileSync(file, JSON.stringify(saved));
+  const renewing = email.keepAlive();
+  await new Promise((r) => setTimeout(r, 5));
+  const removing = email.remove(who);
+  await Promise.all([release(), renewing, removing]);
+  assert.ok(!existsSync(file), "the file stays deleted");
+  assert.equal(email.view(ROOT).account, null);
+});
+
+test("a sealed value with a cut-down tag doesn't open", () => {
+  const [v, iv, tag, data] = seal("secret", KEY).split(".");
+  const short = Buffer.from(tag as string, "base64url")
+    .subarray(0, 4)
+    .toString("base64url");
+  assert.equal(unseal([v, iv, short, data].join("."), KEY), null);
 });
 
 /** Microsoft's answers, recorded as the requests BossMox makes. */

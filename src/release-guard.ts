@@ -8,8 +8,6 @@ import type { RawRepositories } from "./server-detail.js";
 /** Proxmox's kinds for a source whose suite isn't the installed release. The next release gets its own kind. */
 const RELEASE_KINDS = new Set(["warning", "ignore-pre-upgrade-warning"]);
 const WATCHED_ORIGINS = new Set(["Debian", "Proxmox"]);
-/** For a source with no downloaded lists yet, which is exactly a source switched a moment ago. */
-const WATCHED_URI = /^(https?:\/\/([\w-]+\.)*(debian\.org|proxmox\.com)(\/|$)|mirror\+file:\/\/\/etc\/apt\/mirrors\/debian)/i;
 
 const enabled = (v: boolean | number | undefined) => v === true || v === 1;
 
@@ -27,7 +25,9 @@ export function releaseMismatch(node: string, repos: RawRepositories | null): st
       if (!enabled(repo.Enabled)) return;
       const here = at(path, index);
       const origin = here.find((i) => i.kind === "origin")?.message;
-      const watched = origin ? WATCHED_ORIGINS.has(origin) : (repo.URIs ?? []).some((u) => WATCHED_URI.test(u));
+      // No origin means its lists haven't been downloaded yet, which is exactly a source switched a moment ago, on any
+      // mirror. Proxmox can't tell whose it is, so it counts: a third-party one clears once it has been downloaded.
+      const watched = origin ? WATCHED_ORIGINS.has(origin) : true;
       if (!watched) return;
       for (const i of here) if (i.property === "Suites" && RELEASE_KINDS.has(i.kind ?? "")) found.push(`${path}: ${i.message ?? (repo.Suites ?? []).join(" ")}`);
     });

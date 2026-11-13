@@ -177,6 +177,7 @@ const alertLink = createAlertLink({
   caFile: path.join(certDir, "ca.crt"),
   namesFile: path.join(certDir, "cert-names"),
   port: config.port,
+  hostAllowed: (host) => config.allowedHosts.has(host),
   pve,
   console: nodeConsole(pve, () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName })),
   email,
@@ -523,7 +524,11 @@ async function loadHealth(session: Session) {
     leftover,
     heartbeat: heartbeatView,
     alerts: alertsView,
-    emailFailed: email.view().failed,
+    emailFailed:
+      email.status().failed ??
+      (alertsView?.kind === "email" && !email.status().account
+        ? "Proxmox sends alerts to BossMox for email, but no Outlook account is connected, so they go nowhere. Set up email again in Settings."
+        : null),
     linkMissing: alertsView?.kind === "email" ? alertLink.missing(data.nodes.map((n) => n.name)) : [],
     certDaysLeft: certDaysLeft(),
     channels: details.flatMap((d) => (d?.channel ? [{ node: d.name, ...d.channel }] : [])),
@@ -806,6 +811,16 @@ function audit(event: string, who: string, address: string, fields: Record<strin
   console.log(auditLine(new Date(), event, who, address, fields));
 }
 let lastLockoutLog = 0;
+const INBOUND_MAX_BODY = 64 * 1024;
+const lastInboundLog = new Map<string, number>();
+/** A refused alert, at most one line per address every 10 seconds: anyone can knock on this route. */
+function auditInbound(address: string, status: number) {
+  const at = Date.now();
+  if (at - (lastInboundLog.get(address) ?? 0) < 10_000) return;
+  if (lastInboundLog.size > 1000) lastInboundLog.clear();
+  lastInboundLog.set(address, at);
+  audit("alert-refused", "proxmox", address, { status });
+}
 /** A lockout can be hammered, and one line every 10 seconds says all it needs to without filling a small disk. */
 function auditRefused(event: string, who: string, address: string, status: number) {
   if (status === 429) {
@@ -964,10 +979,15 @@ const handler: http.RequestListener = async (req, res) => {
     if (route === null) return json(res, 400, { error: "That address isn't valid." });
     // Proxmox's webhook, not a browser: no cookie and no BossMox header. Its own key and address check it (ADR 0040).
     if (req.method === "POST" && route === INBOUND_PATH) {
-      const body = await readJson(req);
+      const from = addressOf(req);
+      // Proxmox's backup reports can run long, so this route takes more than the pages' 8 KB.
+      const body = await readJsonBody(req, { maxBytes: INBOUND_MAX_BODY, waitMs: BODY_WAIT_MS }).catch((err: Error) => {
+        auditInbound(from, err instanceof HttpError ? err.status : 400);
+        throw err;
+      });
       const auth = req.headers.authorization;
-      const r = await alertLink.receive(Array.isArray(auth) ? auth[0] : auth, req.socket.remoteAddress, body);
-      if (r.status !== 200) audit("alert-refused", "proxmox", req.socket.remoteAddress ?? "", { status: r.status });
+      const r = await alertLink.receive(Array.isArray(auth) ? auth[0] : auth, from, body);
+      if (r.status !== 200) auditInbound(from, r.status);
       return json(res, r.status, r.error ? { error: r.error } : { ok: true });
     }
     if (req.method === "POST") return await handlePost(req, res, route);

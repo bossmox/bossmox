@@ -46,12 +46,11 @@ test("a third-party source on another release is ignored", () => {
   assert.equal(releaseMismatch("pve1", r), null);
 });
 
-test("a source switched but not downloaded yet counts by its address", () => {
+test("a source switched but not downloaded yet counts, whatever mirror it's on", () => {
   assert.ok(releaseMismatch("pve1", newSource("http://deb.debian.org/debian")), "Debian's address");
   assert.ok(releaseMismatch("pve1", newSource("http://download.proxmox.com/debian/pve")), "Proxmox's address");
   assert.ok(releaseMismatch("pve1", newSource("mirror+file:///etc/apt/mirrors/debian.list")), "Debian's mirror list");
-  assert.equal(releaseMismatch("pve1", newSource("https://example.com/debian")), null, "anyone else's");
-  assert.equal(releaseMismatch("pve1", newSource("https://notdebian.org/debian")), null, "a look-alike host");
+  assert.ok(releaseMismatch("pve1", newSource("http://apt.lan/debian")), "a private mirror Proxmox can't name yet");
 });
 
 test("a source that's turned off doesn't count", () => {

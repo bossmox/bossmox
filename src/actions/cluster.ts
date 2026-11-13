@@ -35,15 +35,14 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       if (!KINDS.includes(kind)) throw new HttpError(400, "Pick where alerts go.");
       const choices = { updates: body.updates === true, allBackups: body.allBackups === true };
       if (kind === "email") {
-        // Each node gets BossMox's CA first, then Proxmox gets the address and key (ADR 0040).
-        if (!c.email.view().account) throw new HttpError(400, "Connect an Outlook account first.");
-        const { url, key } = await c.alertLink.connect(who);
+        // Each node gets BossMox's CA first, then Proxmox gets the address and key, then BossMox records the key
+        // (ADR 0040). A failed save leaves the old key working.
+        if (!c.email.status().account) throw new HttpError(400, "Connect an Outlook account first.");
+        const { url, key, keep } = await c.alertLink.connect(who);
         await c.alerts.save(who, { kind, server: url, token: key, ...choices });
+        keep();
         return null;
       }
-      // Away from email: the sign-in and the key for it aren't needed any more.
-      if (c.email.view().account) await c.email.remove(who);
-      c.alertLink.forget();
       await c.alerts.save(who, {
         kind,
         server: text(body.alertServer, 256),
@@ -52,6 +51,9 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
         token: text(body.token, 512),
         ...choices,
       });
+      // Saved somewhere else: the Outlook sign-in and the key for it aren't needed any more.
+      c.alertLink.forget();
+      if (c.email.status().account) await c.email.remove(who);
       return null;
     },
     "alerts-test": async (_name, who) => {
@@ -65,7 +67,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
     "alerts-remove": async (_name, who) => {
       await c.alerts.remove(who);
       c.alertLink.forget();
-      if (c.email.view().account) await c.email.remove(who);
+      if (c.email.status().account) await c.email.remove(who);
       return null;
     },
     "email-start": async (_name, who) => {

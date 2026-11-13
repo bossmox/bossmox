@@ -33,8 +33,11 @@ export function unseal(sealed: string, key: Buffer): string | null {
   const [v, iv, tag, data] = sealed.split(".");
   if (v !== "v1" || !iv || !tag || data === undefined) return null;
   try {
-    const d = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64url"));
-    d.setAuthTag(Buffer.from(tag, "base64url"));
+    // A full-length tag only: GCM would otherwise accept a cut-down one, which is far easier to forge.
+    const t = Buffer.from(tag, "base64url");
+    if (t.length !== 16) return null;
+    const d = createDecipheriv("aes-256-gcm", key, Buffer.from(iv, "base64url"), { authTagLength: 16 });
+    d.setAuthTag(t);
     return Buffer.concat([d.update(Buffer.from(data, "base64url")), d.final()]).toString("utf8");
   } catch {
     return null;

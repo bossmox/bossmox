@@ -20,7 +20,8 @@ const PER_HOUR = 60;
 
 interface Saved {
   keyHash: string;
-  nodes: { name: string; ip: string }[];
+  /** Every address each node has, not just its cluster one: it may reach BossMox from another network. */
+  nodes: { name: string; ips: string[] }[];
   /** The CA's SHA-256 fingerprint when it was given to the nodes: a new CA means giving it to them again. */
   ca: string;
 }
@@ -30,6 +31,8 @@ export interface LinkDeps {
   caFile: string;
   namesFile: string;
   port: number;
+  /** Host names BossMox answers to: Proxmox has to post to one of these. */
+  hostAllowed: (host: string) => boolean;
   pve: PveClient;
   console: (node: string, session: Session, line: string) => Promise<ShellResult>;
   email: Pick<Email, "send">;
@@ -41,9 +44,9 @@ const sha = (s: string) => createHash("sha256").update(s, "utf8").digest();
 /** The address as a node sees it connect: no IPv4-in-IPv6 prefix. */
 export const plainAddress = (a: string | undefined) => (a ?? "").replace(/^::ffff:/, "");
 
-/** The address Proxmox posts to: BossMox's first name, which its certificate covers, with the port when it isn't 443. */
-export function inboundUrl(names: string[], port: number): string | null {
-  const first = names.find(Boolean);
+/** The address Proxmox posts to: the first name BossMox's certificate covers and BossMox answers to, with the port when it isn't 443. */
+export function inboundUrl(names: string[], port: number, hostAllowed: (host: string) => boolean = () => true): string | null {
+  const first = names.find((n) => n && hostAllowed(n));
   if (!first) return null;
   const host = first.includes(":") ? `[${first}]` : first;
   return `https://${host}${port === 443 ? "" : `:${port}`}${INBOUND_PATH}`;
@@ -87,7 +90,8 @@ export function createAlertLink(deps: LinkDeps) {
     /** Nodes that don't have BossMox's current CA: new since, or the CA changed (BossMox's address did). */
     missing(nodeNames: string[]): string[] {
       const saved = load();
-      if (!saved) return [];
+      // Asked only while Proxmox sends to BossMox: no record means no node can get through.
+      if (!saved) return nodeNames;
       const ca = readCa();
       if (!ca || ca.fingerprint !== saved.ca) return nodeNames;
       return nodeNames.filter((n) => !saved.nodes.some((s) => s.name === n));
@@ -95,28 +99,39 @@ export function createAlertLink(deps: LinkDeps) {
 
     /**
      * Gives every node BossMox's CA through its root console and makes a new key. Returns the address and key for
-     * Proxmox's webhook target; the key isn't kept here, only its hash.
+     * Proxmox's webhook target, and `keep`, which records the key's hash: called only once Proxmox has the key, so
+     * a failed save leaves the old key working on both sides.
      */
-    async connect(session: Session): Promise<{ url: string; key: string }> {
+    async connect(session: Session): Promise<{ url: string; key: string; keep: () => void }> {
       if (session.username !== "root@pam") throw new HttpError(403, "Setting up email alerts gives each node BossMox's certificate through its root console. Sign in as root@pam to do it.");
       const ca = readCa();
       if (!ca) throw new HttpError(400, "This BossMox install has no certificate authority yet. Update BossMox, then set up email.");
-      const url = inboundUrl(names(), deps.port);
-      if (!url) throw new HttpError(400, "BossMox doesn't know the address its certificate covers. Update BossMox, then set up email.");
+      const url = inboundUrl(names(), deps.port, deps.hostAllowed);
+      if (!url) throw new HttpError(400, "None of the addresses BossMox's certificate covers is one BossMox answers to. Update BossMox, then set up email.");
       const status = await deps.pve.get<{ type?: string; name?: string; ip?: string; online?: number }[]>("/cluster/status", session.ticket);
       const nodes = status.filter((s) => s.type === "node");
       const off = nodes.filter((n) => n.online !== 1).map((n) => n.name);
       if (off.length) throw new HttpError(400, `Bring these online first, so they can be given BossMox's certificate: ${off.join(", ")}.`);
-      const list = nodes.map((n) => ({ name: n.name ?? "", ip: n.ip ?? "" })).filter((n) => n.name && n.ip);
-      if (!list.length) throw new HttpError(502, "Proxmox didn't list its nodes' addresses.");
+      const list = await Promise.all(
+        nodes
+          .filter((n) => n.name)
+          .map(async (n) => {
+            const ifaces = await deps.pve.get<{ address?: string; address6?: string }[]>(`/nodes/${encodeURIComponent(n.name as string)}/network`, session.ticket).catch(() => []);
+            const ips = [n.ip, ...ifaces.flatMap((i) => [i.address, i.address6])].filter((x): x is string => !!x);
+            return { name: n.name as string, ips: [...new Set(ips)] };
+          }),
+      );
+      if (!list.length || list.some((n) => !n.ips.length)) throw new HttpError(502, "Proxmox didn't list its nodes' addresses.");
       for (const n of list) {
         const r = await deps.console(n.name, session, trustLine(ca.pem));
         if (r.exitCode !== 0) throw new HttpError(502, `${n.name} didn't take BossMox's certificate (exit code ${r.exitCode}). Nothing was changed on the nodes after it.`);
       }
       const key = randomBytes(32).toString("hex");
-      writeJsonAtomic(deps.file, { keyHash: sha(key).toString("hex"), nodes: list, ca: ca.fingerprint } satisfies Saved);
-      deps.audit("alert-link", session.username, { nodes: list.length });
-      return { url, key };
+      const keep = () => {
+        writeJsonAtomic(deps.file, { keyHash: sha(key).toString("hex"), nodes: list, ca: ca.fingerprint } satisfies Saved);
+        deps.audit("alert-link", session.username, { nodes: list.length });
+      };
+      return { url, key, keep };
     },
 
     /** An alert from Proxmox. Answers with the status to send back. */
@@ -125,7 +140,7 @@ export function createAlertLink(deps: LinkDeps) {
       if (!saved) return { status: 404, error: "Email alerts aren't set up." };
       const given = /^Bearer ([0-9a-f]{64})$/.exec(authorization ?? "")?.[1];
       if (!given || !timingSafeEqual(sha(given), Buffer.from(saved.keyHash, "hex"))) return { status: 401, error: "Wrong key." };
-      if (!saved.nodes.some((n) => n.ip === plainAddress(from))) return { status: 403, error: "Not from a node of this cluster." };
+      if (!saved.nodes.some((n) => n.ips.includes(plainAddress(from)))) return { status: 403, error: "Not from a node of this cluster." };
       const t = now();
       recent = recent.filter((x) => t - x < 3600_000);
       if (recent.length >= PER_HOUR) return { status: 429, error: "Too many alerts this hour." };

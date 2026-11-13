@@ -207,7 +207,7 @@ cat > /usr/local/sbin/bossmox-reset <<'EOF'
 #!/bin/sh
 # Starts setup again with a new code. Nobody can log in to this VM, so it's run from the Proxmox node through the
 # guest agent, which needs root on the node: qm guest exec <VM ID> -- bossmox-reset
-rm -f /var/lib/bossmox/settings.json /var/lib/bossmox/preferences.json /var/lib/bossmox/setup.hash /var/lib/bossmox/setup.code /var/lib/bossmox/pve-root-ca.pem
+rm -f /var/lib/bossmox/settings.json /var/lib/bossmox/preferences.json /var/lib/bossmox/setup.hash /var/lib/bossmox/setup.code /var/lib/bossmox/pve-root-ca.pem /var/lib/bossmox/email.json /var/lib/bossmox/alert-link.json
 rc-service bossmox restart
 EOF
 chmod 755 /usr/local/sbin/bossmox-reset

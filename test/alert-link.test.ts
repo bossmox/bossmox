@@ -84,18 +84,23 @@ function setup(opts: { status?: { type?: string; name?: string; ip?: string; onl
   const typed: { node: string; line: string }[] = [];
   const sent: { subject: string; text: string }[] = [];
   const pve = {
-    get: async () =>
-      opts.status ?? [
-        { type: "cluster", name: "lab" },
-        { type: "node", name: "n1", ip: "10.0.30.244", online: 1 },
-        { type: "node", name: "n2", ip: "10.0.30.245", online: 1 },
-      ],
+    get: async (p: string) =>
+      p.endsWith("/network")
+        ? p.includes("/n1/")
+          ? [{ address: "192.168.1.11" }, { address6: "fd00::11" }, {}]
+          : [{ address: "192.168.1.12" }]
+        : (opts.status ?? [
+            { type: "cluster", name: "lab" },
+            { type: "node", name: "n1", ip: "10.0.30.244", online: 1 },
+            { type: "node", name: "n2", ip: "10.0.30.245", online: 1 },
+          ]),
   } as unknown as PveClient;
   const link = createAlertLink({
     file: path.join(d, "alert-link.json"),
     caFile: caFile ?? path.join(d, "none"),
     namesFile: path.join(d, "cert-names"),
     port: 443,
+    hostAllowed: (h) => h !== "bossmox.lan",
     pve,
     console: async (node, _s, line) => {
       typed.push({ node, line });
@@ -110,7 +115,8 @@ function setup(opts: { status?: { type?: string; name?: string; ip?: string; onl
 test("connecting gives every node the CA, then keeps only the key's hash", async (t) => {
   const s = setup();
   if (!s.hasCa) return t.skip("no openssl here");
-  const { url, key } = await s.link.connect(root);
+  const { url, key, keep } = await s.link.connect(root);
+  keep();
   assert.equal(url, "https://10.0.30.247/api/alerts/inbound");
   assert.deepEqual(
     s.typed.map((x) => x.node),
@@ -134,7 +140,8 @@ test("only root@pam can connect, every node must be online, and a node that refu
 test("an alert needs the key and has to come from a node; then it goes out by email", async (t) => {
   const s = setup();
   if (!s.hasCa) return t.skip("no openssl here");
-  const { key } = await s.link.connect(root);
+  const { key, keep } = await s.link.connect(root);
+  keep();
   const body = { title: "Backup failed", message: "vzdump 101 failed", severity: "error" };
   assert.equal((await s.link.receive(undefined, "10.0.30.244", body)).status, 401);
   assert.equal((await s.link.receive(`Bearer ${"0".repeat(64)}`, "10.0.30.244", body)).status, 401);
@@ -148,7 +155,8 @@ test("an alert needs the key and has to come from a node; then it goes out by em
 test("a flood of alerts is cut off after 60 in an hour", async (t) => {
   const s = setup();
   if (!s.hasCa) return t.skip("no openssl here");
-  const { key } = await s.link.connect(root);
+  const { key, keep } = await s.link.connect(root);
+  keep();
   for (let i = 0; i < 60; i++) assert.equal((await s.link.receive(`Bearer ${key}`, "10.0.30.244", {})).status, 200);
   assert.equal((await s.link.receive(`Bearer ${key}`, "10.0.30.244", {})).status, 429);
   assert.equal(s.sent.length, 60);
@@ -157,9 +165,47 @@ test("a flood of alerts is cut off after 60 in an hour", async (t) => {
 test("after turning off, the old key no longer works", async (t) => {
   const s = setup();
   if (!s.hasCa) return t.skip("no openssl here");
-  const { key } = await s.link.connect(root);
+  const { key, keep } = await s.link.connect(root);
+  keep();
   s.link.forget();
   assert.equal((await s.link.receive(`Bearer ${key}`, "10.0.30.244", {})).status, 404);
+});
+
+test("the address used is one BossMox answers to", () => {
+  assert.equal(
+    inboundUrl(["bossmox.lan", "10.0.30.247"], 443, (h) => h === "10.0.30.247"),
+    "https://10.0.30.247/api/alerts/inbound",
+  );
+  assert.equal(
+    inboundUrl(["bossmox.lan"], 443, () => false),
+    null,
+  );
+});
+
+test("until Proxmox has taken the new key, nothing is recorded, so a failed save keeps the old one working", async (t) => {
+  const s = setup();
+  if (!s.hasCa) return t.skip("no openssl here");
+  const first = await s.link.connect(root);
+  first.keep();
+  const second = await s.link.connect(root);
+  assert.equal((await s.link.receive(`Bearer ${first.key}`, "10.0.30.244", {})).status, 200, "the old key still works");
+  assert.equal((await s.link.receive(`Bearer ${second.key}`, "10.0.30.244", {})).status, 401, "the new one isn't live yet");
+  second.keep();
+  assert.equal((await s.link.receive(`Bearer ${second.key}`, "10.0.30.244", {})).status, 200);
+});
+
+test("a node can send from any of its own addresses, not just its cluster one", async (t) => {
+  const s = setup();
+  if (!s.hasCa) return t.skip("no openssl here");
+  const { key, keep } = await s.link.connect(root);
+  keep();
+  assert.equal((await s.link.receive(`Bearer ${key}`, "192.168.1.11", {})).status, 200);
+  assert.equal((await s.link.receive(`Bearer ${key}`, "fd00::11", {})).status, 200);
+  assert.equal((await s.link.receive(`Bearer ${key}`, "192.168.1.99", {})).status, 403);
+});
+
+test("with no record at all, every node counts as missing", () => {
+  assert.deepEqual(setup().link.missing(["n1", "n2"]), ["n1", "n2"]);
 });
 
 test("Proxmox's target for email carries the key only as a secret, and posts title, message and severity", () => {

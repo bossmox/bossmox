@@ -80,11 +80,19 @@ export function createEmail(deps: EmailDeps) {
     if (!(await deps.canChange(session))) throw new HttpError(403, "Your Proxmox account can't change where alerts go.");
   };
 
-  /** One renewal at a time: Microsoft hands out a new refresh token each time, and the old one stops working. */
+  /**
+   * Every change to the file, one at a time. Microsoft hands out a new refresh token on each renewal and the old one
+   * stops working, and a renewal mustn't bring back a sign-in that was removed or replaced while it waited.
+   */
   const serial = <T>(job: () => Promise<T>): Promise<T> => {
     const next = busy.then(job, job);
     busy = next.catch(() => null);
     return next;
+  };
+  /** Changes the saved record only if it's still the same account; a removed or replaced one is left alone. */
+  const patch = (account: string, change: (s: Saved) => Saved) => {
+    const current = load();
+    if (current && current.account === account) store(change(current));
   };
 
   /** A working access token, renewing (and keeping the new refresh token) when needed. Records why if it can't. */
@@ -96,17 +104,18 @@ export function createEmail(deps: EmailDeps) {
       if (!saved) throw new HttpError(400, "Email alerts aren't set up.");
       const refresh = unseal(saved.token, key);
       if (!refresh) {
-        store({ ...saved, failed: "BossMox can't open its saved sign-in. Connect the account again." });
+        patch(saved.account, (s) => ({ ...s, failed: "BossMox can't open its saved sign-in. Connect the account again." }));
         throw new HttpError(400, "BossMox can't open its saved sign-in. Connect the account again.");
       }
       try {
         const t = await deps.outlook.renew(refresh);
-        store({ ...saved, token: seal(t.refresh, key), renewedAt: now(), failed: null });
+        patch(saved.account, (s) => ({ ...s, token: seal(t.refresh, key), renewedAt: now(), failed: null }));
         access = { token: t.access, until: t.accessExpiresAt };
         return t.access;
       } catch (err) {
         // Losing sight of Microsoft isn't losing the sign-in. Only a refusal is written down.
-        if (err instanceof OutlookError && err.code !== "unreachable") store({ ...saved, failed: `Microsoft stopped letting BossMox send: ${err.message} Connect the account again.` });
+        if (err instanceof OutlookError && err.code !== "unreachable")
+          patch(saved.account, (s) => ({ ...s, failed: `Microsoft stopped letting BossMox send: ${err.message} Connect the account again.` }));
         throw new HttpError(502, (err as Error).message);
       }
     });
@@ -122,12 +131,17 @@ export function createEmail(deps: EmailDeps) {
         if (r.state === "slower") interval += 5000;
         if (r.state !== "done") continue;
         const account = await deps.outlook.account(r.tokens.access);
+        // Cancelled while Microsoft answered: nothing is kept.
+        if (pending !== code) return;
         const key = needKey();
-        const before = load();
-        store({ account, to: before?.account === account ? before.to : [account], token: seal(r.tokens.refresh, key), renewedAt: now(), failed: null, by: code.by });
-        access = { token: r.tokens.access, until: r.tokens.accessExpiresAt };
-        pending = null;
-        deps.audit("email-connect", code.by, { account });
+        await serial(async () => {
+          if (pending !== code) return;
+          const before = load();
+          store({ account, to: before?.account === account ? before.to : [account], token: seal(r.tokens.refresh, key), renewedAt: now(), failed: null, by: code.by });
+          access = { token: r.tokens.access, until: r.tokens.accessExpiresAt };
+          pending = null;
+          deps.audit("email-connect", code.by, { account });
+        });
         return;
       } catch (err) {
         if (pending === code) pending = { error: (err as Error).message };
@@ -138,21 +152,34 @@ export function createEmail(deps: EmailDeps) {
   }
 
   return {
-    view(): EmailView {
-      const saved = load();
+    /**
+     * What the page shows. The sign-in code goes only to the person who asked for it: anyone else entering it would
+     * connect their own account. Who it sends from and to is shown only to people who can change alerts.
+     */
+    view(viewer: { username: string; canChange: boolean }): EmailView {
+      const saved = viewer.canChange ? load() : null;
       const p = pending;
+      const mine = !!p && ("error" in p || p.by === viewer.username);
       return {
         ready: !!deps.key,
         account: saved?.account ?? null,
         to: saved?.to ?? [],
         failed: saved?.failed ?? null,
-        signIn: !p ? null : "error" in p ? { error: p.error } : { code: p.userCode, link: p.verificationUri, expiresAt: p.expiresAt },
+        signIn: !p || !mine ? null : "error" in p ? { error: p.error } : { code: p.userCode, link: p.verificationUri, expiresAt: p.expiresAt },
       };
+    },
+    /** For Health check and the server: whether an account is connected, and why sending stopped. */
+    status() {
+      const saved = load();
+      return { account: saved?.account ?? null, failed: saved?.failed ?? null };
     },
 
     /** Starts sign-in by code. The page shows the code and asks view() until it's done. */
     async start(session: Session) {
       await allowed(session);
+      // Saving email as the destination needs root@pam (alert-link.ts), so connecting does too: a sign-in that can't
+      // be used is a token kept for nothing.
+      if (session.username !== "root@pam") throw new HttpError(403, "Setting up email alerts needs root@pam, because it gives each node BossMox's certificate.");
       needKey();
       const code = { ...(await deps.outlook.startSignIn()), by: session.username };
       pending = code;
@@ -167,10 +194,12 @@ export function createEmail(deps: EmailDeps) {
 
     async recipients(session: Session, raw: string) {
       await allowed(session);
-      const saved = load();
-      if (!saved) throw new HttpError(400, "Connect an account first.");
       const to = parseAddresses(raw);
-      store({ ...saved, to });
+      await serial(async () => {
+        const saved = load();
+        if (!saved) throw new HttpError(400, "Connect an account first.");
+        store({ ...saved, to });
+      });
       deps.audit("email-recipients", session.username, { count: to.length });
     },
 
@@ -179,14 +208,15 @@ export function createEmail(deps: EmailDeps) {
       const saved = load();
       if (!saved) throw new HttpError(400, "Email alerts aren't set up.");
       const token = await fresh();
+      const to = load()?.to ?? saved.to;
       try {
-        await deps.outlook.send(token, saved.to, subject, text);
+        await deps.outlook.send(token, to, subject, text);
       } catch (err) {
-        if (err instanceof OutlookError && err.code !== "unreachable") store({ ...(load() ?? saved), failed: `Microsoft didn't send the last alert: ${err.message}` });
+        if (err instanceof OutlookError && err.code !== "unreachable")
+          await serial(async () => patch(saved.account, (s) => ({ ...s, failed: `Microsoft didn't send the last alert: ${err.message}` })));
         throw new HttpError(502, (err as Error).message);
       }
-      const after = load();
-      if (after?.failed) store({ ...after, failed: null });
+      await serial(async () => patch(saved.account, (s) => (s.failed ? { ...s, failed: null } : s)));
     },
 
     async test(session: Session) {
@@ -195,12 +225,14 @@ export function createEmail(deps: EmailDeps) {
       deps.audit("email-test", session.username, {});
     },
 
-    /** Forgets the account: the sealed token is deleted, not just switched off. */
+    /** Forgets the account: the sealed token is deleted, not just switched off. A renewal in flight finishes first. */
     async remove(session: Session) {
       await allowed(session);
       pending = null;
-      access = null;
-      if (existsSync(deps.file)) unlinkSync(deps.file);
+      await serial(async () => {
+        access = null;
+        if (existsSync(deps.file)) unlinkSync(deps.file);
+      });
       deps.audit("email-remove", session.username, {});
     },
 
