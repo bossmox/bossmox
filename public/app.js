@@ -538,7 +538,13 @@ function drawSettings() {
       )
       .join("")}</div>
     ${alertsSection()}
-    ${redundancySection()}`;
+    ${redundancySection()}
+    ${supportSection()}`;
+}
+
+/* Supporting BossMox (#40): one quiet line in Settings, never a pop-up. Same words as the README. */
+function supportSection() {
+  return `<h3 class="sthd">Supporting BossMox</h3><div class="stgroup"><div class="setrow"><div class="hctext"><b>Free and open source</b><small>If BossMox helps you, you can support Rocky's work on it through GitHub Sponsors. Sponsorships go to Rocky personally.</small></div><div class="actions"><a class="btn" href="https://github.com/sponsors/twogunrock" target="_blank" rel="noopener noreferrer">Sponsor on GitHub</a></div></div></div>`;
 }
 
 /* Alerts (ADR 0038): Proxmox's own notifications, sent to a phone or a chat. Secrets go to Proxmox and are kept nowhere here. */

@@ -152,6 +152,7 @@ h1,h2,h3,p{margin:0}
 .state{color:var(--muted);margin-top:3px;display:flex;align-items:center;gap:7px}
 .actions{display:flex;gap:6px;flex-wrap:wrap}
 .btn{padding:7px 13px;border-radius:var(--r-s);font-weight:650;border:1px solid var(--line);background:var(--surface)}
+a.btn{display:inline-block;color:inherit;text-decoration:none}
 .btn:hover{background:var(--surface2)}
 .btn.primary{background:var(--accent);color:var(--on-accent);border-color:transparent}
 .btn.primary:hover{filter:brightness(1.07)}
