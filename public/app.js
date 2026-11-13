@@ -483,7 +483,9 @@ function alertsSection() {
   let action = "";
   if (a.kind) {
     tag = a.confirmed ? `<span class="rec ok">Set up</span>` : `<span class="rec">Not checked yet</span>`;
-    detail = `Proxmox sends failures and warnings${a.updates ? ", new updates" : ""}${a.allBackups ? " and every backup" : ""} to ${AL_NAMES[a.kind]}${a.where ? ` (${a.where})` : ""}.${a.confirmed ? "" : " Send a test, and say whether it came."}`;
+    const what = ["failures and warnings", ...(a.updates ? ["new updates"] : []), ...(a.allBackups ? ["every backup"] : [])];
+    const said = what.length > 1 ? `${what.slice(0, -1).join(", ")} and ${what.at(-1)}` : what[0];
+    detail = `Proxmox sends ${said} to ${AL_NAMES[a.kind]}${a.where ? ` (${a.where})` : ""}.${a.confirmed ? "" : " Send a test, and say whether it came."}`;
     if (a.canChange) action = `<button class="btn" data-altest="1">Send a test</button><button class="btn" data-alsetup="1">Change</button><button class="btn" data-aloff="1">Turn off</button>`;
   } else if (a.others.length) {
     tag = `<span class="rec ok">Set up</span>`;
