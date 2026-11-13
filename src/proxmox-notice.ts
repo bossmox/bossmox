@@ -43,10 +43,7 @@ export function createProxmoxNotice(pve: PveClient, now: () => number = Date.now
     const nodes = await Promise.all(
       online.map(async (node) => {
         const base = `/nodes/${encodeURIComponent(node)}`;
-        const [version, updates] = await Promise.all([
-          pve.get<{ version?: string }>(`${base}/version`, t).catch(() => null),
-          pve.get<RawUpdate[]>(`${base}/apt/update`, t).catch(() => null),
-        ]);
+        const [version, updates] = await Promise.all([pve.get<{ version?: string }>(`${base}/version`, t).catch(() => null), pve.get<RawUpdate[]>(`${base}/apt/update`, t).catch(() => null)]);
         return { node, version: version?.version ?? null, waiting: updates ? groupUpdates(updates).total : null };
       }),
     );

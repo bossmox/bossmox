@@ -1,0 +1,127 @@
+= CHECKING VERSION INFORMATION FOR PVE PACKAGES =
+
+Checking for package updates..
+[32mPASS: all packages up-to-date
+[0m
+Checking proxmox-ve package version..
+[32mPASS: proxmox-ve package has version >= 8.4-0
+[0m
+Checking running kernel version..
+[32mPASS: running kernel '6.8.12-43-pve' is considered suitable for upgrade.
+[0m
+= CHECKING CLUSTER HEALTH/SETTINGS =
+
+[32mPASS: systemd unit 'pve-cluster.service' is in state 'active'
+[0m[32mPASS: systemd unit 'corosync.service' is in state 'active'
+[0m[32mPASS: Cluster Filesystem is quorate.
+[0m
+Analzying quorum settings and state..
+INFO: configured votes - nodes: 3
+[0mINFO: configured votes - qdevice: 0
+[0mINFO: current expected votes: 3
+[0mINFO: current total votes: 3
+[0m
+Checking nodelist entries..
+[32mPASS: nodelist settings OK
+[0m
+Checking totem settings..
+[32mPASS: totem settings OK
+[0m
+INFO: run 'pvecm status' to get detailed cluster status..
+[0m
+= CHECKING HYPER-CONVERGED CEPH STATUS =
+
+SKIP: no hyper-converged ceph setup detected!
+[0m
+= CHECKING CONFIGURED STORAGES =
+
+[32mPASS: storage 'ISCSI_SHARE' enabled and active.
+[0m[32mPASS: storage 'nas-iso' enabled and active.
+[0m[32mPASS: storage 'local' enabled and active.
+[0mINFO: Checking storage content type configuration..
+[0m[32mPASS: no storage content problems found
+[0m[32mPASS: no storage re-uses a directory for multiple content types.
+[0mINFO: Check for usage of native GlusterFS storage plugin...
+[0m[32mPASS: No GlusterFS storage found.
+[0mINFO: Checking whether all external RBD storages have the 'keyring' option configured
+[0mSKIP: No RBD storage configured.
+[0m
+= VIRTUAL GUEST CHECKS =
+
+INFO: Checking for running guests..
+[0m[33mWARN: 2 running guest(s) detected - consider migrating or stopping them.
+[0mINFO: Checking if LXCFS is running with FUSE3 library, if already upgraded..
+[0mSKIP: not yet upgraded, no need to check the FUSE library version LXCFS uses
+[0mINFO: Checking for VirtIO devices that would change their MTU...
+[0m[32mPASS: All guest config descriptions fit in the new limit of 8 KiB
+[0mINFO: Checking container configs for deprecated lxc.cgroup entries
+[0m[32mPASS: No legacy 'lxc.cgroup' keys found.
+[0mINFO: Checking VM configurations for outdated machine versions
+[0m[32mPASS: All VM machine versions are recent enough
+[0m
+= MISCELLANEOUS CHECKS =
+
+INFO: Checking common daemon services..
+[0m[32mPASS: systemd unit 'pveproxy.service' is in state 'active'
+[0m[32mPASS: systemd unit 'pvedaemon.service' is in state 'active'
+[0m[32mPASS: systemd unit 'pvescheduler.service' is in state 'active'
+[0m[32mPASS: systemd unit 'pvestatd.service' is in state 'active'
+[0mINFO: Checking for supported & active NTP service..
+[0m[32mPASS: Detected active time synchronisation unit 'chrony.service'
+[0mINFO: Checking if the local node's hostname 'node1' is resolvable..
+[0mINFO: Checking if resolved IP is configured on local node..
+[0m[32mPASS: Resolved node IP '192.0.2.11' configured and active on single interface.
+[0mINFO: Check node certificate's RSA key size
+[0m[32mPASS: Certificate 'pve-root-ca.pem' passed Debian Busters (and newer) security level for TLS connections (4096 >= 2048 RSA)
+[0m[32mPASS: Certificate 'pve-ssl.pem' passed Debian Busters (and newer) security level for TLS connections (2048 >= 2048 RSA)
+[0mINFO: Checking backup retention settings..
+[0m[32mPASS: no backup retention problems found.
+[0mINFO: checking CIFS credential location..
+[0m[32mPASS: no CIFS credentials at outdated location found.
+[0mINFO: Checking permission system changes..
+[0mSKIP: user.cfg does not exist
+[0mINFO: Checking node and guest description/note length..
+[0m[32mPASS: All node config descriptions fit in the new limit of 64 KiB
+[0mINFO: Checking if the suite for the Debian security repository is correct..
+[0m[32mPASS: found no suite mismatch
+[0mINFO: Checking for existence of NVIDIA vGPU Manager..
+[0m[32mPASS: No NVIDIA vGPU Service found.
+[0mINFO: Checking bootloader configuration...
+[0mSKIP: System booted in legacy-mode - no need for additional packages
+[0mINFO: Check for dkms modules...
+[0mSKIP: could not get dkms status
+[0mINFO: Check for legacy 'filter' or 'group' sections in /etc/pve/notifications.cfg...
+[0m[32mPASS: No legacy 'filter' or 'group' sections found!
+[0mINFO: Check for legacy 'notification-policy' or 'notification-target' options in /etc/pve/jobs.cfg...
+[0m[32mPASS: No legacy 'notification-policy' or 'notification-target' options found!
+[0mINFO: Check for LVM autoactivation settings on LVM and LVM-thin storages...
+[0m[1mNOTICE: storage 'ISCSI_SHARE' has guest volumes with autoactivation enabled
+[0m[33mWARN: Starting with PVE 9, autoactivation will be disabled for new LVM/LVM-thin guest volumes. This system has some volumes that still have autoactivation enabled. Some affected volumes are on shared LVM storages, which has known issues (Bugzilla #4997). Disabling autoactivation for those is strongly recommended!
+You can run the following command to disable autoactivation for existing LVM/LVM-thin guest volumes:
+
+	/usr/share/pve-manager/migrations/pve-lvm-disable-autoactivation
+
+[0mINFO: Checking lvm config for thin_check_options...
+[0m[32mPASS: Check for correct thin_check_options passed
+[0mINFO: Check space requirements for RRD migration...
+[0m[32mPASS: Enough free disk space for increased RRD metric granularity requirements, which is roughly 19.07 MiB.
+[0mINFO: Checking for IPAM DB files that have not yet been migrated.
+[0m[32mPASS: No legacy IPAM DB found.
+[0m[32mPASS: No legacy MAC DB found.
+[0mINFO: Checking if the legacy sysctl file '/etc/sysctl.conf' needs to be migrated to new '/etc/sysctl.d/' path.
+[0m[32mPASS: Legacy file '/etc/sysctl.conf' exists but does not contain any settings.
+[0mINFO: Checking if matching CPU microcode package is installed.
+[0m[33mWARN: The matching CPU microcode package 'intel-microcode' could not be found! Consider installing it to receive the latest security and bug fixes for your CPU.
+	Ensure you enable the 'non-free-firmware' component in the apt sources and run:
+	apt install intel-microcode
+[0m
+= SUMMARY =
+
+TOTAL:    47
+[32mPASSED:   37
+[0mSKIPPED:  6
+[33mWARNINGS: 3
+[0mFAILURES: 0
+[33m
+ATTENTION: Please check the output for detailed information!
+[0m
