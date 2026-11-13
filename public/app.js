@@ -528,7 +528,7 @@ function openTieBreakerSetup() {
     <p><b>1. The vote machine.</b> Any Debian or Ubuntu machine outside this cluster that stays on: a Raspberry Pi, a small VM on another host, a NAS that runs containers. Not a guest on this cluster: its vote would go down with the node. As root there, run:</p>
     <pre class="tblines">${esc(lines)}</pre>
     <div class="row-end" style="margin-top:-4px"><button class="btn" data-tbcopy="1">Copy</button></div>
-    <p class="meta">The second line lets root sign in with a password, which the setup needs once. If root has no password there, set one with passwd. BossMox never sees it: you type it into a node's console in step 3, and afterwards you can turn password sign-in off again.</p>
+    <p class="meta">The second line lets root sign in with a password, which the setup needs once. If root has no password there, set one with passwd. You type it into a node's console in step 3, which BossMox passes on to the node without keeping it, and afterwards you can turn password sign-in off again.</p>
     <label class="field restartname"><span>2. The vote machine's address</span><input id="tbaddr" autocomplete="off" spellcheck="false" placeholder="192.168.1.50"></label>
     <p class="meta">BossMox then checks every node reaches it, and installs the tie-breaker software on the nodes. 3. A node's console opens with the setup command typed in; you press Enter and type the vote machine's root password there.</p>
     <label class="field restartname"><span>Type the cluster's name, ${esc(v.clusterName)}, to confirm</span><input id="tbname" autocomplete="off" spellcheck="false"></label>

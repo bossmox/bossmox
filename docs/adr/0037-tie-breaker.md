@@ -35,7 +35,7 @@ BossMox doesn't create it. It must be outside the cluster, because a vote that g
 1. **On the vote machine (the person does this):** BossMox shows two lines to run there as root and a Copy button: `apt install -y corosync-qnetd`, and allowing root SSH logins with a password for the setup (`PermitRootLogin yes`), which can be turned back off afterwards. Then the person types its address and presses Check.
 2. **Check, from every node's console:** the address answers a ping, and the qnetd port (TCP 5403) is open (`nc -z`, or bash's `/dev/tcp`). Each failure is said in plain words, naming the node.
 3. **Every node gets `corosync-qdevice`,** installed the way updates are (ADR 0027: its own systemd job, pagers off).
-4. **`pvecm qdevice setup <address>`** in one node's console, opened in a window the person can type into, with the command already typed in. They press Enter, answer the SSH host-key question, and type the vote machine's root password into the console. **The password never passes through BossMox.**
+4. **`pvecm qdevice setup <address>`** in one node's console, opened in a window the person can type into, with the command already typed in. They press Enter, answer the SSH host-key question, and type the vote machine's root password into the console. **BossMox relays the console's keystrokes to the node, password included, and never reads, keeps or logs them** (`src/terminal.ts` only passes the bytes on). Corrected 2026-11-13: this first said the password never passes through BossMox, which was wrong.
 5. **Check:** `pvecm status` shows the tie-breaker voting (`Qdevice` with a vote, three expected votes). The window ends on that, and on a line saying root SSH logins on the vote machine can be turned back off now.
 
 The confirmation names the cluster and the vote machine, with the typed cluster name, as for the heartbeat link.
@@ -72,4 +72,4 @@ Removing or replacing a tie-breaker; a vote machine BossMox creates; odd node co
 ## Open for Rocky
 
 1. ~~OK to create the two-node lab~~ **Yes (Rocky, 2026-11-13).**
-2. ~~The vote machine's setup~~ **Decided (Rocky, 2026-11-13): the person runs the two lines there themselves; BossMox never takes that machine's password.** For the lab test, Claude plays the person on VM 906.
+2. ~~The vote machine's setup~~ **Decided (Rocky, 2026-11-13): the person runs the two lines there themselves; BossMox has no field for that machine's password; it's typed only into the node's console, which BossMox relays without keeping.** For the lab test, Claude plays the person on VM 906.
