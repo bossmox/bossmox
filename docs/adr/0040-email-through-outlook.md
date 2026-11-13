@@ -20,5 +20,7 @@ Outlook sends through Microsoft Graph (`POST /me/sendMail`), which needs a sign-
 ## Consequences
 
 - **Email depends on BossMox being up**, unlike the 0.2.0 targets Proxmox sends itself. A node failure that takes BossMox's VM down with it sends no email. The setup window says so and suggests a second target (ntfy) for those.
-- To check on the lab before building the webhook leg: whether Proxmox's webhook target accepts BossMox's own certificate (⚠️ not checked).
+- **Proxmox to BossMox is encrypted, never plain HTTP** (Rocky 2026-11-13: "Plain text over network is always bad"). Proxmox's webhook (`proxmox-notify`, `webhook.rs`) has no setting for a self-signed certificate or a fingerprint; it trusts the node's system certificates. So the nodes are made to trust BossMox's certificate, in the narrowest way that works:
+  - First check on the lab whether the nodes already trust Proxmox's own cluster CA system-wide. If they do, BossMox's certificate is issued by that CA and nothing on the nodes changes.
+  - Otherwise BossMox makes a one-time CA limited by name constraints to BossMox's own address and name, signs its certificate with it, and deletes the CA's key. That CA goes into each node's trusted list. With its key gone, it can never vouch for anything else, so the nodes' other encrypted connections can't be faked with it. Redone when BossMox's address changes or a node joins; Health check names a node that doesn't have it.
 - Device code sign-in with a personal account and `Mail.Send` isn't spelled out in Microsoft's documentation. Prove it with a real free outlook.com account first.
