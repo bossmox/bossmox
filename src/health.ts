@@ -75,6 +75,8 @@ export interface HealthInput {
   heartbeat?: HeartbeatState | null;
   /** Where Proxmox's own alerts go, if anywhere (ADR 0038). */
   alerts?: AlertsView | null;
+  /** Why email alerts stopped, when Microsoft refused BossMox (ADR 0040). */
+  emailFailed?: string | null;
   /** Disks detached from their guests but still on storage (ADR 0031). */
   leftover?: Leftover[];
   channels: { node: string; ok: boolean; headline: string; note: string; offer: string | null }[];
@@ -205,6 +207,7 @@ export function buildHealth(h: HealthInput): Check[] {
           fix,
         });
     }
+    if (h.emailFailed) add({ id: "email", group: "Nodes", status: "warn", title: "Email alerts have stopped", detail: h.emailFailed, fix: { kind: "settings" as const, label: "Open Settings" } });
     // A guest HA gave up on (ADR 0036): it won't start again by itself.
     for (const g of h.guests.filter((x) => x.ha === "error")) {
       const lock = g.lock ? ` It's also locked (${g.lock})${g.lock === "migrate" ? ", which usually means a move was cut off, such as by every node shutting down at once" : ""}.` : "";

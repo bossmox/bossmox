@@ -56,6 +56,26 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       await c.alerts.remove(who);
       return null;
     },
+    "email-start": async (_name, who) => {
+      await c.email.start(who);
+      return null;
+    },
+    "email-cancel": async (_name, who) => {
+      await c.email.cancel(who);
+      return null;
+    },
+    "email-recipients": async (_name, who, body) => {
+      await c.email.recipients(who, text(body.to, 4096));
+      return null;
+    },
+    "email-test": async (_name, who) => {
+      await c.email.test(who);
+      return null;
+    },
+    "email-remove": async (_name, who) => {
+      await c.email.remove(who);
+      return null;
+    },
     "tiebreaker-prepare": async (_name, who, body) => {
       await c.tieBreaker.prepare(who, text(body.address, 64), text(body.confirm, 64));
       return null;

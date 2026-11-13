@@ -193,13 +193,21 @@ export interface AlertsDeps {
 export function createAlerts(deps: AlertsDeps) {
   const { pve } = deps;
 
+  /** Changing where alerts go needs Proxmox's own right to change notification targets. Email asks the same question. */
+  async function canChange(session: Session): Promise<boolean> {
+    const perms = await pve
+      .get<Record<string, Record<string, number>>>("/access/permissions?path=%2Fmapping%2Fnotifications", session.ticket)
+      .catch((): Record<string, Record<string, number>> => ({}));
+    return perms["/mapping/notifications"]?.["Mapping.Modify"] === 1;
+  }
+
   async function view(session: Session): Promise<AlertsView & { canChange: boolean; viaProxy: boolean }> {
     const t = session.ticket;
-    const [targets, matchers, root, perms] = await Promise.all([
+    const [targets, matchers, root, change] = await Promise.all([
       pve.get<RawTarget[]>("/cluster/notifications/targets", t),
       pve.get<RawMatcher[]>("/cluster/notifications/matchers", t),
       pve.get<{ email?: string }>("/access/users/root@pam", t).catch(() => ({ email: undefined })),
-      pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2Fmapping%2Fnotifications", t).catch((): Record<string, Record<string, number>> => ({})),
+      canChange(session),
     ]);
     const mine = targets.find((x) => x.name === TARGET);
     const detail = mine
@@ -207,7 +215,7 @@ export function createAlerts(deps: AlertsDeps) {
       : { url: undefined, server: undefined };
     return {
       ...readAlerts(targets, matchers, root.email ?? null, detail.url ?? null, detail.server ?? null),
-      canChange: perms["/mapping/notifications"]?.["Mapping.Modify"] === 1,
+      canChange: change,
       viaProxy: deps.viaProxy,
     };
   }
@@ -273,5 +281,5 @@ export function createAlerts(deps: AlertsDeps) {
     deps.audit("alerts-remove", session.username, {});
   }
 
-  return { view, save, test, confirm, remove };
+  return { view, canChange, save, test, confirm, remove };
 }

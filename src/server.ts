@@ -53,6 +53,9 @@ import { storageActions } from "./actions/storage.js";
 import { backupActions } from "./actions/backups.js";
 import { createAlerts } from "./alerts.js";
 import { releaseMismatch } from "./release-guard.js";
+import { createEmail, emailPath } from "./email.js";
+import { CLIENT_ID, createOutlook } from "./outlook.js";
+import { keyPath, readKey } from "./sealed.js";
 import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
 import { createHeartbeat, nodeConsole } from "./heartbeat.js";
@@ -158,6 +161,15 @@ const tieBreaker = createTieBreaker({
 
 /** Alerts through Proxmox's own notifications (ADR 0038). */
 const alerts = createAlerts({ pve, viaProxy: config.behindProxy, audit: (event, who, detail) => audit(event, who, "settings", detail) });
+const email = createEmail({
+  file: emailPath(process.env),
+  key: readKey(keyPath(process.env)),
+  outlook: createOutlook(process.env.BOSSMOX_OUTLOOK_CLIENT_ID || CLIENT_ID),
+  canChange: alerts.canChange,
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
+});
+setInterval(() => void email.keepAlive(), 6 * 60 * 60 * 1000).unref();
+void email.keepAlive();
 
 /** Keep this guest running (ADR 0036). Where a guest could go comes from the same planning moves use. */
 const ha = createHa({
@@ -488,6 +500,7 @@ async function loadHealth(session: Session) {
     leftover,
     heartbeat: heartbeatView,
     alerts: alertsView,
+    emailFailed: email.view().failed,
     channels: details.flatMap((d) => (d?.channel ? [{ node: d.name, ...d.channel }] : [])),
     updates: details.flatMap((d) => (d?.updates ? [{ node: d.name, total: d.updates.total }] : [])),
     guests: data.vms,
@@ -630,6 +643,7 @@ const actionContext = {
   ha,
   tieBreaker,
   alerts,
+  email,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -888,6 +902,7 @@ const routeContext = {
   cache,
   guestPath,
   alerts,
+  email,
   healthCache,
   ha,
   heartbeat,
