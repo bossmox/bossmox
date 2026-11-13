@@ -1,6 +1,6 @@
 # 0037: A tie-breaker for two-node clusters
 
-**Date:** 2026-11-13. **Status:** proposed (Rocky reads before any code). Issue #33, 0.2.0 piece 3.
+**Date:** 2026-11-13. **Status:** accepted 2026-11-13 (Rocky: the two-node lab, and the person sets up the vote machine). Issue #33, 0.2.0 piece 3.
 
 ## Context
 
@@ -58,5 +58,5 @@ Removing or replacing a tie-breaker; a vote machine BossMox creates; odd node co
 
 ## Open for Rocky
 
-1. OK to create the two-node lab: two more nested VMs on Maverick pve-node3 (3 GB each, shut down after)?
-2. The vote machine's setup: the person runs two lines there themselves (as above), or BossMox does it over SSH with the vote machine's root password typed into BossMox once and not kept?
+1. ~~OK to create the two-node lab~~ **Yes (Rocky, 2026-11-13).**
+2. ~~The vote machine's setup~~ **Decided (Rocky, 2026-11-13): the person runs the two lines there themselves; BossMox never takes that machine's password.** For the lab test, Claude plays the person on VM 906.
