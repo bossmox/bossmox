@@ -50,8 +50,8 @@ function fake(opts: { disk?: string; lock?: string; hastate?: string; votes?: nu
     post: async (path: string, _w: unknown, form: Record<string, string>) => { calls.push(`POST ${path} ${JSON.stringify(form)}`); return null; },
     put: async (path: string, _w: unknown, form: Record<string, string>) => {
       calls.push(`PUT ${path} ${JSON.stringify(form)}`);
-      // HA takes the new state on its next cycle; a stuck one stays in error.
-      if (path.startsWith("/cluster/ha/resources/") && !opts.stuck) hastate = form.state;
+      // HA takes the new state on its next cycle, and reports disabled as its own state, stopped. A stuck one stays in error.
+      if (path.startsWith("/cluster/ha/resources/") && !opts.stuck) hastate = form.state === "disabled" ? "stopped" : form.state;
       return null;
     },
     delete: async (path: string) => { calls.push(`DELETE ${path}`); return null; },
