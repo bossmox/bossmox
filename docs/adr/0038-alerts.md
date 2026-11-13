@@ -28,7 +28,8 @@ Plain email by SMTP is still there, but it's no longer the main way: most mail p
 | **Slack** | the incoming-webhook link | webhook, POST with Slack's shape |
 | **Microsoft Teams** | the channel's Workflows webhook link | webhook, POST with Teams' shape |
 | **Gotify** | server address and app token | Proxmox's own Gotify target |
-| **Email** | addresses, and an SMTP server that relays (host, port, security, optional username and password, from address) | SMTP target |
+
+**Email is out of 0.2.0** (Rocky, 2026-11-13: "let's just pull the email out for now - and plan that as an upcoming patch like 0.2.1"). Planned for 0.2.1: addresses, and an SMTP server that relays (host, port, security, optional username and password, from address) to Proxmox's SMTP target, under the same rules for secrets.
 
 Each webhook preset's message format (title, message, severity) is checked against the real service before release. ntfy can be checked on the lab: its public server, or one run on VM 906. Discord, Slack and Teams need a test channel, which is Rocky's choice.
 
@@ -56,7 +57,7 @@ Changing notification targets needs Proxmox's notification permission (`Mapping.
 ## Tests
 
 - **Unit:** "nothing delivers" (only the built-in target and no root email; a disabled BossMox target); the target and matcher BossMox sends for each choice; secrets never in an answer to the page, an audit line or a file; Change with an empty secret sends none.
-- **Lab, bmx8:** ntfy on VM 906 (its single binary), set up through the page, Send a test, and see the message arrive. A real alert: a backup job to a storage that refuses it fails, and its message arrives. Email: a mail catcher on 906. Then Change, and Turn off (only BossMox's two entries go).
+- **Lab, bmx8:** ntfy on VM 906 (its single binary), set up through the page, Send a test, and see the message arrive. A real alert: a backup job to a storage that refuses it fails, and its message arrives. Gotify on 906 the same way. Then Change, and Turn off (only BossMox's two entries go).
 - **Not covered by the lab:** Discord, Slack and Teams need test channels; a real mail provider with TLS.
 
 ## Not in this
@@ -66,5 +67,5 @@ Part (b), BossMox's own health-check emails. Proxmox has no API for another prog
 ## Open for Rocky
 
 1. ~~SMTP password~~ **Decided (Rocky, 2026-11-13):** a form field, encrypted both hops, stored nowhere by BossMox.
-2. Which choices ship in 0.2.0: all six, or ntfy and email first (the two the lab can test end to end)?
+2. **Decided (Rocky, 2026-11-13):** email moves to 0.2.1; ntfy, Discord, Slack, Teams and Gotify stay in 0.2.0.
 3. Part (b): in 0.2.0, or the next release?
