@@ -4,6 +4,12 @@ What's coming to BossMox, in plain words. Each theme is a [GitHub milestone](htt
 
 Version numbers: fixes to a released version bump the last number (0.2.0 to 0.2.1); new features bump the middle one (0.1.x to 0.2.0). 1.0 is the first release called stable.
 
+## Next: [Email alerts](https://github.com/bossmox/bossmox/milestone/7) (0.2.1)
+
+0.2.0 sends Proxmox's alerts to ntfy, Discord, Slack, Teams or Gotify. 0.2.1 adds email.
+
+- [Alerts by email](https://github.com/bossmox/bossmox/issues/34)
+
 ## Later, in no particular order
 
 ### [Addresses](https://github.com/bossmox/bossmox/milestone/2)
