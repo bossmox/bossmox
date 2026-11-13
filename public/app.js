@@ -920,7 +920,10 @@ async function askHaRecover(id, node) {
   const v = S.data?.vms.find((x) => x.id === id);
   const name = v?.name ?? `Guest ${id}`;
   confirmAction(`Bring ${name} back under HA?`, `${v?.lock ? `BossMox unlocks ${name} (${v.lock}), then ` : "BossMox "}sets it to disabled under HA and starts it again.`, "Bring it back", () => runAction("ha-recover", node, `Bringing ${name} back`, { id }, () => {
+    // Read fresh, past the health cache, so the item that was fixed goes.
     S.healthChecks = null;
+    S.healthAgain = true;
+    drawHealthCheck();
     loadHealthCheck();
     refresh();
   }));
