@@ -7,6 +7,7 @@ import type { HeartbeatState } from "./redundancy.js";
 import { KIND_NAMES, type AlertsView } from "./alerts.js";
 import type { NetCheck } from "./cluster-net.js";
 import type { StorageMap } from "./storage-map.js";
+import { lifeOf, longDate } from "./lifecycle.js";
 
 /**
  * "off" is a check the person turned off: never counted as passed, and it says how to turn it back on. "tip" is best
@@ -81,6 +82,10 @@ export interface HealthInput {
   linkMissing?: string[];
   /** Days left on BossMox's own certificate. */
   certDaysLeft?: number | null;
+  /** Each online node's Proxmox version, such as "8.4.21" (ADR 0042). */
+  versions?: { node: string; version: string }[];
+  /** Today, for end-of-life dates; tests pass a fixed one. */
+  now?: Date;
   /** Disks detached from their guests but still on storage (ADR 0031). */
   leftover?: Leftover[];
   channels: { node: string; ok: boolean; headline: string; note: string; offer: string | null }[];
@@ -266,6 +271,54 @@ export function buildHealth(h: HealthInput): Check[] {
       title: h.certDaysLeft < 0 ? "BossMox's certificate has run out" : `BossMox's certificate runs out in ${h.certDaysLeft} days`,
       detail: "BossMox renews it every day once under 60 days are left, so this means renewing failed. On the BossMox machine, run bossmox-cert renew as root and read what it says.",
     });
+  // How long each Proxmox version on the cluster gets updates (ADR 0042). Nodes mid-upgrade can run two at once.
+  const byMajor = new Map<number, { nodes: string[]; versions: Set<string> }>();
+  for (const v of h.versions ?? []) {
+    const major = Number.parseInt(v.version, 10);
+    if (!Number.isInteger(major)) continue;
+    const g = byMajor.get(major) ?? { nodes: [], versions: new Set<string>() };
+    g.nodes.push(v.node);
+    g.versions.add(v.version);
+    byMajor.set(major, g);
+  }
+  for (const [major, g] of [...byMajor].sort((a, b) => a[0] - b[0])) {
+    const life = lifeOf(`${major}`, h.now ?? new Date());
+    if (!life) continue;
+    const who = `${list(g.nodes)} ${g.nodes.length === 1 ? "runs" : "run"} ${[...g.versions].sort().join(", ")}.`;
+    const next = life.newer ? ` Upgrade to Proxmox VE ${life.newer}.` : "";
+    if (life.state === "ended" && life.endOfLife)
+      add({
+        id: `eol-${major}`,
+        group: "Nodes",
+        status: "bad",
+        title: `Proxmox VE ${major} stopped getting updates on ${longDate(life.endOfLife)}`,
+        detail: `${who} Since then it gets no security fixes.${next}`,
+      });
+    else if (life.state === "ending" && life.endOfLife)
+      add({
+        id: `eol-${major}`,
+        group: "Nodes",
+        status: "warn",
+        title: `Proxmox VE ${major} stops getting updates on ${longDate(life.endOfLife)}`,
+        detail: `That's ${life.daysLeft === 1 ? "1 day" : `${life.daysLeft} days`} from now. ${who} After that it gets no security fixes.${next ? ` Plan the upgrade to Proxmox VE ${life.newer} before then.` : ""}`,
+      });
+    else if (life.state === "unknown")
+      add({
+        id: `eol-${major}`,
+        group: "Nodes",
+        status: "tip",
+        title: `BossMox doesn't know Proxmox VE ${major} yet`,
+        detail: `${who} Update BossMox to see how long this version gets updates.`,
+      });
+    else
+      add({
+        id: `eol-${major}`,
+        group: "Nodes",
+        status: "ok",
+        title: `Proxmox VE ${major} gets updates`,
+        detail: `${who} ${life.endOfLife ? `Until ${longDate(life.endOfLife)}.` : "Proxmox hasn't announced an end date yet."}`,
+      });
+  }
   const badChannels = h.channels.filter((c) => !c.ok);
   if (badChannels.length)
     for (const c of badChannels)

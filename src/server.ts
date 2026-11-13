@@ -531,6 +531,7 @@ async function loadHealth(session: Session) {
         : null),
     linkMissing: alertsView?.kind === "email" ? alertLink.missing(data.nodes.map((n) => n.name)) : [],
     certDaysLeft: certDaysLeft(),
+    versions: details.flatMap((d) => (d?.summary && d.summary.proxmoxVersion !== "Unknown" ? [{ node: d.name, version: d.summary.proxmoxVersion }] : [])),
     channels: details.flatMap((d) => (d?.channel ? [{ node: d.name, ...d.channel }] : [])),
     updates: details.flatMap((d) => (d?.updates ? [{ node: d.name, total: d.updates.total }] : [])),
     guests: data.vms,
