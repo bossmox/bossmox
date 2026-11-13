@@ -131,10 +131,10 @@ export class PveClient {
    */
   upload(path: string, who: Identity, fields: Record<string, string>, file: { name: string; size: number; stream: NodeJS.ReadableStream }): Promise<string> {
     const boundary = `----BossMox${randomBytes(16).toString("hex")}`;
-    const head =
-      Object.entries(fields)
-        .map(([k, v]) => `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`)
-        .join("") + `--${boundary}\r\nContent-Disposition: form-data; name="filename"; filename="${file.name}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
+    const parts = Object.entries(fields)
+      .map(([k, v]) => `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`)
+      .join("");
+    const head = `${parts}--${boundary}\r\nContent-Disposition: form-data; name="filename"; filename="${file.name}"\r\nContent-Type: application/octet-stream\r\n\r\n`;
     const tail = `\r\n--${boundary}--\r\n`;
     const url = new URL(`/api2/json${path}`, this.activeUrl);
     const headers = {

@@ -3492,13 +3492,8 @@ function showTerminal(server, id, title, help, guest = null, typed = null) {
 
 /** True when a terminal's latest output ends at a shell prompt (root's # or a user's $), colours stripped. */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: matching terminal escape codes is the point.
-const atPrompt = (text) =>
-  /[#$] ?$/.test(
-    text
-      .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
-      .replace(/\x1b\][^\x07]*\x07/g, "")
-      .replace(/\r/g, ""),
-  );
+const TERMINAL_CODES = [/\x1b\[[0-9;?]*[ -/]*[@-~]/g, /\x1b\][^\x07]*\x07/g];
+const atPrompt = (text) => /[#$] ?$/.test(text.replace(TERMINAL_CODES[0], "").replace(TERMINAL_CODES[1], "").replace(/\r/g, ""));
 
 /* Console: a container gets a terminal, and a VM shows its screen */
 let vnc = null;
