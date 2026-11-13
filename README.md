@@ -132,7 +132,7 @@ Rocky Lott directs BossMox: what it does, how it should feel to someone new to P
 
 That doesn't make it vibe-coded. Nothing goes in because it looks right; every change has to prove itself first, and you can check each part of that here:
 
-- **Decided before it's built.** Each feature starts with a written decision record, including what was tried and didn't work. There are 34 so far, in [docs/adr](docs/adr).
+- **Decided before it's built.** Each feature starts with a written decision record, including what was tried and didn't work. There are 38 so far, in [docs/adr](docs/adr).
 - **Tested against real Proxmox.** Every feature runs on a three-node test cluster and a single-node install before release, and the screenshots above come from that cluster. When Proxmox turned out to do something risky without warning, such as deleting a disk a running VM still uses, BossMox got its own check instead of trusting it.
 - **Tests that can fail.** Automated tests and a linter run on every change ([see the latest run](https://github.com/bossmox/bossmox/actions/workflows/test.yml)). The important ones are deliberately broken once, to prove they'd catch the mistake they're there for.
 - **Reviewed by someone who didn't write it.** Seven reviews so far, each by AI reviewers that didn't write the code, reading it fresh; the latest two are summed up in [#42](https://github.com/bossmox/bossmox/issues/42). Their findings were fixed and each fix proven, apart from a few minor items still being worked on.

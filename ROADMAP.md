@@ -4,15 +4,6 @@ What's coming to BossMox, in plain words. Each theme is a [GitHub milestone](htt
 
 Version numbers: fixes to a released version bump the last number (0.2.0 to 0.2.1); new features bump the middle one (0.1.x to 0.2.0). 1.0 is the first release called stable.
 
-## Next: [Cluster resilience](https://github.com/bossmox/bossmox/milestone/1) (0.2.0)
-
-Keeping a cluster running through a failure, and hearing about it when something goes wrong.
-
-- [Heartbeat backup link](https://github.com/bossmox/bossmox/issues/31)
-- [Keep this guest running (HA)](https://github.com/bossmox/bossmox/issues/32)
-- [Tie-breaker for two-node clusters](https://github.com/bossmox/bossmox/issues/33)
-- [Alerts by email](https://github.com/bossmox/bossmox/issues/34)
-
 ## Later, in no particular order
 
 ### [Addresses](https://github.com/bossmox/bossmox/milestone/2)
@@ -42,4 +33,4 @@ How BossMox is delivered and supported.
 - [Signed releases](https://github.com/bossmox/bossmox/issues/39)
 - [Donate link](https://github.com/bossmox/bossmox/issues/40)
 
-The review fixes shipped in [0.1.9](https://github.com/bossmox/bossmox/releases/tag/v0.1.9-preview). Released work is in the [release notes](https://github.com/bossmox/bossmox/releases), and the reasoning behind each decision is in [docs/adr](docs/adr).
+Cluster resilience shipped in [0.2.0](https://github.com/bossmox/bossmox/releases/tag/v0.2.0-preview). Next: email alerts in 0.2.1. Released work is in the [release notes](https://github.com/bossmox/bossmox/releases), and the reasoning behind each decision is in [docs/adr](docs/adr).
