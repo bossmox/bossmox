@@ -12,10 +12,40 @@ import { parseChecker } from "./upgrade-check.js";
 /** Proxmox's migration for disks made before VE 9. Without --assume-yes it asks per storage, or assumes no. */
 export const LVM_COMMAND = "/usr/share/pve-manager/migrations/pve-lvm-disable-autoactivation --assume-yes";
 /**
- * Proxmox's pinning: .link files and a pending network config, applied at the next restart. In a console it asks
- * "continue (y/N)?" first, so the answer is piped in.
+ * Proxmox's pinning for one port: a .link file and a pending network config, applied at the next restart. In a
+ * console it asks "continue (y/N)?" first, so the answer is piped in.
  */
-export const PIN_COMMAND = "printf 'y\\n' | pve-network-interface-pinning generate";
+export const pinCommand = (port: string) => `printf 'y\\n' | pve-network-interface-pinning generate --interface ${port}`;
+
+/**
+ * Which naming file udev applies to each physical port, asked in udev's test mode, which changes nothing. Proxmox's
+ * pinning tool only knows its own 50-pve files: an earlier file that names the port (cloud-init's 10-eth0.link, or a
+ * pin made by hand) wins over it, and the bridge then points at a name that never appears. Seen on the lab,
+ * 2026-11-13: the node came back without its main network.
+ */
+export const PORTS_COMMAND =
+  'for p in /sys/class/net/*; do [ -e "$p/device" ] || continue; n=$(basename "$p"); ' +
+  "f=$(udevadm test-builtin net_setup_link \"$p\" 2>&1 | sed -n 's/.*Config file \\(.*\\) is applied.*/\\1/p' | head -1); " +
+  'named=no; [ -n "$f" ] && grep -q "^Name=" "$f" 2>/dev/null && named=yes; [ -n "$f" ] || f=none; ' +
+  'echo "BMXPORT $n $(cat "$p/address") $f $named"; done';
+
+export interface Port {
+  name: string;
+  mac: string;
+  /** The .link file udev applies, or "none". */
+  file: string;
+  /** That file fixes the name, so a new kernel can't change it. */
+  named: boolean;
+}
+export function readPorts(output: string): Port[] {
+  return [...output.matchAll(/^BMXPORT (\S+) (\S+) (\S+) (yes|no)\s*$/gm)].map((m) => ({ name: m[1] as string, mac: m[2] as string, file: m[3] as string, named: m[4] === "yes" }));
+}
+/** A port only Proxmox's own pin may name: anything else that names it already keeps the name stable. */
+const pinnedByProxmox = (p: Port) => /\/50-pve-[^/]+\.link$/.test(p.file);
+
+/** Undoes this run's pins before any restart: its .link files and the pending network config it made. */
+export const undoPinCommand = (names: string[], hadPending: boolean) =>
+  [...names.map((n) => `rm -f /usr/local/lib/systemd/network/50-pve-${n}.link`), ...(hadPending ? [] : ["rm -f /etc/network/interfaces.new"])].join(" && ");
 
 export interface LvmResult {
   node: string;
@@ -29,6 +59,8 @@ export interface PinResult {
   /** Old name to new name, as the tool printed it. Empty when everything was already pinned. */
   renames: { from: string; to: string }[];
   already: boolean;
+  /** Ports whose name another file already fixes, so they were left alone. */
+  kept?: { name: string; file: string }[];
   error: string | null;
 }
 
@@ -72,6 +104,47 @@ export function createUpgradeFixes(deps: FixDeps) {
     }
   };
 
+  /**
+   * Pins only the ports nothing else names, then asks udev again before anything restarts: each pinned port must now
+   * get Proxmox's new file. If one doesn't, this run's pins are taken back out, so no restart can cut the node off.
+   */
+  async function pinNode(session: Session, node: string): Promise<PinResult> {
+    const before = readPorts((await deps.console(node, session, PORTS_COMMAND)).output);
+    if (!before.length) return { node, ok: false, renames: [], already: false, error: "BossMox couldn't list this node's network ports." };
+    const kept = before.filter((p) => p.named && !pinnedByProxmox(p)).map((p) => ({ name: p.name, file: p.file }));
+    const todo = before.filter((p) => !p.named);
+    if (!todo.length) return { node, ok: true, renames: [], already: true, kept, error: null };
+    const pending = (await deps.console(node, session, "test -e /etc/network/interfaces.new")).exitCode === 0;
+    const renames: PinResult["renames"] = [];
+    for (const p of todo) {
+      const r = readPin(node, await deps.console(node, session, pinCommand(p.name)));
+      if (!r.ok) return { node, ok: false, renames, already: false, kept, error: r.error };
+      renames.push(...r.renames);
+    }
+    const after = readPorts((await deps.console(node, session, PORTS_COMMAND)).output);
+    const wrong = renames.filter((rn) => !after.find((p) => p.name === rn.from)?.file.endsWith(`/50-pve-${rn.to}.link`));
+    if (wrong.length) {
+      await deps.console(
+        node,
+        session,
+        undoPinCommand(
+          renames.map((rn) => rn.to),
+          pending,
+        ),
+      );
+      const why = wrong.map((rn) => `${rn.from} (named by ${after.find((p) => p.name === rn.from)?.file ?? "another file"})`).join(", ");
+      return {
+        node,
+        ok: false,
+        renames: [],
+        already: false,
+        kept,
+        error: `Another naming file would win over the new pin for ${why}, so the node would come back without that network. BossMox took the pins back out; nothing changes at the next restart.`,
+      };
+    }
+    return { node, ok: true, renames, already: false, kept, error: null };
+  }
+
   return {
     /** What the last fixes did, for the window. */
     last: () => last,
@@ -100,7 +173,7 @@ export function createUpgradeFixes(deps: FixDeps) {
       rootOnly(session);
       if (confirm.toLowerCase() !== node.toLowerCase()) throw new HttpError(400, "Type the node's name to confirm.");
       return once(async () => {
-        const r = readPin(node, await deps.console(node, session, PIN_COMMAND));
+        const r = await pinNode(session, node);
         deps.audit("upgrade-pin", session.username, { node, renamed: r.renames.length, ok: r.ok ? 1 : 0 });
         last = { ...last, pins: { ...last.pins, [node]: r } };
         return r;

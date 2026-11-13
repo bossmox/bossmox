@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Session } from "../src/auth.js";
 import type { ShellResult } from "../src/node-shell.js";
-import { createUpgradeFixes, LVM_COMMAND, PIN_COMMAND, readLvm, readPin } from "../src/upgrade-fixes.js";
+import { createUpgradeFixes, LVM_COMMAND, PORTS_COMMAND, pinCommand, readLvm, readPin, readPorts } from "../src/upgrade-fixes.js";
 
 const root = { username: "root@pam", ticket: "t" } as Session;
 const out = (output: string, exitCode = 0): ShellResult => ({ exitCode, output, tail: output, keptConfig: [] });
@@ -69,13 +69,68 @@ test("the LVM fix runs Proxmox's command on each node in turn and stops at the f
   assert.equal(s.fixes.last().lvm?.length, 2);
 });
 
-test("both fixes need root@pam and the confirmation, and pinning names the node", async () => {
-  const s = setup({ node1: out(PINNED) });
+test("both fixes need root@pam and the confirmation", async () => {
+  const s = setup({});
   await assert.rejects(s.fixes.lvm({ username: "admin@pve", ticket: "t" } as Session, "lvm-autoactivation"), /root@pam/);
   await assert.rejects(s.fixes.lvm(root, "yes"), /confirmed/);
   await assert.rejects(s.fixes.pin(root, "node1", "node2"), /node's name/);
-  const r = await s.fixes.pin(root, "node1", "NODE1");
-  assert.equal(r.renames.length, 2);
-  assert.deepEqual(s.typed, [`node1: ${PIN_COMMAND}`]);
-  assert.equal(s.fixes.last().pins.node1?.ok, true);
+});
+
+/** What udev says on the lab nodes: cloud-init names eth0, ens19 has only the default rules. */
+const LAB_PORTS = "BMXPORT ens19 bc:24:11:46:2b:12 /usr/lib/systemd/network/99-default.link no\nBMXPORT eth0 bc:24:11:b7:ff:8b /etc/systemd/network/10-eth0.link yes\n";
+const ENS19_PINNED =
+  "Name for link 'ens19' (enp0s19) will change to 'nic0'\nSuccessfully generated .link files in '/usr/local/lib/systemd/network/'\nSuccessfully updated Proxmox VE configuration files.\n";
+
+test("the ports udev names are read from the listing, not from the echoed command", () => {
+  const ports = readPorts(`${PORTS_COMMAND}\n${LAB_PORTS}`);
+  assert.deepEqual(
+    ports.map((p) => [p.name, p.named]),
+    [
+      ["ens19", false],
+      ["eth0", true],
+    ],
+  );
+});
+
+function pinSetup(afterPorts: string) {
+  const typed: string[] = [];
+  let listings = 0;
+  const fixes = createUpgradeFixes({
+    console: async (_node, _s, line) => {
+      typed.push(line);
+      if (line === PORTS_COMMAND) return out(listings++ === 0 ? LAB_PORTS : afterPorts);
+      if (line.startsWith("test -e")) return out("", 1);
+      if (line === pinCommand("ens19")) return out(ENS19_PINNED);
+      return out("");
+    },
+    onlineNodes: async () => ["node3"],
+    audit: () => {},
+  });
+  return { fixes, typed };
+}
+
+test("only the port nothing else names is pinned, and udev is asked again before it counts", async () => {
+  const s = pinSetup("BMXPORT ens19 bc:24:11:46:2b:12 /usr/local/lib/systemd/network/50-pve-nic0.link yes\nBMXPORT eth0 bc:24:11:b7:ff:8b /etc/systemd/network/10-eth0.link yes\n");
+  const r = await s.fixes.pin(root, "node3", "node3");
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.renames, [{ from: "ens19", to: "nic0" }]);
+  assert.deepEqual(r.kept, [{ name: "eth0", file: "/etc/systemd/network/10-eth0.link" }], "eth0 keeps the name another file gives it");
+  assert.ok(!s.typed.includes(pinCommand("eth0")), "eth0 is never pinned");
+  assert.equal(s.typed.filter((t) => t === PORTS_COMMAND).length, 2);
+});
+
+test("if another file would still win, the pins are taken back out before anything restarts", async () => {
+  const s = pinSetup("BMXPORT ens19 bc:24:11:46:2b:12 /etc/systemd/network/05-mine.link yes\nBMXPORT eth0 bc:24:11:b7:ff:8b /etc/systemd/network/10-eth0.link yes\n");
+  const r = await s.fixes.pin(root, "node3", "node3");
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? "", /ens19 \(named by \/etc\/systemd\/network\/05-mine\.link\)/);
+  assert.equal(s.typed.at(-1), "rm -f /usr/local/lib/systemd/network/50-pve-nic0.link && rm -f /etc/network/interfaces.new");
+});
+
+test("a node whose ports are all named already needs nothing", async () => {
+  const s = pinSetup("");
+  const fixes = createUpgradeFixes({ console: async () => out("BMXPORT eth0 aa:bb /etc/systemd/network/10-eth0.link yes\n"), onlineNodes: async () => [], audit: () => {} });
+  const r = await fixes.pin(root, "node3", "node3");
+  assert.equal(r.already, true);
+  assert.equal(s.typed.length, 0);
 });

@@ -770,8 +770,8 @@ function upgradeBody(u) {
       : !pin.ok
         ? `Pinning didn't work: ${pin.error}`
         : pin.already
-          ? "Port names are already pinned."
-          : `Pinned: ${pin.renames.map((r) => `${r.from} becomes ${r.to}`).join(", ")}, at the next restart.`;
+          ? "Every port already has a fixed name, so a new kernel can't rename them."
+          : `Pinned: ${pin.renames.map((r) => `${r.from} becomes ${r.to}`).join(", ")}, at the next restart.${pin.kept?.length ? ` ${pin.kept.map((k) => k.name).join(", ")} ${pin.kept.length === 1 ? "keeps its name" : "keep their names"}: another file already fixes ${pin.kept.length === 1 ? "it" : "them"}.` : ""}`;
     return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${n.version ? `Proxmox VE ${esc(n.version)}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}</small></div>${!pin?.ok ? `<div class="actions"><button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button></div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
   };
   const lvm = u.fixes?.lvm;
