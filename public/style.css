@@ -459,3 +459,4 @@ i.s1{background:var(--series1)}i.s2{background:var(--series2)}
 .hafence .haline{display:block;margin-top:8px}
 .hafence .haline:not(.ok){font-weight:600}
 .tblines{background:var(--surface2);padding:10px 12px;border-radius:8px;overflow-x:auto;font-size:12.5px;white-space:pre;margin:6px 0 10px}
+.check{display:flex;gap:8px;align-items:center;margin:6px 0;font-size:14px}

@@ -462,7 +462,109 @@ function drawSettings() {
     <div class="stgroup">${list.map((s) => `<div class="setrow">
       <div class="hctext"><b>${esc(s.title)}</b>${advice(s)}<small>${esc(s.detail)}</small>${s.why && !s.can ? `<small class="setwhy">${esc(s.why)}</small>` : ""}${pick(s)}</div>
       <button class="sw" role="switch" aria-checked="${s.on}" aria-label="${esc(s.title)}" data-setsw="${esc(s.id)}" ${locked(s) ? "disabled" : ""}><i></i></button></div>`).join("")}</div>
+    ${alertsSection()}
     ${redundancySection()}`;
+}
+
+/* Alerts (ADR 0038): Proxmox's own notifications, sent to a phone or a chat. Secrets go to Proxmox and are kept nowhere here. */
+const AL_NAMES = { ntfy: "ntfy (phone push)", discord: "Discord", slack: "Slack", teams: "Microsoft Teams", gotify: "Gotify" };
+const AL_HELP = {
+  ntfy: "Free phone push. Install the ntfy app, subscribe to a topic name only you know, and type the same name here. Use your own ntfy server if you have one.",
+  discord: "In the Discord channel: Edit channel, Integrations, Webhooks, New webhook, Copy webhook URL. Paste it here.",
+  slack: "In Slack: create an incoming webhook for the channel (Slack's Incoming Webhooks app) and paste its link here.",
+  teams: "In the Teams channel: Workflows, \"Post to a channel when a webhook request is received\", then copy the link it gives and paste it here.",
+  gotify: "Your Gotify server's address and an app token from its Apps page.",
+};
+function alertsSection() {
+  const a = S.alerts;
+  if (!a) return "";
+  let detail;
+  let tag;
+  let action = "";
+  if (a.kind) {
+    tag = a.confirmed ? `<span class="rec ok">Set up</span>` : `<span class="rec">Not checked yet</span>`;
+    detail = `Proxmox sends failures and warnings${a.updates ? ", new updates" : ""}${a.allBackups ? " and every backup" : ""} to ${AL_NAMES[a.kind]}${a.where ? ` (${a.where})` : ""}.${a.confirmed ? "" : " Send a test, and say whether it came."}`;
+    if (a.canChange) action = `<button class="btn" data-altest="1">Send a test</button><button class="btn" data-alsetup="1">Change</button><button class="btn" data-aloff="1">Turn off</button>`;
+  } else if (a.others.length) {
+    tag = `<span class="rec ok">Set up</span>`;
+    detail = `Proxmox sends alerts through ${a.others.join(", ")}, set up outside BossMox.`;
+  } else {
+    tag = `<span class="rec">Best practice</span>`;
+    detail = "Right now a fenced node, a failed backup or a failed replication tells no one. Proxmox can send them to your phone or a chat channel, even when BossMox is down.";
+    if (a.canChange) action = `<button class="btn primary" data-alsetup="1">Set up</button>`;
+  }
+  if (!a.canChange) detail += " Changing alerts needs the Mapping.Modify permission on /mapping/notifications in Proxmox.";
+  return `<h3 class="sthd">Alerts</h3><div class="stgroup"><div class="setrow"><div class="hctext"><b>When something fails</b>${tag}<small>${esc(detail)}</small></div><div class="actions">${action}</div></div></div>`;
+}
+function openAlertsSetup(kind = null) {
+  const a = S.alerts;
+  if (!a) return;
+  const k = kind ?? a.kind ?? "ntfy";
+  const changing = a.kind === k;
+  const keepNote = changing ? `<p class="meta">Leave this empty to keep the one Proxmox has. To send somewhere new, paste it again.</p>` : "";
+  const fields = k === "ntfy"
+    ? `<label class="field restartname"><span>Topic</span><input id="altopic" autocomplete="off" spellcheck="false" placeholder="a name only you know"></label>
+       <label class="field restartname"><span>ntfy server (optional)</span><input id="alserver" autocomplete="off" spellcheck="false" placeholder="https://ntfy.sh"></label>
+       <label class="field restartname"><span>Access token (optional)</span><input id="altoken" type="password" autocomplete="off"></label>`
+    : k === "gotify"
+    ? `<label class="field restartname"><span>Gotify address</span><input id="alserver" autocomplete="off" spellcheck="false" placeholder="https://push.example.org"></label>
+       <label class="field restartname"><span>App token</span><input id="altoken" type="password" autocomplete="off"></label>`
+    : `<label class="field restartname"><span>Webhook link</span><input id="allink" type="password" autocomplete="off" spellcheck="false"></label>`;
+  dialog(`<h3>${changing ? "Change alerts" : "Send Proxmox's alerts somewhere"}</h3>
+    <p>Proxmox itself sends these, so they arrive even when BossMox is down.</p>
+    <label class="field restartname"><span>Send them to</span><select id="alkind">${Object.entries(AL_NAMES).map(([v, l]) => `<option value="${v}" ${v === k ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+    <p class="meta">${esc(AL_HELP[k])}</p>
+    ${fields}
+    ${keepNote}
+    <p class="meta">${a.viaProxy ? "BossMox runs behind your own proxy here: what you type is encrypted to that proxy, and the step from it to BossMox is yours to secure. " : "What you type goes to Proxmox encrypted. "}Proxmox keeps it in its own private settings to send the alerts; BossMox doesn't keep it anywhere.</p>
+    <label class="check"><input type="checkbox" checked disabled> Failures and warnings: fenced nodes, failed backups, failed replication</label>
+    <label class="check"><input type="checkbox" id="alupdates" ${a.kind ? (a.updates ? "checked" : "") : "checked"}> New updates are available</label>
+    <label class="check"><input type="checkbox" id="albackups" ${a.allBackups ? "checked" : ""}> Every backup, including the ones that worked</label>
+    <p id="formerr" class="loginerr" hidden></p>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-algo="1">Save and send a test</button></div>`);
+}
+async function saveAlerts() {
+  const v = (id) => $(id)?.value?.trim() ?? "";
+  const body = { server: onlineNodes()[0], kind: $("#alkind").value, alertServer: v("#alserver"), topic: v("#altopic"), link: v("#allink"), token: v("#altoken"), updates: $("#alupdates").checked, allBackups: $("#albackups").checked };
+  try {
+    const res = await post("api/action/alerts-save", body);
+    const out = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) return formError(out.error);
+  } catch (err) {
+    return formError(err.message || "BossMox lost contact with Proxmox.");
+  }
+  sendAlertTest();
+}
+async function sendAlertTest() {
+  dialog(`<h3>Sending a test</h3><p>Proxmox is sending a test alert.</p>`);
+  try {
+    const res = await post("api/action/alerts-test", { server: onlineNodes()[0] });
+    const out = await res.json();
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) throw new Error(out.error);
+  } catch (err) {
+    S.afterTask = () => loadSettings();
+    return dialog(`<h3>The test didn't send</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><p class="meta">Check the link or token, and that the node can reach the service.</p>${closeRow}`);
+  }
+  dialog(`<h3>Did the test arrive?</h3><p>Proxmox sent a test alert. It should show up within a minute.</p>
+    <div class="row-end"><button class="btn" data-alno="1">It didn't</button><button class="btn primary" data-alyes="1">It arrived</button></div>`);
+}
+async function confirmAlerts(arrived) {
+  if (!arrived) {
+    S.afterTask = () => loadSettings();
+    return dialog(`<h3>It didn't arrive</h3><p>Usual causes: a typo in the link, topic or token; the ntfy app subscribed to a different topic; or the nodes can't reach the service (a firewall, or no internet). Change fixes the first two.</p>${closeRow}`);
+  }
+  try {
+    const res = await post("api/action/alerts-confirm", { server: onlineNodes()[0] });
+    if (!res.ok) throw new Error((await res.json()).error);
+  } catch (err) {
+    return dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  S.healthChecks = null;
+  S.healthAgain = true;
+  closeDialog();
+  loadSettings();
 }
 
 /* Redundancy (ADR 0035): a backup network for the cluster heartbeat, set up here when every node has a second port. */
@@ -669,12 +771,13 @@ async function watchHeartbeat() {
 async function loadSettings() {
   const run = S.loadRun;
   try {
-    const [{ settings }, heartbeat, ha, tb] = await Promise.all([signal("api/recommended"), signal("api/heartbeat").catch(() => null), signal("api/ha").catch(() => null), signal("api/tiebreaker").catch(() => null)]);
+    const [{ settings }, heartbeat, ha, tb, alerts] = await Promise.all([signal("api/recommended"), signal("api/heartbeat").catch(() => null), signal("api/ha").catch(() => null), signal("api/tiebreaker").catch(() => null), signal("api/alerts").catch(() => null)]);
     if (run !== S.loadRun) return;
     S.recommended = settings;
     S.heartbeat = heartbeat;
     S.haList = ha?.guests ?? null;
     S.tieBreaker = tb;
+    S.alerts = alerts;
     S.recommendedError = "";
   } catch (err) {
     if (err.message === "signed out" || run !== S.loadRun) return;
@@ -3511,6 +3614,12 @@ document.addEventListener("click", (e) => {
     S.tab = "settings";
     return renderDetail();
   }
+  if (d.alsetup) return openAlertsSetup();
+  if (d.algo) return saveAlerts();
+  if (d.altest) return sendAlertTest();
+  if (d.alyes) return confirmAlerts(true);
+  if (d.alno) return confirmAlerts(false);
+  if (d.aloff) return confirmAction("Turn off alerts?", "BossMox removes the alert target and rule it added in Proxmox. Anything set up outside BossMox stays.", "Turn off", () => runAction("alerts-remove", onlineNodes()[0], "Turning off alerts", {}, () => loadSettings()));
   if (d.tbsetup) return openTieBreakerSetup();
   if (d.tbgo) return startTieBreaker();
   if (d.tbwatch) return watchTieBreaker();
@@ -3750,6 +3859,7 @@ document.addEventListener("change", (e) => {
     S.vmNode = e.target.value;
     return renderList();
   }
+  if (e.target.id === "alkind") return openAlertsSetup(e.target.value);
   if (e.target.dataset?.keepagain) {
     const again = e.target.dataset.keepagain;
     const keepFreePct = Number(e.target.value);
