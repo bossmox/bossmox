@@ -748,6 +748,15 @@ const UP_HANDLING = {
   bossmox: ["ok", "BossMox takes care of it"],
   advice: ["off", "Good to know"],
 };
+const UP_PHASE = {
+  checking: "Running Proxmox's checker",
+  upgrading: "Installing the new version. This usually takes 10 to 30 minutes",
+  rechecking: "Checking the new packages",
+  pinning: "Pinning the port names",
+  restarting: "Restarting",
+  verifying: "Checking it came back on the new version",
+};
+const upgrading = (u) => Object.values(u?.upgrades ?? {}).some((j) => !j.finishedAt);
 function upgradeBody(u) {
   if (!u.checkedAt && !u.running) return `<p>BossMox runs Proxmox's own upgrade checker on every node, one at a time, and explains what it finds. It only reads: nothing on the nodes changes.</p>`;
   if (u.running) return `<p>Running Proxmox's checker on each node. This takes about a minute per node.</p>`;
@@ -772,12 +781,22 @@ function upgradeBody(u) {
         : pin.already
           ? "Every port already has a fixed name, so a new kernel can't rename them."
           : `Pinned: ${pin.renames.map((r) => `${r.from} becomes ${r.to}`).join(", ")}, at the next restart.${pin.kept?.length ? ` ${pin.kept.map((k) => k.name).join(", ")} ${pin.kept.length === 1 ? "keeps its name" : "keep their names"}: another file already fixes ${pin.kept.length === 1 ? "it" : "them"}.` : ""}`;
+    const up = u.upgrades?.[n.node];
+    const upWords = up
+      ? up.phase === "done"
+        ? `<div class="snap"><div><span class="dot ok"></span><b>Upgraded to Proxmox VE ${esc(up.version ?? String(up.to))}</b><small>Running kernel ${esc(up.kernel ?? "unknown")}.${up.keptConfig?.length ? ` These config files had been changed, so they were kept, with the new version beside each as .dpkg-dist: ${esc(up.keptConfig.join(", "))}.` : ""}</small></div></div>`
+        : up.phase === "failed"
+          ? `<div class="snap"><div><span class="dot bad"></span><b>The upgrade stopped</b><small>${esc(up.error ?? "")}</small></div></div>`
+          : `<div class="snap"><div><span class="dot warn"></span><b>Upgrading to Proxmox VE ${esc(String(up.to))}</b><small>${esc(UP_PHASE[up.phase] ?? up.phase)}. You can close this window; the upgrade carries on.</small></div></div>`
+      : "";
     const src = u.sources?.[n.node];
-    const srcWords = src?.backup
-      ? `<div class="snap"><div><span class="dot warn"></span><b>Update sources switched to the next release</b><small>Normal updates are held for this node until it's upgraded or the old sources are back.${src.others?.length ? ` Left as they were: ${esc(src.others.map((o) => o.uri).join(", "))}.` : ""}</small></div><div class="actions"><button class="btn" data-upsrcback="${esc(n.node)}">Put the old sources back</button></div></div>`
-      : src?.error
-        ? `<p class="loginerr">${esc(src.error)}</p>`
-        : "";
+    const srcWords = upWords
+      ? upWords
+      : src?.backup
+        ? `<div class="snap"><div><span class="dot warn"></span><b>Update sources switched to the next release</b><small>Normal updates are held for this node until it's upgraded or the old sources are back.${src.others?.length ? ` Left as they were: ${esc(src.others.map((o) => o.uri).join(", "))}.` : ""}</small></div><div class="actions"><button class="btn primary" data-upnode="${esc(n.node)}">Upgrade to Proxmox VE ${esc(String(u.to ?? ""))}</button><button class="btn" data-upsrcback="${esc(n.node)}">Put the old sources back</button></div></div>`
+        : src?.error
+          ? `<p class="loginerr">${esc(src.error)}</p>`
+          : "";
     return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${n.version ? `Proxmox VE ${esc(n.version)}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}</small></div>${!pin?.ok ? `<div class="actions"><button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button></div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${srcWords}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
   };
   const lvm = u.fixes?.lvm;
@@ -795,7 +814,7 @@ async function openUpgrade() {
     return dialog(`<h3>Upgrade Proxmox</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
   }
   drawUpgrade(u);
-  if (u.running) followUpgradeCheck();
+  if (u.running || upgrading(u)) followUpgradeCheck();
 }
 function drawUpgrade(u) {
   dialog(`<h3>Get ready to upgrade${u.to ? ` to Proxmox VE ${esc(String(u.to))}` : " Proxmox"}</h3>
@@ -827,6 +846,15 @@ function askPin(node) {
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-uppingo="${esc(node)}" disabled>Pin port names</button></div>`);
   $("#rname").focus();
 }
+function askUpgradeNode(node, to) {
+  dialog(`<h3>Upgrade ${esc(node)} to Proxmox VE ${esc(to)}?</h3>
+    <p>BossMox runs Proxmox's checker, installs the new version's packages, checks again, pins the port names and restarts ${esc(node)}, then checks it came back on the new version. Config files that were changed by hand are kept, with the new version beside each.</p>
+    <p>It usually takes 10 to 30 minutes. If anything goes wrong, BossMox stops there and doesn't restart the node.</p>
+    <p class="meta">Nothing may run on ${esc(node)} while it upgrades, so move its guests first. There's no going back to the old version once the packages start installing.</p>
+    <label class="field restartname"><span>Type ${esc(node)} to confirm</span><input id="rname" data-word="${esc(node.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-upnodego="${esc(node)}" disabled>Upgrade ${esc(node)}</button></div>`);
+  $("#rname").focus();
+}
 function askSourcesBack(node) {
   dialog(`<h3>Put the old update sources back on ${esc(node)}?</h3>
     <p>BossMox restores the copy of ${esc(node)}'s sources it saved before switching them, and refreshes the package lists. Nothing is installed or removed.</p>
@@ -854,6 +882,10 @@ async function followUpgradeCheck() {
     if (!$("#upbody")) return;
     const u = await signal("api/upgrade").catch(() => null);
     if (!u || !$("#upbody")) return;
+    if (upgrading(u)) {
+      $("#upbody").innerHTML = upgradeBody(u);
+      continue;
+    }
     if (!u.running) return drawUpgrade(u);
   }
 }
@@ -4633,6 +4665,8 @@ document.addEventListener("click", (e) => {
   if (d.upfix === "lvm") return askLvmFix();
   if (d.uppin) return askPin(d.uppin);
   if (d.upsrcback) return askSourcesBack(d.upsrcback);
+  if (d.upnode) return askUpgradeNode(d.upnode, t.textContent.replace(/^.*VE /, ""));
+  if (d.upnodego) return runUpgradeFix("upgrade-node", d.upnodego, { confirm: $("#rname").value.trim() }, `Starting the upgrade of ${d.upnodego}`, false);
   if (d.upsrcbackgo) return runUpgradeFix("upgrade-sources-undo", d.upsrcbackgo, { confirm: $("#rname").value.trim() }, `Putting the old sources back on ${d.upsrcbackgo}`, false);
   if (d.uplvmgo) return runUpgradeFix("upgrade-fix-lvm", onlineNodes()[0], { confirm: "lvm-autoactivation" }, "Turning off autoactivation on every node", true);
   if (d.uppingo) return runUpgradeFix("upgrade-pin", d.uppingo, { confirm: $("#rname").value.trim() }, `Pinning port names on ${d.uppingo}`, false);

@@ -61,6 +61,8 @@ import { createProxmoxNotice } from "./proxmox-notice.js";
 import { createUpgradeReady } from "./upgrade-ready.js";
 import { createUpgradeFixes } from "./upgrade-fixes.js";
 import { createUpgradeSources } from "./upgrade-sources.js";
+import { createNodeUpgrade } from "./upgrade-node.js";
+import { rebootAndWait } from "./reboot.js";
 import { X509Certificate } from "node:crypto";
 import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
@@ -237,6 +239,14 @@ const upgradeFixes = createUpgradeFixes({
       .filter((r) => r.node && r.status === "online")
       .map((r) => r.node as string)
       .sort(),
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
+});
+const nodeUpgrade = createNodeUpgrade({
+  pve,
+  console: rootConsole,
+  pin: (session, node) => upgradeFixes.pinForUpgrade(session, node),
+  reboot: (session, node) => rebootAndWait(pve, session, node),
+  sources: upgradeSources,
   audit: (event, who, detail) => audit(event, who, "settings", detail),
 });
 updates.start();
@@ -696,6 +706,7 @@ const actionContext = {
   upgradeReady,
   upgradeFixes,
   upgradeSources,
+  nodeUpgrade,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -988,6 +999,7 @@ const routeContext = {
   upgradeReady,
   upgradeFixes,
   upgradeSources,
+  nodeUpgrade,
   viewerOf,
   epoch: () => preferencesEpoch,
 };

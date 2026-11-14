@@ -25,7 +25,7 @@ export interface SwitchPlan {
   problems: string[];
 }
 
-const PROXMOX_URI = /^https?:\/\/(download|enterprise)\.proxmox\.com\/debian\/(pve|ceph-[a-z]+)\/?$/;
+export const PROXMOX_URI = /^https?:\/\/(download|enterprise)\.proxmox\.com\/debian\/(pve|ceph-[a-z]+)\/?$/;
 const CEPH_COMPONENTS = new Set(["no-subscription", "enterprise", "test"]);
 const PVE_COMPONENTS = new Set(["pve-no-subscription", "pve-enterprise", "pve-test"]);
 
@@ -182,6 +182,17 @@ export function createUpgradeSources(deps: SourcesDeps, now: () => number = Date
 
   return {
     view: () => state,
+
+    /** True while a source change is under way. The upgrade only takes a node once nothing else is changing it. */
+    busy: () => busy,
+
+    /**
+     * Once the upgrade starts, the old sources must never go back: the node would be half on each release. The backup
+     * file stays on the node for anyone who needs it by hand.
+     */
+    forget(node: string) {
+      delete state[node];
+    },
 
     /** Switches one node to the next release's sources. A failed apt update puts the old ones back by itself. */
     switchNode(session: Session, node: string, confirm: string, from: string, to: string): Promise<NodeSources> {

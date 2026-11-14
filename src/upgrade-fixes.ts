@@ -170,15 +170,22 @@ export function createUpgradeFixes(deps: FixDeps) {
 
     /** Pins one node's port names. Nothing changes until that node restarts. */
     async pin(session: Session, node: string, confirm: string): Promise<PinResult> {
-      rootOnly(session);
       if (confirm.toLowerCase() !== node.toLowerCase()) throw new HttpError(400, "Type the node's name to confirm.");
-      return once(async () => {
-        const r = await pinNode(session, node);
-        deps.audit("upgrade-pin", session.username, { node, renamed: r.renames.length, ok: r.ok ? 1 : 0 });
-        last = { ...last, pins: { ...last.pins, [node]: r } };
-        return r;
-      });
+      return pinRecorded(session, node);
     },
+
+    /** The same pinning, run by the upgrade itself right before the node restarts. The upgrade was confirmed already. */
+    pinForUpgrade: (session: Session, node: string) => pinRecorded(session, node),
   };
+
+  async function pinRecorded(session: Session, node: string): Promise<PinResult> {
+    rootOnly(session);
+    return once(async () => {
+      const r = await pinNode(session, node);
+      deps.audit("upgrade-pin", session.username, { node, renamed: r.renames.length, ok: r.ok ? 1 : 0 });
+      last = { ...last, pins: { ...last.pins, [node]: r } };
+      return r;
+    });
+  }
 }
 export type UpgradeFixes = ReturnType<typeof createUpgradeFixes>;

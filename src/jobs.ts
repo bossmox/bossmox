@@ -10,6 +10,7 @@ import { checkNetworks, migrationNetwork, SAFE_BATCH, type NetCheck } from "./cl
 import type { Overview, RawConfig, RawResource, RawSnapshot } from "./model.js";
 import { readMoves, runMoveHome, runMoveOff, writeMoves, type MoveDeps } from "./moves.js";
 import { INSTALL_COMMAND, runOnNode, STILL_RUNNING, type ShellConfig } from "./node-shell.js";
+import { rebootAndWait } from "./reboot.js";
 import { releaseMismatch } from "./release-guard.js";
 import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type Pending, type RawPrecondition } from "./placement.js";
 import type { Preferences } from "./preferences.js";
@@ -482,19 +483,7 @@ export function createJobs(ctx: JobsContext) {
         );
         return { exitCode: r.exitCode, keptConfig: r.keptConfig, left };
       },
-      restart: async (node) => {
-        const asked = Date.now();
-        await pve.post<null>(`/nodes/${enc(node)}/status`, session, { command: "reboot" });
-        for (const until = asked + 20 * 60 * 1000; ; await new Promise((r) => setTimeout(r, 5000))) {
-          const s = await pve.get<RawStatus>(`/nodes/${enc(node)}/status`, t()).catch(() => null);
-          const back = s?.uptime !== undefined && s.uptime * 1000 < Date.now() - asked;
-          if (back) {
-            const resources = await pve.get<RawResource[]>("/cluster/resources?type=node", t()).catch(() => []);
-            if (resources.some((r) => r.node === node && r.status === "online")) return;
-          }
-          if (Date.now() > until) throw new Error(`${node} hasn't come back after 20 minutes. Someone may need to look at the node itself.`);
-        }
-      },
+      restart: (node) => rebootAndWait(pve, session, node),
       start: async (node, vm) => {
         // A node that has just come back can refuse for a few seconds.
         for (let i = 0; ; i++) {
