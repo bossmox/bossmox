@@ -94,6 +94,10 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       if (r.error) throw new HttpError(400, r.error);
       return null;
     },
+    "upgrade-node": async (name, who, body) => {
+      await c.nodeUpgrade.start(who, name, text(body.confirm, 64));
+      return null;
+    },
     "upgrade-pin": async (name, who, body) => {
       await c.upgradeFixes.pin(who, name, text(body.confirm, 64));
       return null;
