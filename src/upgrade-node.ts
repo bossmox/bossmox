@@ -261,7 +261,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
         const on = guests.filter((g) => g.node === node && g.template !== 1 && (g.status === "running" || g.status === "paused"));
         if (on.length)
           throw new HttpError(400, `${on.map((g) => g.name ?? `${g.vmid}`).join(", ")} ${on.length === 1 ? "is" : "are"} running on ${node}. Move them to another node or shut them down first.`);
-        if (switched(repos, from).length || !onRelease(repos, to)) throw new HttpError(400, `${node}'s update sources aren't on ${to} yet. Switch them first, from this window.`);
+        if (switched(repos, from).length || !onRelease(repos, to)) throw new HttpError(400, `${node}'s update sources aren't on ${to} yet. Switch them to the new release first.`);
         const fs = status.rootfs;
         const free = fs ? (fs.avail ?? (fs.total ?? 0) - (fs.used ?? 0)) / GB : null;
         if (free !== null && free < ROOT_MIN_GB) throw new HttpError(400, `Only ${free.toFixed(1)} GB free on ${node}'s root. The upgrade needs at least ${ROOT_MIN_GB} GB.`);
