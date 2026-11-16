@@ -9,6 +9,7 @@ import { lifeOf } from "./lifecycle.js";
 import type { ShellResult } from "./node-shell.js";
 import type { PveClient } from "./pve.js";
 import { attention, parseChecker, type Explained } from "./upgrade-check.js";
+import { compareVersions } from "./placement.js";
 
 /** Proxmox's guide: at least 5 GB free on root, better more than 10. */
 export const ROOT_MIN_GB = 5;
@@ -81,15 +82,76 @@ export function ownChecks(input: { rootFreeGb: number | null; passthrough: strin
   return out;
 }
 
+/** One row of Proxmox's /nodes/{node}/apt/versions. */
+export interface RawVersion {
+  Package?: string;
+  Version?: string;
+  CurrentState?: string;
+  RunningKernel?: string | null;
+}
+const series = (kernel: string) => /^(\d+\.\d+)\./.exec(kernel)?.[1] ?? "";
+
+/**
+ * A node whose upgrade stopped after the packages: it reports the new version but still runs the old version's
+ * kernel, with the new series installed beside it. Seen on the lab, 2026-11-14. Pure, for tests. A newer kernel of
+ * the same series is an ordinary update waiting for a restart, not this.
+ */
+export function unfinishedUpgrade(versions: RawVersion[]): { running: string; waiting: string } | null {
+  const running = versions.find((v) => v.RunningKernel)?.RunningKernel;
+  if (!running) return null;
+  const waiting = versions
+    .filter((v) => v.CurrentState === "Installed" && /^proxmox-kernel-\d+\.\d+\.\d+-\d+-pve(-signed)?$/.test(v.Package ?? ""))
+    .map((v) => (v.Package as string).replace(/^proxmox-kernel-/, "").replace(/-signed$/, ""))
+    .sort((a, b) => compareVersions(b, a))[0];
+  if (!waiting || series(waiting) === series(running) || compareVersions(waiting, running) <= 0) return null;
+  return { running, waiting };
+}
+
 export function createUpgradeReady(deps: ReadyDeps) {
   const now = deps.now ?? Date.now;
   let state: Readiness = { checkedAt: null, running: false, from: null, to: null, nodes: [], ready: false, blocking: 0 };
 
-  async function checkNode(session: Session, node: string, plugins: string[]): Promise<NodeReady> {
+  /**
+   * A node already past the cluster's oldest version (a mixed cluster, part way through): its checker would be for
+   * the version after this one, which may not exist. It's either done, or its packages are in and it waits for the
+   * restart that finishes it.
+   */
+  function aheadNode(node: string, v: string, versions: RawVersion[] | null): NodeReady {
+    const major = Number.parseInt(v, 10);
+    const left = versions ? unfinishedUpgrade(versions) : null;
+    const item: Explained = !versions
+      ? { level: "WARN", title: "BossMox couldn't read this node's kernels", detail: "", handling: "blocks", original: "" }
+      : left
+        ? {
+            level: "NOTICE",
+            title: `On Proxmox VE ${major}, not restarted yet`,
+            detail: `Its packages are on ${major}, but it still runs the old kernel (${left.running}). Upgrade all nodes finishes it: Proxmox's checker, the port names pinned, a restart onto ${left.waiting}.`,
+            handling: "bossmox",
+            original: "",
+          }
+        : { level: "INFO", title: `Already on Proxmox VE ${major}`, detail: "", handling: "advice", original: "" };
+    return { node, version: v, counts: null, items: [item], error: null };
+  }
+
+  /** A node's version and kernels, read once before any checker runs. A stuck node counts as its old version. */
+  async function seen(t: string, node: string) {
+    const base = `/nodes/${encodeURIComponent(node)}`;
+    const [reported, versions] = await Promise.all([
+      deps.pve.get<{ version?: string }>(`${base}/version`, t).catch(() => null),
+      deps.pve.get<RawVersion[]>(`${base}/apt/versions`, t).catch(() => null),
+    ]);
+    const major = Number.parseInt(reported?.version ?? "", 10);
+    const stuck = versions ? unfinishedUpgrade(versions) !== null : false;
+    return { reported, versions, stuck, major: stuck ? major - 1 : major };
+  }
+
+  async function checkNode(session: Session, node: string, plugins: string[], oldest: number | null, s: Awaited<ReturnType<typeof seen>>): Promise<NodeReady> {
     const t = session.ticket;
     const base = `/nodes/${encodeURIComponent(node)}`;
+    const reported = s.reported;
+    if (reported?.version && (s.stuck || (oldest !== null && s.major > oldest))) return aheadNode(node, reported.version, s.versions);
     const [version, status, vms] = await Promise.all([
-      deps.pve.get<{ version?: string }>(`${base}/version`, t).catch(() => null),
+      Promise.resolve(reported),
       deps.pve.get<{ rootfs?: { used?: number; total?: number; avail?: number } }>(`${base}/status`, t).catch(() => null),
       deps.pve.get<{ vmid?: number; name?: string }[]>(`${base}/qemu`, t).catch(() => []),
     ]);
@@ -145,11 +207,14 @@ export function createUpgradeReady(deps: ReadyDeps) {
         .sort();
       const plugins = storage.filter((s) => s.type && !BUILT_IN.has(s.type)).map((s) => `${s.storage} (${s.type})`);
       void (async () => {
+        // The oldest version decides what's upgraded next: in a mixed cluster the nodes already past it aren't checked.
+        const first = await Promise.all(online.map((n) => seen(t, n)));
+        const known = first.map((s) => s.major).filter(Number.isInteger);
+        const oldest = known.length ? Math.min(...known) : null;
         const nodes: NodeReady[] = [];
-        for (const n of online) nodes.push(await checkNode(session, n, plugins));
+        for (const [i, n] of online.entries()) nodes.push(await checkNode(session, n, plugins, oldest, first[i] as Awaited<ReturnType<typeof seen>>));
         for (const n of offline) nodes.push({ node: n, version: null, counts: null, items: [], error: "This node is offline, so it couldn't be checked." });
-        const majors = nodes.map((n) => (n.version ? Number.parseInt(n.version, 10) : Number.NaN)).filter(Number.isInteger);
-        const from = majors.length ? Math.min(...majors) : null;
+        const from = oldest;
         const life = from ? lifeOf(String(from), new Date(now())) : null;
         const blocking = nodes.reduce((sum, n) => sum + (n.error ? 1 : 0) + n.items.filter((i) => i.handling === "blocks").length, 0);
         state = { checkedAt: now(), running: false, from, to: life?.newer ?? null, nodes, ready: blocking === 0 && nodes.length > 0, blocking };

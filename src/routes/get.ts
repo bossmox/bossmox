@@ -253,10 +253,11 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
       return json(res, 200, { run: runFor(jobs.currentRun, await viewerOf(session, jobs.currentRun?.by)) });
     },
     "/api/run-plan": async (_route, session, params, _req, res) => {
-      const kind = params.get("kind") === "restart" ? "restart" : "update";
+      const asked = params.get("kind");
+      const kind = asked === "restart" ? "restart" : asked === "upgrade" ? "upgrade" : "update";
       const name = params.get("server") ?? "";
       if (kind === "restart" && !NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-      return json(res, 200, await jobs.runPlan(session.ticket, kind, name));
+      return json(res, 200, await jobs.runPlan(session, kind, name));
     },
     "/api/moves": async (_route, session, _params, _req, res) => {
       // Only what's still where BossMox left it can go home; the rest was moved by someone since.

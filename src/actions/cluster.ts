@@ -183,12 +183,12 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       });
     },
     "run-start": (_name, who, body) => {
-      const kind = body.kind === "restart" ? "restart" : body.kind === "update" ? "update" : null;
+      const kind = body.kind === "restart" ? "restart" : body.kind === "update" ? "update" : body.kind === "upgrade" ? "upgrade" : null;
       if (!kind) throw new HttpError(400, "That request isn't valid.");
       const server = text(body.server, 64);
       if (kind === "restart" && !NODE_NAME.test(server)) throw new HttpError(400, "That server name isn't valid.");
       const choices = (body.choices && typeof body.choices === "object" ? body.choices : {}) as Record<string, unknown>;
-      return jobs.startRun(who, kind, server, body.confirm === (kind === "update" ? "confirm" : "reboot"), choices);
+      return jobs.startRun(who, kind, server, body.confirm === (kind === "restart" ? "reboot" : "confirm"), choices);
     },
     "run-stop": async (_name, who) => {
       if (!jobs.currentRun?.running) return null;

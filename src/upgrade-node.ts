@@ -13,8 +13,9 @@ import { releaseMismatch } from "./release-guard.js";
 import type { RawRepositories, RawStatus } from "./server-detail.js";
 import { blockers, parseChecker } from "./upgrade-check.js";
 import type { PinResult } from "./upgrade-fixes.js";
-import { ROOT_MIN_GB } from "./upgrade-ready.js";
-import { PROXMOX_URI, switched } from "./upgrade-sources.js";
+import type { UpgradeResult } from "./run.js";
+import { ROOT_MIN_GB, unfinishedUpgrade, type RawVersion, type Readiness } from "./upgrade-ready.js";
+import { PROXMOX_URI, switched, type UpgradeSources } from "./upgrade-sources.js";
 
 export const UPGRADE_LOG = "/root/bossmox-upgrade.log";
 const EXIT_FILE = "/root/bossmox-upgrade.exit";
@@ -92,6 +93,8 @@ export interface NodeUpgrade {
   node: string;
   from: string;
   to: number;
+  /** Finishing an upgrade whose packages went in earlier: no packages, straight to the check, pins and restart. */
+  finishing: boolean;
   phase: UpPhase;
   startedAt: number;
   finishedAt: number | null;
@@ -103,6 +106,8 @@ export interface NodeUpgrade {
   keptConfig: string[];
   pins: PinResult | null;
   kernelBefore: string | null;
+  /** The restart was asked for. A failure before it leaves the node running as it was. */
+  restarted: boolean;
   /** What it runs once it's back. */
   version: string | null;
   kernel: string | null;
@@ -178,19 +183,23 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
       job.phase = p;
     };
     try {
-      job.before = await checker(session, node, major);
-      if (job.before.blocking.length) throw new Error(`Proxmox's checker found ${listed(job.before.blocking)} on ${node}. Nothing was changed; fix them first.`);
+      if (!job.finishing) {
+        job.before = await checker(session, node, major);
+        if (job.before.blocking.length) throw new Error(`Proxmox's checker found ${listed(job.before.blocking)} on ${node}. Nothing was changed; fix them first.`);
 
-      phase("upgrading");
-      // From here the old sources must never go back.
-      deps.sources.forget(node);
-      deps.audit("upgrade-node-start", session.username, { node, to: job.to });
-      const r = await upgrade(session, node);
-      job.keptConfig = r.keptConfig;
-      if (r.exitCode !== 0)
-        throw new Error(
-          `The package upgrade on ${node} ended with an error (${r.exitCode === null ? "it was stopped" : `apt exit code ${r.exitCode}`}), so it wasn't restarted.${r.errors.length ? ` apt said: ${r.errors.join(" ")}` : ""} The whole log is ${UPGRADE_LOG} on ${node}.`,
-        );
+        phase("upgrading");
+        // From here the old sources must never go back.
+        deps.sources.forget(node);
+        deps.audit("upgrade-node-start", session.username, { node, to: job.to });
+        const r = await upgrade(session, node);
+        job.keptConfig = r.keptConfig;
+        if (r.exitCode !== 0)
+          throw new Error(
+            `The package upgrade on ${node} ended with an error (${r.exitCode === null ? "it was stopped" : `apt exit code ${r.exitCode}`}), so it wasn't restarted.${r.errors.length ? ` apt said: ${r.errors.join(" ")}` : ""} The whole log is ${UPGRADE_LOG} on ${node}.`,
+          );
+      } else {
+        deps.audit("upgrade-node-finish", session.username, { node, to: job.to });
+      }
 
       phase("rechecking");
       const v = await settled(() => deps.pve.get<{ version?: string }>(`/nodes/${enc(node)}/version`, t()));
@@ -207,6 +216,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
       if (!job.pins.ok) throw new Error(`Pinning the port names didn't work, so ${node} wasn't restarted: ${job.pins.error}`);
 
       phase("restarting");
+      job.restarted = true;
       await deps.reboot(session, node);
 
       phase("verifying");
@@ -235,7 +245,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
     }
   }
 
-  return {
+  const api = {
     view: () => state,
     running: () => running,
 
@@ -252,15 +262,19 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
       try {
         const t = session.ticket;
         const base = `/nodes/${enc(node)}`;
-        const [version, status, cluster, nodes, guests, repos] = await Promise.all([
+        const [version, status, cluster, nodes, guests, repos, versions] = await Promise.all([
           deps.pve.get<{ version?: string }>(`${base}/version`, t),
           deps.pve.get<RawStatus & { rootfs?: { avail?: number; total?: number; used?: number } }>(`${base}/status`, t),
           deps.pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", t),
           deps.pve.get<RawResource[]>("/cluster/resources?type=node", t),
           deps.pve.get<RawResource[]>("/cluster/resources?type=vm", t),
           deps.pve.get<RawRepositories>(`${base}/apt/repositories`, t),
+          deps.pve.get<RawVersion[]>(`${base}/apt/versions`, t).catch((): RawVersion[] => []),
         ]);
-        const major = Number.parseInt(version.version ?? "", 10);
+        // Packages already on the new version but the old kernel still running: finish that upgrade, don't start another.
+        const finishing = unfinishedUpgrade(versions) !== null;
+        const reported = Number.parseInt(version.version ?? "", 10);
+        const major = finishing ? reported - 1 : reported;
         const from = RELEASES.find((r) => r.major === major)?.codename;
         const to = RELEASES.find((r) => r.major === major + 1)?.codename;
         if (!from || !to) throw new HttpError(400, `BossMox doesn't know which release comes after Proxmox VE ${version.version ?? "this version"}.`);
@@ -272,14 +286,16 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
         if (on.length)
           throw new HttpError(400, `${on.map((g) => g.name ?? `${g.vmid}`).join(", ")} ${on.length === 1 ? "is" : "are"} running on ${node}. Move them to another node or shut them down first.`);
         if (switched(repos, from).length || !onRelease(repos, to)) throw new HttpError(400, `${node}'s update sources aren't on ${to} yet. Switch them to the new release first.`);
+        // Nothing new goes on root when finishing, so its free space doesn't matter then.
         const fs = status.rootfs;
         const free = fs ? (fs.avail ?? (fs.total ?? 0) - (fs.used ?? 0)) / GB : null;
-        if (free !== null && free < ROOT_MIN_GB) throw new HttpError(400, `Only ${free.toFixed(1)} GB free on ${node}'s root. The upgrade needs at least ${ROOT_MIN_GB} GB.`);
+        if (!finishing && free !== null && free < ROOT_MIN_GB) throw new HttpError(400, `Only ${free.toFixed(1)} GB free on ${node}'s root. The upgrade needs at least ${ROOT_MIN_GB} GB.`);
         const job: NodeUpgrade = {
           node,
           from: version.version ?? "",
           to: major + 1,
-          phase: "checking",
+          finishing,
+          phase: finishing ? "rechecking" : "checking",
           startedAt: now(),
           finishedAt: null,
           error: null,
@@ -288,6 +304,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
           keptConfig: [],
           pins: null,
           kernelBefore: status["current-kernel"]?.release ?? null,
+          restarted: false,
           version: null,
           kernel: null,
         };
@@ -299,6 +316,98 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
         throw err;
       }
     },
+
+    /**
+     * One node, start to finish, for the cluster run (piece 6): the run's own confirmation covers it. Resolves with
+     * the job once it has ended, done or failed; rejects only when it was refused up front.
+     */
+    async runOne(session: Session, node: string): Promise<NodeUpgrade> {
+      const job = await api.start(session, node, node);
+      while (job.finishedAt === null) await pause(5_000);
+      return job;
+    },
   };
+  return api;
 }
 export type NodeUpgradeJob = ReturnType<typeof createNodeUpgrade>;
+
+/** How old the readiness check may be when a cluster upgrade starts. */
+export const READY_FOR_MS = 60 * 60 * 1000;
+
+export interface PlannedUpgrade {
+  name: string;
+  version: string;
+  to: number;
+  finishing: boolean;
+}
+
+export interface RunUpgradeDeps {
+  pve: { get<T>(path: string, ticket: string): Promise<T> };
+  sources: Pick<UpgradeSources, "switchNode">;
+  nodes: Pick<NodeUpgradeJob, "runOne">;
+  ready: () => Readiness;
+  now?: () => number;
+}
+
+/**
+ * The cluster upgrade's part of a run (ADR 0042, piece 6): which nodes go, in what order, and one node's whole
+ * upgrade, sources switch included. The run itself (run.ts) moves the guests and brings them home.
+ */
+export function createRunUpgrade(deps: RunUpgradeDeps) {
+  const now = deps.now ?? Date.now;
+  const enc = encodeURIComponent;
+  const read = async (ticket: string, node: string) => {
+    const [v, versions] = await Promise.all([deps.pve.get<{ version?: string }>(`/nodes/${enc(node)}/version`, ticket), deps.pve.get<RawVersion[]>(`/nodes/${enc(node)}/apt/versions`, ticket)]);
+    const reported = Number.parseInt(v.version ?? "", 10);
+    const finishing = unfinishedUpgrade(versions) !== null;
+    return { version: v.version ?? "", reported, finishing, major: finishing ? reported - 1 : reported };
+  };
+
+  return {
+    /**
+     * Every node still to go, the unfinished ones first (each is stuck half way), then oldest version first. Refused
+     * unless the readiness check ran in the last hour and found nothing that blocks.
+     */
+    async plan(session: { username: string; ticket: string }): Promise<PlannedUpgrade[]> {
+      if (session.username !== "root@pam") throw new HttpError(403, "The upgrade runs in each node's root console. Sign in as root@pam.");
+      const r = deps.ready();
+      if (r.running) throw new HttpError(409, "The readiness check is still running. Wait for it to finish.");
+      if (!r.checkedAt || now() - r.checkedAt > READY_FOR_MS) throw new HttpError(400, "Run Get ready to upgrade first: its check has to be from the last hour.");
+      if (!r.ready) throw new HttpError(400, `The readiness check found ${r.blocking} ${r.blocking === 1 ? "thing" : "things"} to fix first.`);
+      const nodes = await deps.pve.get<RawResource[]>("/cluster/resources?type=node", session.ticket);
+      const off = nodes.filter((n) => n.status !== "online").map((n) => n.node);
+      if (off.length) throw new HttpError(400, `Wait for these to come back online first: ${off.join(", ")}.`);
+      const all = await Promise.all(nodes.map(async (n) => ({ name: n.node ?? "", ...(await read(session.ticket, n.node ?? "")) })));
+      if (all.some((n) => !Number.isInteger(n.major))) throw new HttpError(400, "BossMox couldn't read every node's Proxmox version.");
+      const oldest = Math.min(...all.map((n) => n.major));
+      if (!RELEASES.some((x) => x.major === oldest + 1)) throw new HttpError(400, `BossMox doesn't know which release comes after Proxmox VE ${oldest}.`);
+      return all
+        .filter((n) => n.major === oldest)
+        .sort((a, b) => Number(b.finishing) - Number(a.finishing) || a.version.localeCompare(b.version, undefined, { numeric: true }) || a.name.localeCompare(b.name))
+        .map((n) => ({ name: n.name, version: n.version, to: oldest + 1, finishing: n.finishing }));
+    },
+
+    /** One node: its sources switched if they aren't yet, then the one-node upgrade to its end. Never throws. */
+    async run(session: Session, node: string): Promise<UpgradeResult> {
+      const fail = (error: string): UpgradeResult => ({ restarted: false, error, keptConfig: [], version: null, kernel: null });
+      try {
+        const n = await read(session.ticket, node);
+        if (!n.finishing) {
+          const from = RELEASES.find((x) => x.major === n.major)?.codename;
+          const to = RELEASES.find((x) => x.major === n.major + 1)?.codename;
+          if (!from || !to) return fail(`BossMox doesn't know which release comes after Proxmox VE ${n.version}.`);
+          const repos = await deps.pve.get<RawRepositories>(`/nodes/${enc(node)}/apt/repositories`, session.ticket);
+          if (switched(repos, from).length || !onRelease(repos, to)) {
+            const s = await deps.sources.switchNode(session, node, node, from, to);
+            if (s.error) return fail(`${node}'s update sources weren't switched: ${s.error}`);
+          }
+        }
+        const job = await deps.nodes.runOne(session, node);
+        return { restarted: job.restarted, error: job.error, keptConfig: job.keptConfig, version: job.version, kernel: job.kernel };
+      } catch (err) {
+        return fail((err as Error).message || "BossMox lost contact with Proxmox.");
+      }
+    },
+  };
+}
+export type RunUpgrade = ReturnType<typeof createRunUpgrade>;

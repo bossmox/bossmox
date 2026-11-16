@@ -423,3 +423,77 @@ test("a node that ends before its reboot is asked for starts again what was shut
   assert.equal(log.includes("restart n1"), false);
   assert.equal(r.nodes[0]!.vms.find((v) => v.name === "app")!.state, "started");
 });
+
+// Upgrade runs (ADR 0042, piece 6): the one-node upgrade stands in for the install and the restart.
+const up = (name: string, vms: RunVm[], finishing = false) => node(name, vms, { install: false, updates: 0, upgrade: { to: 9, finishing } });
+const upgraded =
+  (log: string[], result: Partial<import("../src/run.js").UpgradeResult> = {}) =>
+  async (n: string) => {
+    log.push(`upgrade ${n}`);
+    return { restarted: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve", ...result };
+  };
+
+test("an upgrade run: empty the node, upgrade it, start what was shut down, bring guests home; then the next", async () => {
+  const r = { ...run([up("n1", [vm(1, "web"), vm(2, "app", "shutdown")]), up("n2", [vm(3, "db")])]), kind: "upgrade" as const };
+  const { deps, log } = fake({ at: r });
+  deps.upgrade = upgraded(log);
+  await drive(r, deps);
+  assert.deepEqual(log, ["check n1", "shutdown app", "moveOff n1 1", "upgrade n1", "start app", "home n1", "check n2", "moveOff n2 3", "upgrade n2", "home n2"]);
+  assert.ok(!log.some((l) => l.startsWith("install") || l.startsWith("restart")), "no separate install or restart");
+  assert.equal(r.error, null);
+  assert.deepEqual(r.nodes[0]?.upgrade, { to: 9, finishing: false, version: "9.2.28", kernel: "7.0.14-29-pve" });
+  assert.deepEqual(r.nodes[0]?.keptConfig, ["/etc/issue"]);
+});
+
+test("an upgrade that fails before its restart stops the run and starts again what was shut down", async () => {
+  const r = { ...run([up("n1", [vm(1, "web"), vm(2, "app", "shutdown")]), up("n2", [])]), kind: "upgrade" as const };
+  const { deps, log } = fake({ at: r });
+  deps.upgrade = upgraded(log, { restarted: false, error: "After the packages, Proxmox's checker found 1 problem (x) on n1, so it wasn't restarted." });
+  await drive(r, deps);
+  assert.deepEqual(log, ["check n1", "shutdown app", "moveOff n1 1", "upgrade n1", "start app"]);
+  assert.match(r.error ?? "", /^n1: After the packages/);
+  assert.equal(r.nodes[0]?.phase, "failed");
+  assert.equal(r.nodes[1]?.phase, "waiting", "the next node is never touched");
+  assert.equal(r.nodes[0]?.vms.find((v) => v.name === "app")?.note, "started again: n1 wasn't restarted");
+});
+
+test("an upgrade that fails after its restart doesn't start guests again or bring any home", async () => {
+  const r = { ...run([up("n1", [vm(1, "web"), vm(2, "app", "shutdown")])]), kind: "upgrade" as const };
+  const { deps, log } = fake({ at: r });
+  deps.upgrade = upgraded(log, { restarted: true, error: "n1 came back on its old kernel (6.8.12-43-pve)." });
+  await drive(r, deps);
+  assert.deepEqual(log, ["check n1", "shutdown app", "moveOff n1 1", "upgrade n1"]);
+  assert.match(r.error ?? "", /old kernel/);
+});
+
+test("Stop before a node's upgrade leaves it untouched; Stop during one lets it finish", async () => {
+  const before = { ...run([up("n1", [vm(1, "web")])]), kind: "upgrade" as const };
+  const a = fake({ at: before, stopAfter: "moveOff n1 1" });
+  a.deps.upgrade = upgraded(a.log);
+  await drive(before, a.deps);
+  assert.ok(!a.log.includes("upgrade n1"), "Stop after the moves: no upgrade begins");
+  assert.match(before.error ?? "", /Stopped: .* n1 stopped after emptying/);
+
+  const during = { ...run([up("n1", [vm(1, "web")]), up("n2", [])]), kind: "upgrade" as const };
+  const b = fake({ at: during });
+  let pressed = false;
+  b.deps.stopped = () => (pressed ? "root@pam pressed Stop." : null);
+  b.deps.upgrade = async (n) => {
+    pressed = true; // pressed while the upgrade is under way
+    return upgraded(b.log)(n);
+  };
+  await drive(during, b.deps);
+  assert.ok(b.log.includes("upgrade n1"));
+  assert.ok(!b.log.includes("check n2"), "nothing new starts after it");
+  assert.equal(during.nodes[0]?.upgrade?.version, "9.2.28", "the upgrade under way ran to its end");
+});
+
+test("a guest that lands on the node during its moves is moved off before the upgrade", async () => {
+  const r = { ...run([up("n1", [vm(1, "web")])]), kind: "upgrade" as const };
+  let reads = 0;
+  const { deps, log } = fake({ at: r });
+  deps.runningOn = async () => (reads++ === 1 ? [{ id: 9, name: "late", type: "qemu" }] : []);
+  deps.upgrade = upgraded(log);
+  await drive(r, deps);
+  assert.deepEqual(log.slice(0, 4), ["check n1", "moveOff n1 1", "moveOff n1 9", "upgrade n1"]);
+});

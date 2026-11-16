@@ -4,7 +4,19 @@ import { test } from "node:test";
 import type { Session } from "../src/auth.js";
 import type { RawRepositories } from "../src/server-detail.js";
 import type { ShellResult } from "../src/node-shell.js";
-import { createNodeUpgrade, FOLLOW_SCRIPT, onRelease, readUpgrade, UPGRADE_SCRIPT, upgradeCommand, type NodeUpgradeDeps } from "../src/upgrade-node.js";
+import type { Readiness } from "../src/upgrade-ready.js";
+import {
+  createNodeUpgrade,
+  createRunUpgrade,
+  FOLLOW_SCRIPT,
+  onRelease,
+  READY_FOR_MS,
+  readUpgrade,
+  UPGRADE_SCRIPT,
+  upgradeCommand,
+  type NodeUpgrade,
+  type NodeUpgradeDeps,
+} from "../src/upgrade-node.js";
 
 const ON_TRIXIE: RawRepositories = {
   files: [
@@ -60,14 +72,23 @@ const out = (output: string, exitCode = 0): ShellResult => ({ exitCode, output, 
 const CHECK_OK = "= SUMMARY =\n\nTOTAL:    40\nPASSED:   37\nSKIPPED:  0\nWARNINGS: 3\nFAILURES: 0\n";
 const CHECK_FAIL = "= SUMMARY =\n\nTOTAL:    40\nPASSED:   36\nSKIPPED:  0\nWARNINGS: 3\nFAILURES: 1\n";
 
-/** A fake cluster: node2 on 8.4 with its sources switched and nothing running, which turns 9 after the packages. */
 /** The real 9 checker on a VM after the packages: 1 failure, the missing microcode package. */
 const CHECK_AFTER_VM = readFileSync(new URL("../../test/pve8to9-9.2-after-packages.txt", import.meta.url), "utf8");
 const CHECK_AFTER_UNKNOWN = "FAIL: something new went wrong\n\n= SUMMARY =\n\nTOTAL:    40\nPASSED:   39\nSKIPPED:  0\nWARNINGS: 0\nFAILURES: 1\n";
+/** apt/versions on a node whose 9 packages are in but which still runs 8's kernel. */
+const kernels = (running: string) => [
+  { Package: "proxmox-ve", Version: "9.1.0", CurrentState: "Installed", RunningKernel: running },
+  { Package: "proxmox-kernel-6.17.2-1-pve-signed", Version: "6.17.2-1", CurrentState: "Installed" },
+  { Package: "proxmox-kernel-6.8.12-43-pve-signed", Version: "6.8.12-43", CurrentState: "Installed" },
+];
 
-function lab(over: { guests?: unknown[]; repos?: RawRepositories; apt?: string[]; pinOk?: boolean; kernelAfter?: string; checkerBefore?: string; checkerAfter?: string } = {}) {
+/**
+ * A fake cluster: node2 on 8.4 with its sources switched and nothing running, which turns 9 after the packages.
+ * With `stuck`, node2's packages are on 9 already and it still runs the old kernel.
+ */
+function lab(over: { guests?: unknown[]; repos?: RawRepositories; apt?: string[]; pinOk?: boolean; kernelAfter?: string; checkerBefore?: string; checkerAfter?: string; stuck?: boolean } = {}) {
   const calls: string[] = [];
-  let upgraded = false;
+  let upgraded = over.stuck ?? false;
   let rebooted = false;
   const deps: NodeUpgradeDeps = {
     pve: {
@@ -85,6 +106,7 @@ function lab(over: { guests?: unknown[]; repos?: RawRepositories; apt?: string[]
           if (path === "/cluster/resources?type=vm") return over.guests ?? [{ node: "n1", vmid: 100, name: "bossmox", status: "running" }];
           if (path.endsWith("/apt/repositories")) return over.repos ?? ON_TRIXIE;
           if (path.endsWith("/apt/update")) return over.apt ?? [];
+          if (path.endsWith("/apt/versions")) return upgraded ? kernels(rebooted ? (over.kernelAfter ?? "6.17.2-1-pve") : "6.8.12-43-pve") : [];
           throw new Error(`unexpected ${path}`);
         })();
         return r as T;
@@ -232,4 +254,111 @@ test("back on the old kernel is a failure, not a success", async () => {
   const r = await finish(job, "n2");
   assert.equal(r?.phase, "failed");
   assert.match(r?.error ?? "", /old kernel/);
+});
+
+test("a node stuck after its packages is finished: no packages again, straight to the check, pins and restart", async () => {
+  const { deps, calls } = lab({ stuck: true });
+  const job = createNodeUpgrade(deps);
+  const started = await job.start(root(), "n2", "n2");
+  assert.equal(started.finishing, true);
+  assert.equal(started.to, 9, "the version it reports is the one it's finishing, not the next");
+  const r = await finish(job, "n2");
+  assert.equal(r?.phase, "done", r?.error ?? "");
+  assert.deepEqual(calls, ["checker-after", "pin", "reboot"]);
+  assert.equal(r?.restarted, true);
+  assert.equal(r?.kernel, "6.17.2-1-pve");
+});
+
+test("runOne waits for the node's whole upgrade and hands back how it ended", async () => {
+  const { deps } = lab();
+  const r = await createNodeUpgrade(deps).runOne(root(), "n2");
+  assert.equal(r.phase, "done", r.error ?? "");
+  assert.equal(r.restarted, true);
+  const failed = await createNodeUpgrade(lab({ checkerAfter: CHECK_AFTER_UNKNOWN }).deps).runOne(root(), "n2");
+  assert.equal(failed.phase, "failed");
+  assert.equal(failed.restarted, false, "it stopped before the restart");
+});
+
+/** A cluster for the run's planner: names to version and whether it's stuck. */
+function planPve(nodes: Record<string, { v: string; stuck?: boolean; online?: boolean }>, repos: RawRepositories = ON_BOOKWORM) {
+  return {
+    async get<T>(path: string): Promise<T> {
+      const name = /^\/nodes\/([^/]+)\//.exec(path)?.[1] ?? "";
+      const n = nodes[name];
+      const r = (() => {
+        if (path === "/cluster/resources?type=node") return Object.entries(nodes).map(([node, x]) => ({ node, status: x.online === false ? "offline" : "online" }));
+        if (path.endsWith("/version")) return { version: n?.v };
+        if (path.endsWith("/apt/versions")) return n?.stuck ? kernels("6.8.12-43-pve") : [{ Package: "proxmox-ve", RunningKernel: "6.8.12-43-pve" }];
+        if (path.endsWith("/apt/repositories")) return repos;
+        throw new Error(`unexpected ${path}`);
+      })();
+      return r as T;
+    },
+  };
+}
+const readyNow = (over: Partial<Readiness> = {}): Readiness => ({ checkedAt: 1_000_000, running: false, from: 8, to: 9, nodes: [], ready: true, blocking: 0, ...over });
+const noSwitch = { switchNode: async () => assert.fail("no switch expected") };
+const noRun = { runOne: async () => assert.fail("no upgrade expected") };
+
+test("the run's plan: stuck nodes first, then oldest version, and only the nodes still to go", async () => {
+  const plan = await createRunUpgrade({
+    pve: planPve({ c: { v: "8.4.21" }, a: { v: "8.4.14" }, b: { v: "9.2.28", stuck: true }, d: { v: "9.2.28" } }),
+    sources: noSwitch,
+    nodes: noRun,
+    ready: () => readyNow(),
+    now: () => 1_000_000 + 60_000,
+  }).plan(root());
+  assert.deepEqual(
+    plan.map((p) => [p.name, p.finishing]),
+    [
+      ["b", true],
+      ["a", false],
+      ["c", false],
+    ],
+    "d is done already",
+  );
+  assert.ok(plan.every((p) => p.to === 9));
+});
+
+test("the run's plan is refused without a fresh, clear readiness check, for anyone but root@pam, or with a node offline", async () => {
+  const make = (ready: Readiness, nodes: Parameters<typeof planPve>[0] = { a: { v: "8.4.21" } }, at = 1_000_000 + 60_000) =>
+    createRunUpgrade({ pve: planPve(nodes), sources: noSwitch, nodes: noRun, ready: () => ready, now: () => at });
+  await assert.rejects(make(readyNow()).plan({ username: "admin@pve", ticket: "t" }), /root@pam/);
+  await assert.rejects(make(readyNow({ checkedAt: null })).plan(root()), /Get ready to upgrade first/);
+  await assert.rejects(make(readyNow(), undefined, 1_000_000 + READY_FOR_MS + 1).plan(root()), /from the last hour/);
+  await assert.rejects(make(readyNow({ ready: false, blocking: 2 })).plan(root()), /found 2 things to fix first/);
+  await assert.rejects(make(readyNow({ running: true })).plan(root()), /still running/);
+  await assert.rejects(make(readyNow(), { a: { v: "8.4.21" }, b: { v: "8.4.21", online: false } }).plan(root()), /come back online first: b/);
+});
+
+test("one node in a run: sources switched first when they aren't, then the whole upgrade", async () => {
+  const log: string[] = [];
+  const done = { restarted: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve" } as unknown as NodeUpgrade;
+  const ru = (repos: RawRepositories, stuck = false, switchError: string | null = null) =>
+    createRunUpgrade({
+      pve: planPve({ a: { v: stuck ? "9.2.28" : "8.4.21", stuck } }, repos),
+      sources: {
+        switchNode: async (_s, node, confirm, from, to) => {
+          log.push(`switch ${node} ${confirm} ${from}->${to}`);
+          return { backup: "/root/b.tar", switchedAt: 1, others: [], error: switchError };
+        },
+      },
+      nodes: {
+        runOne: async (_s, node) => {
+          log.push(`upgrade ${node}`);
+          return done;
+        },
+      },
+      ready: () => readyNow(),
+    });
+  assert.deepEqual(await ru(ON_BOOKWORM).run(root(), "a"), { restarted: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve" });
+  assert.deepEqual(log.splice(0), ["switch a a bookworm->trixie", "upgrade a"]);
+  await ru(ON_TRIXIE).run(root(), "a");
+  assert.deepEqual(log.splice(0), ["upgrade a"], "already switched: not again");
+  await ru(ON_TRIXIE, true).run(root(), "a");
+  assert.deepEqual(log.splice(0), ["upgrade a"], "a stuck node is finished without touching its sources");
+  const bad = await ru(ON_BOOKWORM, false, "apt couldn't use the new sources, so the old ones were put back.").run(root(), "a");
+  assert.equal(bad.restarted, false);
+  assert.match(bad.error ?? "", /a's update sources weren't switched: apt couldn't/);
+  assert.deepEqual(log.splice(0), ["switch a a bookworm->trixie"], "no upgrade after a failed switch");
 });

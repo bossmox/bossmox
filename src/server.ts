@@ -61,7 +61,7 @@ import { createProxmoxNotice } from "./proxmox-notice.js";
 import { createUpgradeReady } from "./upgrade-ready.js";
 import { createUpgradeFixes } from "./upgrade-fixes.js";
 import { createUpgradeSources } from "./upgrade-sources.js";
-import { createNodeUpgrade } from "./upgrade-node.js";
+import { createNodeUpgrade, createRunUpgrade } from "./upgrade-node.js";
 import { rebootAndWait } from "./reboot.js";
 import { X509Certificate } from "node:crypto";
 import { createHa } from "./ha.js";
@@ -224,6 +224,8 @@ const jobs = createJobs({
   shell: () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName }),
   movesFile: movesPath(settingsPath(process.env)),
   runsFile: runsPath(settingsPath(process.env)),
+  // Made further down with the other upgrade pieces; only called once a run starts.
+  upgrade: { plan: (s) => runUpgrade.plan(s), run: (s, n) => runUpgrade.run(s, n) },
 });
 
 /** Checks GitHub for a newer BossMox every 6 hours while it's on (ADR 0019). A copy with no version never checks. */
@@ -249,6 +251,7 @@ const nodeUpgrade = createNodeUpgrade({
   sources: upgradeSources,
   audit: (event, who, detail) => audit(event, who, "settings", detail),
 });
+const runUpgrade = createRunUpgrade({ pve, sources: upgradeSources, nodes: nodeUpgrade, ready: () => upgradeReady.view() });
 updates.start();
 const HAS_VERSION = versionNumbers(VERSION) !== null;
 const SHORT_VERSION = VERSION.replace(/^(\d+\.\d+\.\d+(?:-[a-z]+)?).*$/, "$1");
