@@ -50,11 +50,13 @@ grep -E "^(E: |dpkg: error|Errors were encountered)" ${UPGRADE_LOG} 2>/dev/null 
  * answers questions: dpkg installs the new version of a config file nobody changed and keeps one that was changed,
  * with the new one beside it (Rocky's decision, ADR 0042); ucf-managed files (GRUB's defaults) do the same, and
  * apt-listchanges doesn't page. Everything apt prints goes to a log on the node. One already running isn't started
- * again: BossMox follows it instead.
+ * again: BossMox follows it instead. apt waits up to 10 minutes for the package lock instead of giving up at once:
+ * Debian's unattended-upgrades held it on the lab just after a node started (2026-11-16).
  */
+export const APT_LOCK_WAIT = "-o DPkg::Lock::Timeout=600";
 export const UPGRADE_SCRIPT = `if ! systemctl is-active --quiet ${UNIT}; then
 rm -f ${EXIT_FILE}
-systemd-run --quiet --wait --collect --unit=${UNIT} --setenv=DEBIAN_FRONTEND=noninteractive --setenv=UCF_FORCE_CONFFOLD=1 --setenv=APT_LISTCHANGES_FRONTEND=none /bin/bash -c 'exec >${UPGRADE_LOG} 2>&1; apt-get update -q || { echo 100 >${EXIT_FILE}; exit 100; }; apt-get -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade; c=$?; echo $c >${EXIT_FILE}; exit $c'
+systemd-run --quiet --wait --collect --unit=${UNIT} --setenv=DEBIAN_FRONTEND=noninteractive --setenv=UCF_FORCE_CONFFOLD=1 --setenv=APT_LISTCHANGES_FRONTEND=none /bin/bash -c 'exec >${UPGRADE_LOG} 2>&1; apt-get ${APT_LOCK_WAIT} update -q || { echo 100 >${EXIT_FILE}; exit 100; }; apt-get ${APT_LOCK_WAIT} -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade; c=$?; echo $c >${EXIT_FILE}; exit $c'
 fi
 ${FOLLOW_SCRIPT}`;
 

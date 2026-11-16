@@ -28,7 +28,9 @@ test("the upgrade answers no questions, keeps changed config files, and runs as 
   assert.match(UPGRADE_SCRIPT, /APT_LISTCHANGES_FRONTEND=none/);
   assert.match(UPGRADE_SCRIPT, /--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade/);
   // A failed package refresh must not go on to upgrade from the old lists.
-  assert.match(UPGRADE_SCRIPT, /apt-get update -q \|\| \{ echo 100/);
+  assert.match(UPGRADE_SCRIPT, /apt-get -o DPkg::Lock::Timeout=600 update -q \|\| \{ echo 100/);
+  // Both apt runs wait for a lock someone else holds (unattended-upgrades after a start, lab 2026-11-16).
+  assert.equal(UPGRADE_SCRIPT.match(/apt-get -o DPkg::Lock::Timeout=600 /g)?.length, 2);
   // Never started twice: one already running is followed.
   assert.match(UPGRADE_SCRIPT, /^if ! systemctl is-active --quiet bossmox-upgrade; then/);
   assert.ok(UPGRADE_SCRIPT.endsWith(FOLLOW_SCRIPT));
