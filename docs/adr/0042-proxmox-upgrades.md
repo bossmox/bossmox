@@ -64,5 +64,5 @@ Each piece is proven on the lab before the next starts, read-only first.
 
 - bmx8lab (three nodes, HA guest, shared LVM over iSCSI) went from 8.4.21 to 9.2.28 entirely from the browser, in two runs: Stop pressed while the second node upgraded let that node finish and stopped before the third; a second run upgraded the third.
 - bmx2lab (two nodes and a tie-breaker vote) went from 8.4.21 to 9.2.28 in one run; the vote held quorum while each node restarted.
-- After Stop, guests stay where they are; they are not brought home. The screen's wording ('Stop waits for the node under way to finish') says less than that, and is open.
+- After Stop, guests stay where they are; they are not brought home. Decided (Rocky, 2026-11-16): keep it that way, because Stop usually means something looks wrong and BossMox shouldn't keep moving guests after it. The plan screen now says so, and points to Move everything back. It applies to all three kinds of run, which share the runner.
 - The node's version in the upgrade window counts only an upgrade that ended after the readiness check: the run's record stays on disk and would otherwise show an old version.
