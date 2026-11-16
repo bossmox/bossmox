@@ -797,13 +797,17 @@ function upgradeBody(u) {
           : `<div class="snap"><div><span class="dot warn"></span><b>Upgrading to Proxmox VE ${esc(String(up.to))}</b><small>${esc(UP_PHASE[up.phase] ?? up.phase)}. You can close this window; the upgrade carries on.</small></div></div>`
       : "";
     const src = u.sources?.[n.node];
+    const srcErr = src?.error ? `<p class="loginerr">${esc(src.error)}</p>` : "";
+    const srcBack = src?.backup && !src.switchedAt ? `<div class="actions"><button class="btn" data-upsrcback="${esc(n.node)}">Put the old sources back</button></div>` : "";
     const srcWords = upWords
-      ? upWords
-      : src?.backup
-        ? `<div class="snap"><div><span class="dot warn"></span><b>Update sources switched to the next release</b><small>Normal updates are held for this node until it's upgraded or the old sources are back.${src.others?.length ? ` Left as they were: ${esc(src.others.map((o) => o.uri).join(", "))}.` : ""}</small></div><div class="actions"><button class="btn primary" data-upnode="${esc(n.node)}">Upgrade to Proxmox VE ${esc(String(u.to ?? ""))}</button><button class="btn" data-upsrcback="${esc(n.node)}">Put the old sources back</button></div></div>`
-        : src?.error
-          ? `<p class="loginerr">${esc(src.error)}</p>`
-          : "";
+      ? `${upWords}${up?.phase === "failed" && src?.backup ? `${srcErr}<div class="actions"><button class="btn" data-upsrcback="${esc(n.node)}">Put the old sources back</button></div>` : ""}`
+      : src?.backup && !src.switchedAt
+        ? `${srcErr}${srcBack}`
+        : src?.backup
+          ? `<div class="snap"><div><span class="dot warn"></span><b>Update sources switched to the next release</b><small>Normal updates are held for this node until it's upgraded or the old sources are back.${src.others?.length ? ` Left as they were: ${esc(src.others.map((o) => o.uri).join(", "))}.` : ""}</small></div><div class="actions"><button class="btn primary" data-upnode="${esc(n.node)}">Upgrade to Proxmox VE ${esc(String(u.to ?? ""))}</button><button class="btn" data-upsrcback="${esc(n.node)}">Put the old sources back</button></div></div>${srcErr}`
+          : src?.error
+            ? `<p class="loginerr">${esc(src.error)}</p>`
+            : "";
     return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${nowOn(n, up, u.checkedAt) ? `Proxmox VE ${esc(nowOn(n, up, u.checkedAt))}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}</small></div>${!pin?.ok ? `<div class="actions"><button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button></div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${srcWords}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
   };
   const lvm = u.fixes?.lvm;
@@ -843,7 +847,9 @@ function askLvmFix() {
   dialog(`<h3>Turn off autoactivation for existing disks?</h3>
     <p>BossMox runs Proxmox's own command on every node, one at a time: <code>pve-lvm-disable-autoactivation</code>. It changes a setting on the guests' LVM disks, so a node only activates a disk when a guest needs it. Disks on shared storage are changed once. Guests keep running, and nothing is erased.</p>
     <p class="meta">Proxmox strongly recommends this for LVM storage shared between nodes. Proxmox VE 9 makes new disks this way.</p>
-    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-uplvmgo="1">Turn it off</button></div>`);
+    <label class="field restartname"><span>Type confirm to turn it off on every node</span><input id="rname" data-word="confirm" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-uplvmgo="1" disabled>Turn it off</button></div>`);
+  $("#rname").focus();
 }
 function askPin(node) {
   dialog(`<h3>Pin the port names on ${esc(node)}?</h3>
@@ -4698,7 +4704,7 @@ document.addEventListener("click", (e) => {
   if (d.upnode) return askUpgradeNode(d.upnode, t.textContent.replace(/^.*VE /, ""));
   if (d.upnodego) return runUpgradeFix("upgrade-node", d.upnodego, { confirm: $("#rname").value.trim() }, `Starting the upgrade of ${d.upnodego}`, false);
   if (d.upsrcbackgo) return runUpgradeFix("upgrade-sources-undo", d.upsrcbackgo, { confirm: $("#rname").value.trim() }, `Putting the old sources back on ${d.upsrcbackgo}`, false);
-  if (d.uplvmgo) return runUpgradeFix("upgrade-fix-lvm", onlineNodes()[0], { confirm: "lvm-autoactivation" }, "Turning off autoactivation on every node", true);
+  if (d.uplvmgo) return runUpgradeFix("upgrade-fix-lvm", onlineNodes()[0], { confirm: $("#rname").value.trim() }, "Turning off autoactivation on every node", true);
   if (d.uppingo) return runUpgradeFix("upgrade-pin", d.uppingo, { confirm: $("#rname").value.trim() }, `Pinning port names on ${d.uppingo}`, false);
   if (d.runstart) {
     t.disabled = true;

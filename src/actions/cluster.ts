@@ -80,6 +80,8 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       return null;
     },
     "upgrade-sources": async (name, who, body) => {
+      // Refused before anything is read from Proxmox, like every other upgrade action.
+      if (who.username !== "root@pam") throw new HttpError(403, "This runs in the node's root console. Sign in as root@pam.");
       const version = await pve.get<{ version?: string }>(`/nodes/${encodeURIComponent(name)}/version`, who.ticket);
       const major = Number.parseInt(version.version ?? "", 10);
       const from = RELEASES.find((r) => r.major === major)?.codename;

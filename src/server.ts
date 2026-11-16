@@ -122,7 +122,9 @@ sessions.onEnd = (session) => {
   if (session === jobs.runState.session && jobs.currentRun?.running) jobs.currentRun.stop = `${session.username} signed out.`;
 };
 // A move job keeps its person's Proxmox login renewed, like an open console does.
-sessions.isBusy = (session) => terminals.hasOpen(session) || session === jobs.moveJob.session || session === jobs.runState.session;
+// So does a one-node upgrade: it carries on after its person signs out, like a run's node under way, and must not fail
+// part way because nobody kept the login fresh.
+sessions.isBusy = (session) => terminals.hasOpen(session) || session === jobs.moveJob.session || session === jobs.runState.session || session === nodeUpgrade.session();
 setInterval(() => void sessions.tick().catch((err: Error) => console.error("Session check failed:", err.message)), 60 * 1000).unref();
 const secureCookie = Boolean(config.tls) || config.behindProxy;
 // The __Host- prefix stops a sibling site or another port from setting this cookie over the real one.
@@ -226,6 +228,8 @@ const jobs = createJobs({
   runsFile: runsPath(settingsPath(process.env)),
   // Made further down with the other upgrade pieces; only called once a run starts.
   upgrade: { plan: (s) => runUpgrade.plan(s), run: (s, n) => runUpgrade.run(s, n) },
+  // Called only once someone acts, after nodeUpgrade below exists.
+  upgrading: () => nodeUpgrade.running(),
 });
 
 /** Checks GitHub for a newer BossMox every 6 hours while it's on (ADR 0019). A copy with no version never checks. */
@@ -233,7 +237,12 @@ const updates = new UpdateChecker(VERSION, preferences.updateCheck);
 const proxmoxNotice = createProxmoxNotice(pve);
 const rootConsole = nodeConsole(pve, () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName }));
 const upgradeReady = createUpgradeReady({ pve, console: rootConsole });
-const upgradeSources = createUpgradeSources({ pve, console: rootConsole, audit: (event, who, detail) => audit(event, who, "settings", detail) });
+const upgradeSources = createUpgradeSources({
+  pve,
+  console: rootConsole,
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
+  upgrading: () => nodeUpgrade.running(),
+});
 const upgradeFixes = createUpgradeFixes({
   console: rootConsole,
   onlineNodes: async (session) =>
@@ -242,6 +251,7 @@ const upgradeFixes = createUpgradeFixes({
       .map((r) => r.node as string)
       .sort(),
   audit: (event, who, detail) => audit(event, who, "settings", detail),
+  upgrading: () => nodeUpgrade.running(),
 });
 const nodeUpgrade = createNodeUpgrade({
   pve,
@@ -250,6 +260,7 @@ const nodeUpgrade = createNodeUpgrade({
   reboot: (session, node) => rebootAndWait(pve, session, node),
   sources: upgradeSources,
   audit: (event, who, detail) => audit(event, who, "settings", detail),
+  busy: () => jobs.busy(),
 });
 const runUpgrade = createRunUpgrade({ pve, sources: upgradeSources, nodes: nodeUpgrade, ready: () => upgradeReady.view() });
 updates.start();

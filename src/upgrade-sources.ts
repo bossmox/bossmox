@@ -6,6 +6,7 @@
  * the backup goes back in by itself.
  */
 import type { Session } from "./auth.js";
+import { gzipSync } from "node:zlib";
 import { HttpError } from "./http-error.js";
 import type { ShellResult } from "./node-shell.js";
 import type { RawRepositories } from "./server-detail.js";
@@ -75,9 +76,11 @@ FROM=${p.from}; TO=${p.to}; A=/etc/apt; D=$A/sources.list.d
 B=/root/bossmox-apt-before-$TO-$(date +%Y%m%d-%H%M%S).tar
 tar -C $A -cf "$B" sources.list.d $([ -e $A/sources.list ] && echo sources.list)
 echo "BMXBACKUP $B"
-restore() { rm -rf "$D"; mkdir -p "$D"; rm -f $A/sources.list; tar -C $A -xf "$B"; apt-get update -q >/dev/null 2>&1 || true; }
-# Anything that fails from here puts the backup back.
-trap 'restore; echo "BMXRESULT restored"; echo "The switch stopped part way, so the old sources were put back."' ERR
+# The backup is read through before anything is deleted, so a bad backup never leaves the node with no sources.
+restore() { tar -tf "$B" >/dev/null || { echo "BMXRESULT unrestored"; return 0; }; rm -rf "$D"; mkdir -p "$D"; rm -f $A/sources.list; tar -C $A -xf "$B"; apt-get -o DPkg::Lock::Timeout=600 update -q >/dev/null 2>&1 || true; echo "BMXRESULT restored"; }
+# Anything that fails from here, or a stop part way, puts the backup back.
+trap 'trap - ERR; restore; echo "The switch stopped part way, so the old sources were put back."' ERR
+trap 'trap - ERR; restore; exit 1' HUP INT TERM
 URIS=$(mktemp)
 cat > "$URIS" <<'BMX_URIS'
 ${p.debianUris.join("\n")}
@@ -95,43 +98,64 @@ for f in $A/sources.list $D/*.list; do
 done
 for f in $D/*.sources; do
   [ -f "$f" ] || continue
-  if grep -Eq '^URIs:.*proxmox\\.com/debian/(pve|ceph-)' "$f"; then rm -f "$f"; continue; fi
+  # Proxmox's own stanzas go (the new ones are written below); any other stanza in the same file stays.
   awk -v from="$FROM" -v to="$TO" -v urifile="$URIS" 'BEGIN{while((getline u < urifile)>0) if(u!="") uris[u]=1; RS=""; ORS="\\n\\n"}
+    /(^|\\n)URIs:[^\\n]*proxmox\\.com\\/debian\\/(pve|ceph-)/ {next}
     { deb=0; for (u in uris) if (index($0, u)) deb=1
       if (deb) { n=split($0, L, "\\n"); out=""
         for (i=1;i<=n;i++){ l=L[i]; if (l ~ /^Suites:/) { gsub(from "-backports", "", l); gsub(from, to, l); gsub(/  +/, " ", l); sub(/ +$/, "", l) } out = out (i>1?"\\n":"") l }
         $0=out }
       print }' "$f" > "$f.bmx"
-  mv "$f.bmx" "$f"
+  if [ -s "$f.bmx" ]; then mv "$f.bmx" "$f"; else rm -f "$f" "$f.bmx"; fi
 done
 cat > $D/${pveFile} <<'BMX_PVE'
 ${deb822(pveUri, p.to, p.pveComponent)}BMX_PVE
 ${ceph ? `cat > $D/ceph.sources <<'BMX_CEPH'\n${ceph}BMX_CEPH` : "true"}
 rm -f "$URIS"
 trap - ERR
-if out=$(apt-get update 2>&1) && ! printf '%s\\n' "$out" | grep -Eq '^(Err|E):'; then echo "BMXRESULT ok"; else
-  restore; echo "BMXRESULT restored"; printf '%s\\n' "$out" | grep -E '^(Err|E|W):' | head -5; fi
+if out=$(apt-get -o DPkg::Lock::Timeout=600 update 2>&1) && ! printf '%s\\n' "$out" | grep -Eq '^(Err|E):'; then echo "BMXRESULT ok"; else
+  restore; printf '%s\\n' "$out" | grep -E '^(Err|E|W):' | head -5; fi
 `;
 }
 
-/** Typed on the node: the script, carried as base64. */
-export const switchCommand = (p: SwitchPlan) => `printf '%s' '${Buffer.from(switchScript(p), "utf8").toString("base64")}' | base64 -d | bash`;
+const SOURCES_UNIT = "bossmox-sources";
+const SOURCES_SCRIPT = "/root/bossmox-sources.sh";
+export const SOURCES_LOG = "/root/bossmox-sources.log";
+/** How the switch on the node is going: running, or what it printed once it ended. */
+export const followSwitchCommand = () => `if systemctl is-active --quiet ${SOURCES_UNIT}; then echo "BMXSRC running"; else cat ${SOURCES_LOG} 2>/dev/null; echo "BMXSRC ended"; fi`;
+/**
+ * Typed on the node: the script, gzipped and carried as base64 so nothing in it is read by the console's shell and the
+ * typed line stays well short of the terminal's limit, written to a file and run as its own systemd job. A switch
+ * already running isn't started again: BossMox follows it instead.
+ */
+export const switchCommand = (p: SwitchPlan) =>
+  `if ! systemctl is-active --quiet ${SOURCES_UNIT}; then printf '%s' '${gzipSync(Buffer.from(switchScript(p), "utf8")).toString("base64")}' | base64 -d | gunzip > ${SOURCES_SCRIPT} && rm -f ${SOURCES_LOG} && systemd-run --quiet --wait --collect --unit=${SOURCES_UNIT} /bin/bash -c 'exec >${SOURCES_LOG} 2>&1; exec bash ${SOURCES_SCRIPT}'; fi; ${followSwitchCommand()}`;
+
+/** Only a backup this switch made can be put back: a fixed folder and name, nothing a shell would read. */
+const BACKUP_PATH = /^\/root\/bossmox-apt-before-[a-z]+-\d{8}-\d{6}\.tar$/;
 
 /** Puts a backup made by the switch back, then refreshes the package lists. */
-export const undoCommand = (backup: string) =>
-  `case '${backup}' in /root/bossmox-apt-before-*.tar) ;; *) exit 64 ;; esac; [ -f '${backup}' ] && rm -rf /etc/apt/sources.list.d && mkdir -p /etc/apt/sources.list.d && rm -f /etc/apt/sources.list && tar -C /etc/apt -xf '${backup}' && apt-get update -q >/dev/null 2>&1`;
+export const undoCommand = (backup: string) => {
+  if (!BACKUP_PATH.test(backup)) throw new HttpError(400, "That isn't a backup BossMox made.");
+  // Read the backup through first: nothing is deleted unless it can be put back.
+  return `[ -f '${backup}' ] && tar -tf '${backup}' >/dev/null && rm -rf /etc/apt/sources.list.d && mkdir -p /etc/apt/sources.list.d && rm -f /etc/apt/sources.list && tar -C /etc/apt -xf '${backup}' && apt-get -o DPkg::Lock::Timeout=600 update -q >/dev/null 2>&1`;
+};
 
 export interface SwitchResult {
   ok: boolean;
+  /** The old sources were put back, read from the node: only then may BossMox say so. */
+  restored: boolean;
   backup: string | null;
   /** apt's own complaint when it had to go back. */
   said: string;
 }
 export function readSwitch(output: string): SwitchResult {
-  const backup = /BMXBACKUP (\/root\/bossmox-apt-before-\S+\.tar)/.exec(output)?.[1] ?? null;
+  const found = /BMXBACKUP (\S+)/.exec(output)?.[1] ?? null;
+  const backup = found && BACKUP_PATH.test(found) ? found : null;
   const ok = /^BMXRESULT ok\s*$/m.test(output);
-  const said = ok ? "" : (output.split(/^BMXRESULT restored\s*$/m)[1] ?? "").trim();
-  return { ok, backup, said };
+  const restored = !ok && /^BMXRESULT restored\s*$/m.test(output);
+  const said = restored ? (output.split(/^BMXRESULT restored\s*$/m)[1] ?? "").replace(/^BMXSRC ended\s*$/m, "").trim() : "";
+  return { ok, restored, backup, said };
 }
 
 /**
@@ -153,9 +177,14 @@ export function switched(repos: RawRepositories, from: string): string[] {
 
 export interface SourcesDeps {
   pve: { get<T>(path: string, ticket: string): Promise<T> };
-  console: (node: string, session: Session, line: string) => Promise<ShellResult>;
+  console: (node: string, session: Session, line: string, timeoutMs?: number) => Promise<ShellResult>;
   audit: (event: string, who: string, detail: Record<string, string | number>) => void;
+  /** The node being upgraded, if one is: its sources mustn't change under it. */
+  upgrading?: () => string | null;
+  wait?: (ms: number) => Promise<void>;
 }
+/** A switch is a backup, a few file edits and apt's update: 15 minutes covers a very slow mirror. */
+const SWITCH_LIMIT_MS = 15 * 60 * 1000;
 export interface NodeSources {
   /** The backup to go back to, while the node is switched. */
   backup: string | null;
@@ -167,10 +196,13 @@ export interface NodeSources {
 export function createUpgradeSources(deps: SourcesDeps, now: () => number = Date.now) {
   const state: Record<string, NodeSources> = {};
   let busy = false;
+  const pause = deps.wait ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const guard = async <T>(session: Session, node: string, confirm: string, job: () => Promise<T>): Promise<T> => {
     if (session.username !== "root@pam") throw new HttpError(403, "This runs in the node's root console. Sign in as root@pam.");
     if (confirm.toLowerCase() !== node.toLowerCase()) throw new HttpError(400, "Type the node's name to confirm.");
     if (busy) throw new HttpError(409, "BossMox is already changing a node's sources. Wait for it to finish.");
+    const upgrading = deps.upgrading?.();
+    if (upgrading) throw new HttpError(409, `BossMox is upgrading ${upgrading}. Its sources can't change until that ends.`);
     busy = true;
     try {
       return await job();
@@ -179,6 +211,24 @@ export function createUpgradeSources(deps: SourcesDeps, now: () => number = Date
     }
   };
   const repos = (session: Session, node: string) => deps.pve.get<RawRepositories>(`/nodes/${encodeURIComponent(node)}/apt/repositories`, session.ticket);
+
+  /** Runs the switch as its job on the node and follows it to its end, through a console that closes. */
+  async function runSwitch(session: Session, node: string, plan: SwitchPlan): Promise<string> {
+    const until = now() + SWITCH_LIMIT_MS;
+    let out = await deps.console(node, session, switchCommand(plan), SWITCH_LIMIT_MS).then(
+      (r) => r.output,
+      () => "",
+    );
+    while (!/^BMXSRC ended\s*$/m.test(out)) {
+      if (now() > until) return out;
+      await pause(10_000);
+      out = await deps.console(node, session, followSwitchCommand()).then(
+        (r) => r.output,
+        () => "",
+      );
+    }
+    return out;
+  }
 
   return {
     view: () => state,
@@ -199,14 +249,17 @@ export function createUpgradeSources(deps: SourcesDeps, now: () => number = Date
       return guard(session, node, confirm, async () => {
         const plan = planSwitch(await repos(session, node), from, to);
         if (plan.problems.length) throw new HttpError(400, plan.problems.join(" "));
-        const r = readSwitch((await deps.console(node, session, switchCommand(plan))).output);
+        const r = readSwitch(await runSwitch(session, node, plan));
         const left = r.ok ? switched(await repos(session, node), from) : [];
-        const error = !r.ok
-          ? `apt couldn't use the new sources, so the old ones were put back.${r.said ? ` apt said: ${r.said}` : ""}`
-          : left.length
+        const error = r.ok
+          ? left.length
             ? `Some Debian or Proxmox sources still name ${from}: ${left.join("; ")}.`
-            : null;
-        state[node] = { backup: r.ok ? r.backup : null, switchedAt: r.ok ? now() : null, others: plan.others, error };
+            : null
+          : r.restored
+            ? `apt couldn't use the new sources, so the old ones were put back.${r.said ? ` apt said: ${r.said}` : ""}`
+            : `BossMox couldn't tell how the switch on ${node} ended, so its sources may be part way.${r.backup ? ` Put the old sources back restores the backup ${r.backup}.` : ` Check /etc/apt on ${node}; the log is ${SOURCES_LOG}.`}`;
+        // The backup stays on offer unless the node itself said the old sources are back.
+        state[node] = { backup: r.restored ? null : r.backup, switchedAt: r.ok ? now() : null, others: plan.others, error };
         deps.audit("upgrade-sources", session.username, { node, to, ok: error ? 0 : 1 });
         return state[node];
       });

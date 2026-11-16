@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Session } from "../src/auth.js";
 import type { ShellResult } from "../src/node-shell.js";
-import { createUpgradeFixes, LVM_COMMAND, PORTS_COMMAND, pinCommand, readLvm, readPin, readPorts } from "../src/upgrade-fixes.js";
+import { createUpgradeFixes, LVM_COMMAND, PORTS_COMMAND, pinCommand, readLvm, readPin, readPorts, undoPinCommand } from "../src/upgrade-fixes.js";
 
 const root = { username: "root@pam", ticket: "t" } as Session;
 const out = (output: string, exitCode = 0): ShellResult => ({ exitCode, output, tail: output, keptConfig: [] });
@@ -60,7 +60,7 @@ function setup(answers: Record<string, ShellResult>) {
 
 test("the LVM fix runs Proxmox's command on each node in turn and stops at the first failure", async () => {
   const s = setup({ node2: out("FAIL: could not disable autoactivation\n", 1) });
-  const r = await s.fixes.lvm(root, "lvm-autoactivation");
+  const r = await s.fixes.lvm(root, "confirm");
   assert.deepEqual(s.typed, [`node1: ${LVM_COMMAND}`, `node2: ${LVM_COMMAND}`]);
   assert.deepEqual(
     r.map((x) => x.ok),
@@ -71,9 +71,11 @@ test("the LVM fix runs Proxmox's command on each node in turn and stops at the f
 
 test("both fixes need root@pam and the confirmation", async () => {
   const s = setup({});
-  await assert.rejects(s.fixes.lvm({ username: "admin@pve", ticket: "t" } as Session, "lvm-autoactivation"), /root@pam/);
-  await assert.rejects(s.fixes.lvm(root, "yes"), /confirmed/);
+  await assert.rejects(s.fixes.lvm({ username: "admin@pve", ticket: "t" } as Session, "confirm"), /root@pam/);
+  await assert.rejects(s.fixes.lvm(root, "yes"), /Type confirm/);
+  await assert.rejects(s.fixes.lvm(root, "lvm-autoactivation"), /Type confirm/, "the old fixed word the page sent without asking no longer works");
   await assert.rejects(s.fixes.pin(root, "node1", "node2"), /node's name/);
+  await assert.rejects(s.fixes.pin({ username: "admin@pve", ticket: "t" } as Session, "node1", "x"), /root@pam/, "root is checked before the confirmation");
 });
 
 /** What udev says on the lab nodes: cloud-init names eth0, ens19 has only the default rules. */
@@ -126,7 +128,7 @@ test("if another file would still win, the pins are taken back out before anythi
   assert.match(r.error ?? "", /ens19 \(named by \/etc\/systemd\/network\/05-mine\.link\)/);
   assert.match(r.error ?? "", /took the pins back out/);
   const undo = s.typed.at(-2);
-  assert.equal(undo, "rm -f /usr/local/lib/systemd/network/50-pve-nic0.link /usr/local/lib/systemd/network/50-pmx-nic0.link && rm -f /etc/network/interfaces.new");
+  assert.equal(undo, "rm -f '/usr/local/lib/systemd/network/50-pve-nic0.link' '/usr/local/lib/systemd/network/50-pmx-nic0.link' && rm -f /etc/network/interfaces.new");
   assert.equal(s.typed.at(-1), PORTS_COMMAND, "udev is asked again after the undo");
 });
 
@@ -177,4 +179,53 @@ test("a node whose ports are all named already needs nothing", async () => {
   const r = await fixes.pin(root, "node3", "node3");
   assert.equal(r.already, true);
   assert.equal(s.typed.length, 0);
+});
+
+test("a port name a shell would read is never typed: the pin and its undo refuse it (review 2026-11-16)", async () => {
+  assert.equal(pinCommand("ens19"), "printf 'y\\n' | pve-network-interface-pinning generate --interface 'ens19'");
+  assert.throws(() => pinCommand("ens19;reboot"), /won't type/);
+  assert.throws(() => undoPinCommand(["nic0$(reboot)"], false), /won't type/);
+  const typed: string[] = [];
+  const fixes = createUpgradeFixes({
+    console: async (_node, _s, line) => {
+      typed.push(line);
+      return out("BMXPORT e$(reboot) bc:24:11:46:2b:12 /usr/lib/systemd/network/99-default.link no\n");
+    },
+    onlineNodes: async () => [],
+    audit: () => {},
+  });
+  const r = await fixes.pin(root, "node3", "node3");
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? "", /won't type that port name/);
+  assert.deepEqual(typed, [PORTS_COMMAND], "nothing after the listing was typed");
+});
+
+test("if a later port's pin fails, the earlier pins come back out: no node is left half pinned (review 2026-11-16)", async () => {
+  const typed: string[] = [];
+  const two = "BMXPORT ens18 aa:aa /usr/lib/systemd/network/99-default.link no\nBMXPORT ens19 bb:bb /usr/lib/systemd/network/99-default.link no\n";
+  let listings = 0;
+  const fixes = createUpgradeFixes({
+    console: async (_node, _s, line) => {
+      typed.push(line);
+      if (line === PORTS_COMMAND) return out(listings++ === 0 ? two : two);
+      if (line.startsWith("test -e")) return out("", 1);
+      if (line === pinCommand("ens18")) return out("Name for link 'ens18' will change to 'nic0'\nSuccessfully updated Proxmox VE configuration files.\n");
+      if (line === pinCommand("ens19")) return out("There already exists a pin for NIC 'ens19' - aborting.\n", 255);
+      return out("");
+    },
+    onlineNodes: async () => [],
+    audit: () => {},
+  });
+  const r = await fixes.pin(root, "node3", "node3");
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? "", /already exists a pin/);
+  assert.match(r.error ?? "", /took the pins back out/);
+  assert.ok(typed.includes("rm -f '/usr/local/lib/systemd/network/50-pve-nic0.link' '/usr/local/lib/systemd/network/50-pmx-nic0.link' && rm -f /etc/network/interfaces.new"), "ens18's pin was undone");
+});
+
+test("a fix started by hand waits while a node is upgrading; the upgrade's own pinning doesn't (review 2026-11-16)", async () => {
+  const fixes = createUpgradeFixes({ console: async () => out("BMXPORT eth0 aa:bb /etc/systemd/network/10-eth0.link yes\n"), onlineNodes: async () => [], audit: () => {}, upgrading: () => "node2" });
+  await assert.rejects(fixes.pin(root, "node3", "node3"), /upgrading node2/);
+  await assert.rejects(fixes.lvm(root, "confirm"), /upgrading node2/);
+  assert.equal((await fixes.pinForUpgrade(root, "node2")).already, true);
 });

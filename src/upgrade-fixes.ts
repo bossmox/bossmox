@@ -15,7 +15,18 @@ export const LVM_COMMAND = "/usr/share/pve-manager/migrations/pve-lvm-disable-au
  * Proxmox's pinning for one port: a .link file and a pending network config, applied at the next restart. In a
  * console it asks "continue (y/N)?" first, so the answer is piped in.
  */
-export const pinCommand = (port: string) => `printf 'y\\n' | pve-network-interface-pinning generate --interface ${port}`;
+export const pinCommand = (port: string) => `printf 'y\\n' | pve-network-interface-pinning generate --interface '${safeName(port)}'`;
+
+/**
+ * Port names come from the node and go into a root shell line, so only names made of these characters are typed.
+ * Linux allows almost anything in an interface name; real ones are letters, digits and a little punctuation.
+ */
+const SAFE_NAME = /^[A-Za-z0-9_.:@-]{1,32}$/;
+export const isSafeName = (name: string) => SAFE_NAME.test(name);
+function safeName(name: string): string {
+  if (!SAFE_NAME.test(name)) throw new HttpError(400, `The port name "${name}" has characters BossMox won't type into a root shell. Pin it by hand.`);
+  return name;
+}
 
 /**
  * Which naming file udev applies to each physical port, asked in udev's test mode, which changes nothing. Proxmox's
@@ -45,13 +56,13 @@ export function readPorts(output: string): Port[] {
  * 2026-11-16). The upgrade pins after the 9 packages are in, so both have to count as Proxmox's own.
  */
 const PIN_DIR = "/usr/local/lib/systemd/network";
-const proxmoxPin = (file: string, name = "[^/]+") => new RegExp(`/50-p(?:ve|mx)-${name}\\.link$`).test(file);
+const proxmoxPin = (file: string, name?: string) => new RegExp(`/50-p(?:ve|mx)-${name === undefined ? "[^/]+" : name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.link$`).test(file);
 /** A port only Proxmox's own pin may name: anything else that names it already keeps the name stable. */
 const pinnedByProxmox = (p: Port) => proxmoxPin(p.file);
 
 /** Undoes this run's pins before any restart: its .link files, under either of the tool's names, and the pending network config it made. */
 export const undoPinCommand = (names: string[], hadPending: boolean) =>
-  [...names.map((n) => `rm -f ${PIN_DIR}/50-pve-${n}.link ${PIN_DIR}/50-pmx-${n}.link`), ...(hadPending ? [] : ["rm -f /etc/network/interfaces.new"])].join(" && ");
+  [...names.map(safeName).map((n) => `rm -f '${PIN_DIR}/50-pve-${n}.link' '${PIN_DIR}/50-pmx-${n}.link'`), ...(hadPending ? [] : ["rm -f /etc/network/interfaces.new"])].join(" && ");
 
 export interface LvmResult {
   node: string;
@@ -92,6 +103,8 @@ export interface FixDeps {
   console: (node: string, session: Session, line: string) => Promise<ShellResult>;
   onlineNodes: (session: Session) => Promise<string[]>;
   audit: (event: string, who: string, detail: Record<string, string | number>) => void;
+  /** The node being upgraded, if one is: a fix started by hand then waits, so it can't collide with the upgrade's own pinning. */
+  upgrading?: () => string | null;
 }
 
 export function createUpgradeFixes(deps: FixDeps) {
@@ -100,6 +113,10 @@ export function createUpgradeFixes(deps: FixDeps) {
   };
   let busy = false;
   let last: { lvm: LvmResult[] | null; pins: Record<string, PinResult> } = { lvm: null, pins: {} };
+  const notWhileUpgrading = () => {
+    const node = deps.upgrading?.();
+    if (node) throw new HttpError(409, `BossMox is upgrading ${node}. Wait for that to finish.`);
+  };
   const once = async <T>(job: () => Promise<T>): Promise<T> => {
     if (busy) throw new HttpError(409, "A fix is already running. Wait for it to finish.");
     busy = true;
@@ -120,17 +137,43 @@ export function createUpgradeFixes(deps: FixDeps) {
     const kept = before.filter((p) => p.named && !pinnedByProxmox(p)).map((p) => ({ name: p.name, file: p.file }));
     const todo = before.filter((p) => !p.named);
     if (!todo.length) return { node, ok: true, renames: [], already: true, kept, error: null };
+    const odd = todo.filter((p) => !isSafeName(p.name));
+    if (odd.length)
+      return {
+        node,
+        ok: false,
+        renames: [],
+        already: false,
+        kept,
+        error: `${odd.map((p) => p.name).join(", ")}: BossMox won't type that port name into a root shell. Pin it by hand, then try again.`,
+      };
     const pending = (await deps.console(node, session, "test -e /etc/network/interfaces.new")).exitCode === 0;
     const renames: PinResult["renames"] = [];
     for (const p of todo) {
       const r = readPin(node, await deps.console(node, session, pinCommand(p.name)));
-      if (!r.ok) return { node, ok: false, renames, already: false, kept, error: r.error };
+      const odd = r.renames.filter((rn) => !isSafeName(rn.to));
+      if (!r.ok || odd.length) {
+        renames.push(...r.renames.filter((rn) => isSafeName(rn.to)));
+        const error = r.error ?? `The pinning tool chose a name BossMox won't type into a root shell (${odd.map((rn) => rn.to).join(", ")}).`;
+        // Pins made earlier in this run come back out, so the node isn't left with only some of its ports pinned.
+        return { ...(await takeBack(session, node, renames, pending, error)), kept };
+      }
       renames.push(...r.renames);
     }
     const after = readPorts((await deps.console(node, session, PORTS_COMMAND)).output);
     const fileOf = (ports: Port[], name: string) => ports.find((p) => p.name === name)?.file ?? "";
     const wrong = renames.filter((rn) => !proxmoxPin(fileOf(after, rn.from), rn.to));
     if (wrong.length) {
+      const why = wrong.map((rn) => `${rn.from} (named by ${fileOf(after, rn.from) || "another file"})`).join(", ");
+      return { ...(await takeBack(session, node, renames, pending, `Another naming file would win over the new pin for ${why}, so the node would come back without that network.`)), kept };
+    }
+    return { node, ok: true, renames, already: false, kept, error: null };
+  }
+
+  /** Takes this run's pins back out, then asks udev once more: "took them back out" is only said when none still applies. */
+  async function takeBack(session: Session, node: string, renames: PinResult["renames"], pending: boolean, why: string): Promise<PinResult> {
+    const fileOf = (ports: Port[], name: string) => ports.find((p) => p.name === name)?.file ?? "";
+    if (renames.length)
       await deps.console(
         node,
         session,
@@ -139,22 +182,18 @@ export function createUpgradeFixes(deps: FixDeps) {
           pending,
         ),
       );
-      const why = wrong.map((rn) => `${rn.from} (named by ${fileOf(after, rn.from) || "another file"})`).join(", ");
-      // Ask udev once more: "took them back out" is only said when no pin of this run still applies.
-      const undone = readPorts((await deps.console(node, session, PORTS_COMMAND)).output);
-      const left = renames.map((rn) => fileOf(undone, rn.from)).filter((f, i) => proxmoxPin(f, (renames[i] as { to: string }).to));
-      return {
-        node,
-        ok: false,
-        renames: [],
-        already: false,
-        kept,
-        error: left.length
-          ? `Another naming file would win over the new pin for ${why}, so the node would come back without that network. BossMox couldn't take its pins back out: remove ${left.join(", ")} before this node restarts.`
-          : `Another naming file would win over the new pin for ${why}, so the node would come back without that network. BossMox took the pins back out; nothing changes at the next restart.`,
-      };
-    }
-    return { node, ok: true, renames, already: false, kept, error: null };
+    else if (!pending) await deps.console(node, session, "rm -f /etc/network/interfaces.new");
+    const undone = readPorts((await deps.console(node, session, PORTS_COMMAND)).output);
+    const left = renames.map((rn) => fileOf(undone, rn.from)).filter((f, i) => proxmoxPin(f, (renames[i] as { to: string }).to));
+    return {
+      node,
+      ok: false,
+      renames: [],
+      already: false,
+      error: left.length
+        ? `${why} BossMox couldn't take its pins back out: remove ${left.join(", ")} before this node restarts.`
+        : `${why} BossMox took the pins back out; nothing changes at the next restart.`,
+    };
   }
 
   return {
@@ -166,7 +205,8 @@ export function createUpgradeFixes(deps: FixDeps) {
      */
     async lvm(session: Session, confirm: string): Promise<LvmResult[]> {
       rootOnly(session);
-      if (confirm !== "lvm-autoactivation") throw new HttpError(400, "It wasn't confirmed.");
+      if (confirm.toLowerCase() !== "confirm") throw new HttpError(400, "Type confirm to turn it off.");
+      notWhileUpgrading();
       return once(async () => {
         const out: LvmResult[] = [];
         for (const node of await deps.onlineNodes(session)) {
@@ -182,7 +222,9 @@ export function createUpgradeFixes(deps: FixDeps) {
 
     /** Pins one node's port names. Nothing changes until that node restarts. */
     async pin(session: Session, node: string, confirm: string): Promise<PinResult> {
+      rootOnly(session);
       if (confirm.toLowerCase() !== node.toLowerCase()) throw new HttpError(400, "Type the node's name to confirm.");
+      notWhileUpgrading();
       return pinRecorded(session, node);
     },
 

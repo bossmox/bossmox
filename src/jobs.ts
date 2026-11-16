@@ -51,6 +51,8 @@ export interface JobsContext {
   macs?: () => Set<string>;
   /** The cluster upgrade's planning and one-node upgrade (ADR 0042, piece 6). Without it, upgrade runs are refused. */
   upgrade?: Pick<RunUpgrade, "plan" | "run">;
+  /** A node being upgraded on its own, outside a run: runs and moves wait for it (it may restart that node). */
+  upgrading?: () => string | null;
 }
 
 /** The MAC addresses of this BossMox's own network cards: the VM that has one of them is BossMox itself. */
@@ -211,8 +213,21 @@ export function createJobs(ctx: JobsContext) {
     };
   }
 
+  function notWhileUpgrading() {
+    const node = ctx.upgrading?.();
+    if (node) throw new HttpError(409, `BossMox is upgrading ${node} to a new Proxmox VE version. Wait for that to finish.`);
+  }
+
+  /** A run or a move that's going, in words, or null: the one-node upgrade waits for either (it restarts a node). */
+  function busy(): string | null {
+    if (currentRun?.running || runState.starting) return "A run is going.";
+    if (moveRecord.job?.running || moveJob.starting) return "BossMox is moving guests.";
+    return null;
+  }
+
   /** Starts a move job in the background. The check and the claim happen before any wait, so two can't start. */
   async function startMoveJob(session: Session, prepare: () => Promise<((deps: MoveDeps) => Promise<void>) | null>): Promise<string | null> {
+    notWhileUpgrading();
     // A run claims the cluster before its first wait, while it plans; that counts as going too (#45).
     if (currentRun?.running || runState.starting) throw new HttpError(409, "An update or restart run is going. Its moves are part of it.");
     if (moveJob.starting || moveRecord.job?.running)
@@ -553,6 +568,7 @@ export function createJobs(ctx: JobsContext) {
       throw new HttpError(400, `Your sign-in ends in ${Math.max(1, Math.round(left / 60000))} minutes, and a run stops when it does. Sign out and in again first, then start it.`);
     if (currentRun?.running || runState.starting) throw new HttpError(409, "A run is already going. Open it to follow or stop it.");
     if (moveRecord.job?.running || moveJob.starting) throw new HttpError(409, "BossMox is moving guests right now. Wait for that to finish.");
+    notWhileUpgrading();
     runState.starting = true;
     try {
       // Discs chosen to come out are planned as already out. Nothing is ejected until every check below passes (#48).
@@ -623,6 +639,7 @@ export function createJobs(ctx: JobsContext) {
     runPlan,
     startRun,
     startMoveJob,
+    busy,
     loadRollingPlan,
     readNetCheck,
     batchFor,

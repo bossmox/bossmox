@@ -464,6 +464,10 @@ test("an upgrade that fails after its restart doesn't start guests again or brin
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "shutdown app", "moveOff n1 1", "upgrade n1"]);
   assert.match(r.error ?? "", /old kernel/);
+  // It says so on the guest itself, not only in the run's error (review 2026-11-16).
+  const app = r.nodes[0]?.vms.find((v) => v.name === "app");
+  assert.equal(app?.state, "off");
+  assert.match(app?.note ?? "", /still off: n1 restarted but didn't pass its checks/);
 });
 
 test("Stop before a node's upgrade leaves it untouched; Stop during one lets it finish", async () => {

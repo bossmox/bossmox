@@ -22,8 +22,11 @@ const EXIT_FILE = "/root/bossmox-upgrade.exit";
 const UNIT = "bossmox-upgrade";
 /** A whole major upgrade, from the first package to the last, on a slow mirror. */
 export const UPGRADE_LIMIT_MS = 2 * 60 * 60 * 1000;
-/** The sign-in has to outlast the upgrade, since every step uses it. */
-export const UPGRADE_NEEDS_MS = 90 * 60 * 1000;
+/**
+ * The sign-in has to outlast the upgrade, since every step uses it: the packages' longest wait, the restart's, and
+ * time for the checks around them. BossMox keeps the Proxmox login fresh while the upgrade runs, browser open or not.
+ */
+export const UPGRADE_NEEDS_MS = 3 * 60 * 60 * 1000;
 
 /** Failures alone don't stop it: only what the explainer says blocks (ADR 0042; the 9 checker fails on no microcode). */
 export interface CheckerCounts {
@@ -44,6 +47,7 @@ export const FOLLOW_SCRIPT = `if systemctl is-active --quiet ${UNIT}; then echo 
 if [ -f ${EXIT_FILE} ]; then echo "BMXUP exit $(cat ${EXIT_FILE})"; else echo "BMXUP noexit"; fi
 grep -o "Configuration file '[^']*'" ${UPGRADE_LOG} 2>/dev/null | sort -u
 grep -E "^(E: |dpkg: error|Errors were encountered)" ${UPGRADE_LOG} 2>/dev/null | tail -n 10 | sed 's/^/BMXERR /'
+[ -n "$(dpkg --audit 2>/dev/null)" ] && echo "BMXUP unfinished-packages"
 `;
 
 /**
@@ -65,6 +69,8 @@ export const upgradeCommand = () => asCommand(UPGRADE_SCRIPT);
 export const followCommand = () => asCommand(FOLLOW_SCRIPT);
 
 export interface UpgradeRead {
+  /** dpkg has packages it didn't finish installing: the node must not restart like that. */
+  unfinished?: boolean;
   state: "running" | "ended" | "unknown";
   /** apt's exit code; null when the job ended without writing one (killed). */
   exitCode: number | null;
@@ -74,6 +80,10 @@ export interface UpgradeRead {
 export function readUpgrade(output: string): UpgradeRead {
   const keptConfig = keptConfigFiles(output);
   const errors = [...output.matchAll(/^BMXERR (.*)$/gm)].map((m) => (m[1] as string).trim());
+  if (/^BMXUP unfinished-packages\s*$/m.test(output)) {
+    const code = /^BMXUP exit (\d+)\s*$/m.exec(output);
+    return { state: "ended", exitCode: code ? Number(code[1]) : null, keptConfig, errors, unfinished: true };
+  }
   if (/^BMXUP running\s*$/m.test(output)) return { state: "running", exitCode: null, keptConfig, errors };
   const code = /^BMXUP exit (\d+)\s*$/m.exec(output);
   if (code) return { state: "ended", exitCode: Number(code[1]), keptConfig, errors };
@@ -123,6 +133,8 @@ export interface NodeUpgradeDeps {
   reboot: (session: Session, node: string) => Promise<void>;
   sources: { busy(): boolean; forget(node: string): void };
   audit: (event: string, who: string, detail: Record<string, string | number>) => void;
+  /** Another job that moves guests or restarts nodes (a run, a move), if one is going. The cluster run's own call skips it. */
+  busy?: () => string | null;
   pause?: (ms: number) => Promise<void>;
   now?: () => number;
 }
@@ -134,6 +146,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
   const pause = deps.pause ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const state: Record<string, NodeUpgrade> = {};
   let running: string | null = null;
+  let runningSession: Session | null = null;
   const enc = encodeURIComponent;
 
   /** Proxmox's API restarts during the upgrade and after the reboot, so a read gets a few tries. */
@@ -158,22 +171,56 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
 
   /** Runs the upgrade, then follows it until it ends, through a dropped console or a restart of Proxmox's API. */
   async function upgrade(session: Session, node: string): Promise<UpgradeRead> {
-    const until = now() + UPGRADE_LIMIT_MS;
     let read: UpgradeRead | null = null;
     try {
       read = readUpgrade((await deps.console(node, session, upgradeCommand(), UPGRADE_LIMIT_MS)).output);
     } catch {
       // The console went (pveproxy restarts mid-upgrade). The job carries on; ask it below.
     }
+    return untilEnded(session, node, read);
+  }
+  const ask = (session: Session, node: string) =>
+    deps.console(node, session, followCommand()).then(
+      (r) => readUpgrade(r.output),
+      () => null,
+    );
+  async function untilEnded(session: Session, node: string, first: UpgradeRead | null): Promise<UpgradeRead> {
+    const until = now() + UPGRADE_LIMIT_MS;
+    let read = first;
     while (read?.state !== "ended") {
       if (now() > until) throw new Error(`The upgrade on ${node} hasn't finished after ${UPGRADE_LIMIT_MS / 3600000} hours. It carries on there by itself; its log is ${UPGRADE_LOG}.`);
       await pause(30_000);
-      read = await deps.console(node, session, followCommand()).then(
-        (r) => readUpgrade(r.output),
-        () => null,
-      );
+      read = await ask(session, node);
     }
     return read as UpgradeRead;
+  }
+  const packagesFailed = (node: string, r: UpgradeRead) =>
+    new Error(
+      `The package upgrade on ${node} ended with an error (${r.exitCode === null ? "it was stopped" : `apt exit code ${r.exitCode}`}), so it wasn't restarted.${r.errors.length ? ` apt said: ${r.errors.join(" ")}` : ""} The whole log is ${UPGRADE_LOG} on ${node}.`,
+    );
+  const unfinishedPackages = (node: string) =>
+    new Error(`dpkg on ${node} has packages it didn't finish installing, so it wasn't restarted. Run dpkg --configure -a in ${node}'s shell, then try again. The log is ${UPGRADE_LOG}.`);
+
+  /**
+   * Right before the restart, read again what was true at the start: a guest may have arrived (HA, or someone), and
+   * the cluster must still hold its majority without this node.
+   */
+  async function stillSafe(session: Session, node: string) {
+    const t = session.ticket;
+    const [cluster, nodes, guests] = await Promise.all([
+      settled(() => deps.pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", t)),
+      settled(() => deps.pve.get<RawResource[]>("/cluster/resources?type=node", t)),
+      settled(() => deps.pve.get<RawResource[]>("/cluster/resources?type=vm", t)),
+    ]);
+    const c = cluster.find((x) => x.type === "cluster");
+    if (c && c.quorate !== 1) throw new Error(`The cluster lost its majority during the upgrade, so ${node} wasn't restarted.`);
+    const off = nodes.filter((n) => n.node !== node && n.status !== "online").map((n) => n.node);
+    if (off.length) throw new Error(`${off.join(", ")} went offline during the upgrade, so ${node} wasn't restarted.`);
+    const on = guests.filter((g) => g.node === node && g.template !== 1 && (g.status === "running" || g.status === "paused"));
+    if (on.length)
+      throw new Error(
+        `${on.map((g) => g.name ?? `${g.vmid}`).join(", ")} ${on.length === 1 ? "is" : "are"} running on ${node} now, so it wasn't restarted. Move or shut down, then upgrade it again to finish.`,
+      );
   }
 
   async function drive(session: Session, job: NodeUpgrade, major: number) {
@@ -193,12 +240,16 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
         deps.audit("upgrade-node-start", session.username, { node, to: job.to });
         const r = await upgrade(session, node);
         job.keptConfig = r.keptConfig;
-        if (r.exitCode !== 0)
-          throw new Error(
-            `The package upgrade on ${node} ended with an error (${r.exitCode === null ? "it was stopped" : `apt exit code ${r.exitCode}`}), so it wasn't restarted.${r.errors.length ? ` apt said: ${r.errors.join(" ")}` : ""} The whole log is ${UPGRADE_LOG} on ${node}.`,
-          );
+        if (r.exitCode !== 0) throw packagesFailed(node, r);
+        if (r.unfinished) throw unfinishedPackages(node);
       } else {
         deps.audit("upgrade-node-finish", session.username, { node, to: job.to });
+        // BossMox's own package job may still be going there (BossMox restarted part way): wait for it, and never
+        // finish over one that failed or left packages half in. No job there (upgraded by hand) reads as ended.
+        const r = await untilEnded(session, node, await ask(session, node));
+        job.keptConfig = r.keptConfig;
+        if (r.exitCode !== null && r.exitCode !== 0) throw packagesFailed(node, r);
+        if (r.unfinished) throw unfinishedPackages(node);
       }
 
       phase("rechecking");
@@ -211,6 +262,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
       job.after = await checker(session, node, major);
       if (job.after.blocking.length) throw new Error(`After the packages, Proxmox's checker found ${listed(job.after.blocking)} on ${node}, so it wasn't restarted.`);
 
+      await stillSafe(session, node);
       phase("pinning");
       job.pins = await deps.pin(session, node);
       if (!job.pins.ok) throw new Error(`Pinning the port names didn't work, so ${node} wasn't restarted: ${job.pins.error}`);
@@ -242,23 +294,29 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
     } finally {
       job.finishedAt = now();
       running = null;
+      runningSession = null;
     }
   }
 
   const api = {
     view: () => state,
     running: () => running,
+    /** Whose upgrade is going: BossMox keeps that person's Proxmox login fresh until it ends, browser open or not. */
+    session: () => runningSession,
 
     /** Checks everything that can be checked up front, then upgrades in the background. The page follows view(). */
-    async start(session: Session, node: string, confirm: string): Promise<NodeUpgrade> {
+    async start(session: Session, node: string, confirm: string, inRun = false): Promise<NodeUpgrade> {
       if (session.username !== "root@pam") throw new HttpError(403, "The upgrade runs in the node's root console. Sign in as root@pam.");
       if (confirm.toLowerCase() !== node.toLowerCase()) throw new HttpError(400, "Type the node's name to confirm.");
       if (running) throw new HttpError(409, `BossMox is already upgrading ${running}. One node at a time.`);
+      const other = inRun ? null : deps.busy?.();
+      if (other) throw new HttpError(409, `${other} Wait for it to finish, or upgrade from Upgrade all nodes.`);
       if (deps.sources.busy()) throw new HttpError(409, "BossMox is changing a node's update sources. Wait for that to finish.");
       const left = session.expiresAt - now();
       if (left < UPGRADE_NEEDS_MS)
         throw new HttpError(400, `Your sign-in ends in ${Math.max(1, Math.round(left / 60000))} minutes, and the upgrade needs it until the end. Sign out and in again first.`);
       running = node;
+      runningSession = session;
       try {
         const t = session.ticket;
         const base = `/nodes/${enc(node)}`;
@@ -313,6 +371,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
         return job;
       } catch (err) {
         running = null;
+        runningSession = null;
         throw err;
       }
     },
@@ -322,7 +381,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
      * the job once it has ended, done or failed; rejects only when it was refused up front.
      */
     async runOne(session: Session, node: string): Promise<NodeUpgrade> {
-      const job = await api.start(session, node, node);
+      const job = await api.start(session, node, node, true);
       while (job.finishedAt === null) await pause(5_000);
       return job;
     },
@@ -343,7 +402,7 @@ export interface PlannedUpgrade {
 
 export interface RunUpgradeDeps {
   pve: { get<T>(path: string, ticket: string): Promise<T> };
-  sources: Pick<UpgradeSources, "switchNode">;
+  sources: Pick<UpgradeSources, "switchNode" | "undo" | "view">;
   nodes: Pick<NodeUpgradeJob, "runOne">;
   ready: () => Readiness;
   now?: () => number;
@@ -390,6 +449,17 @@ export function createRunUpgrade(deps: RunUpgradeDeps) {
     /** One node: its sources switched if they aren't yet, then the one-node upgrade to its end. Never throws. */
     async run(session: Session, node: string): Promise<UpgradeResult> {
       const fail = (error: string): UpgradeResult => ({ restarted: false, error, keptConfig: [], version: null, kernel: null });
+      let switchedNow = false;
+      /** The sources backup is forgotten once the packages start: while it's still there, nothing else changed. */
+      const putBack = async (error: string): Promise<string> => {
+        if (!switchedNow || !deps.sources.view()[node]?.backup) return error;
+        try {
+          const s = await deps.sources.undo(session, node, node);
+          return s.error ? `${error} Its update sources are still on the new release: ${s.error}` : `${error} Its update sources were put back.`;
+        } catch (err) {
+          return `${error} Its update sources are still on the new release: ${(err as Error).message} Put them back from the upgrade window.`;
+        }
+      };
       try {
         const n = await read(session.ticket, node);
         if (!n.finishing) {
@@ -400,12 +470,14 @@ export function createRunUpgrade(deps: RunUpgradeDeps) {
           if (switched(repos, from).length || !onRelease(repos, to)) {
             const s = await deps.sources.switchNode(session, node, node, from, to);
             if (s.error) return fail(`${node}'s update sources weren't switched: ${s.error}`);
+            switchedNow = true;
           }
         }
         const job = await deps.nodes.runOne(session, node);
-        return { restarted: job.restarted, error: job.error, keptConfig: job.keptConfig, version: job.version, kernel: job.kernel };
+        const error = job.error && !job.restarted ? await putBack(job.error) : job.error;
+        return { restarted: job.restarted, error, keptConfig: job.keptConfig, version: job.version, kernel: job.kernel };
       } catch (err) {
-        return fail((err as Error).message || "BossMox lost contact with Proxmox.");
+        return fail(await putBack((err as Error).message || "BossMox lost contact with Proxmox."));
       }
     },
   };

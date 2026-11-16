@@ -342,6 +342,10 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
       } catch (err) {
         // Ended before the restart: start again what was shut down for it, so nothing stays off for a restart
         // that never came. (Live 2026-11-11, Stop during emptying left a container off.)
+        // Restarted for an upgrade that then didn't pass its checks: what was shut down stays off until someone has
+        // looked at the node, and each says so.
+        if (node.phase === "upgrading" && rebootAsked)
+          for (const vm of node.vms.filter((v) => v.state === "off")) vm.note = `still off: ${node.name} restarted but didn't pass its checks; start it once the node looks right`;
         if (node.phase === "emptying" || node.phase === "installing" || ((node.phase === "restarting" || node.phase === "upgrading") && !rebootAsked)) {
           for (const vm of node.vms.filter((v) => v.state === "off")) {
             try {
