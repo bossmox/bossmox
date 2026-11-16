@@ -63,9 +63,7 @@ const CHECK_FAIL = "= SUMMARY =\n\nTOTAL:    40\nPASSED:   36\nSKIPPED:  0\nWARN
 const CHECK_AFTER_VM = readFileSync(new URL("../../test/pve8to9-9.2-after-packages.txt", import.meta.url), "utf8");
 const CHECK_AFTER_UNKNOWN = "FAIL: something new went wrong\n\n= SUMMARY =\n\nTOTAL:    40\nPASSED:   39\nSKIPPED:  0\nWARNINGS: 0\nFAILURES: 1\n";
 
-function lab(
-  over: { guests?: unknown[]; repos?: RawRepositories; apt?: string[]; pinOk?: boolean; kernelAfter?: string; checkerBefore?: string; checkerAfter?: string } = {},
-) {
+function lab(over: { guests?: unknown[]; repos?: RawRepositories; apt?: string[]; pinOk?: boolean; kernelAfter?: string; checkerBefore?: string; checkerAfter?: string } = {}) {
   const calls: string[] = [];
   let upgraded = false;
   let rebooted = false;

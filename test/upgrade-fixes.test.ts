@@ -124,7 +124,51 @@ test("if another file would still win, the pins are taken back out before anythi
   const r = await s.fixes.pin(root, "node3", "node3");
   assert.equal(r.ok, false);
   assert.match(r.error ?? "", /ens19 \(named by \/etc\/systemd\/network\/05-mine\.link\)/);
-  assert.equal(s.typed.at(-1), "rm -f /usr/local/lib/systemd/network/50-pve-nic0.link && rm -f /etc/network/interfaces.new");
+  assert.match(r.error ?? "", /took the pins back out/);
+  const undo = s.typed.at(-2);
+  assert.equal(undo, "rm -f /usr/local/lib/systemd/network/50-pve-nic0.link /usr/local/lib/systemd/network/50-pmx-nic0.link && rm -f /etc/network/interfaces.new");
+  assert.equal(s.typed.at(-1), PORTS_COMMAND, "udev is asked again after the undo");
+});
+
+test("Proxmox 9's pinning tool names its file 50-pmx: that's its own pin, not another file (lab, 2026-11-16)", async () => {
+  const s = pinSetup("BMXPORT ens19 bc:24:11:e2:ef:f8 /usr/local/lib/systemd/network/50-pmx-nic0.link yes\nBMXPORT eth0 bc:24:11:9c:d5:39 /etc/systemd/network/10-eth0.link yes\n");
+  const r = await s.fixes.pin(root, "node3", "node3");
+  assert.equal(r.ok, true, r.error ?? "");
+  assert.deepEqual(r.renames, [{ from: "ens19", to: "nic0" }]);
+  assert.ok(!s.typed.some((t) => t.startsWith("rm -f")), "nothing is undone");
+});
+
+test("a 9 pin made earlier counts as Proxmox's own, so the port isn't kept as if another file named it", async () => {
+  const fixes = createUpgradeFixes({
+    console: async () => out("BMXPORT ens19 aa:bb /usr/local/lib/systemd/network/50-pmx-nic0.link yes\n"),
+    onlineNodes: async () => [],
+    audit: () => {},
+  });
+  const r = await fixes.pin(root, "node3", "node3");
+  assert.equal(r.already, true);
+  assert.deepEqual(r.kept, []);
+});
+
+test("if the pins can't be taken back out, it says which file to remove instead of claiming it did", async () => {
+  const typed: string[] = [];
+  let listings = 0;
+  const lost = "BMXPORT ens19 bc:24:11:46:2b:12 /etc/systemd/network/05-mine.link yes\n";
+  const still = "BMXPORT ens19 bc:24:11:46:2b:12 /usr/local/lib/systemd/network/50-pmx-nic0.link yes\n";
+  const fixes = createUpgradeFixes({
+    console: async (_node, _s, line) => {
+      typed.push(line);
+      if (line === PORTS_COMMAND) return out([LAB_PORTS, lost, still][listings++] ?? still);
+      if (line.startsWith("test -e")) return out("", 1);
+      if (line === pinCommand("ens19")) return out(ENS19_PINNED);
+      return out("");
+    },
+    onlineNodes: async () => ["node3"],
+    audit: () => {},
+  });
+  const r = await fixes.pin(root, "node3", "node3");
+  assert.equal(r.ok, false);
+  assert.match(r.error ?? "", /couldn't take its pins back out: remove \/usr\/local\/lib\/systemd\/network\/50-pmx-nic0\.link/);
+  assert.doesNotMatch(r.error ?? "", /took the pins back out/);
 });
 
 test("a node whose ports are all named already needs nothing", async () => {

@@ -32,7 +32,7 @@ export interface CheckerCounts {
 }
 const listed = (b: string[]) => `${b.length} ${b.length === 1 ? "problem" : "problems"} (${b.join("; ")})`;
 
-const asCommand =(script: string) => `printf '%s' '${Buffer.from(script, "utf8").toString("base64")}' | base64 -d | bash`;
+const asCommand = (script: string) => `printf '%s' '${Buffer.from(script, "utf8").toString("base64")}' | base64 -d | bash`;
 
 /**
  * Where the upgrade is, read on the node: running, or ended with apt's exit code, plus the config files dpkg kept and

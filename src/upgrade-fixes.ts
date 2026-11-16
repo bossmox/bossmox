@@ -19,7 +19,7 @@ export const pinCommand = (port: string) => `printf 'y\\n' | pve-network-interfa
 
 /**
  * Which naming file udev applies to each physical port, asked in udev's test mode, which changes nothing. Proxmox's
- * pinning tool only knows its own 50-pve files: an earlier file that names the port (cloud-init's 10-eth0.link, or a
+ * pinning tool only knows its own 50-pve (9: 50-pmx) files: an earlier file that names the port (cloud-init's 10-eth0.link, or a
  * pin made by hand) wins over it, and the bridge then points at a name that never appears. Seen on the lab,
  * 2026-11-13: the node came back without its main network.
  */
@@ -40,12 +40,18 @@ export interface Port {
 export function readPorts(output: string): Port[] {
   return [...output.matchAll(/^BMXPORT (\S+) (\S+) (\S+) (yes|no)\s*$/gm)].map((m) => ({ name: m[1] as string, mac: m[2] as string, file: m[3] as string, named: m[4] === "yes" }));
 }
+/**
+ * Proxmox's pinning tool names its files 50-pve-<name>.link on 8.4 and 50-pmx-<name>.link on 9 (seen on the lab,
+ * 2026-11-16). The upgrade pins after the 9 packages are in, so both have to count as Proxmox's own.
+ */
+const PIN_DIR = "/usr/local/lib/systemd/network";
+const proxmoxPin = (file: string, name = "[^/]+") => new RegExp(`/50-p(?:ve|mx)-${name}\\.link$`).test(file);
 /** A port only Proxmox's own pin may name: anything else that names it already keeps the name stable. */
-const pinnedByProxmox = (p: Port) => /\/50-pve-[^/]+\.link$/.test(p.file);
+const pinnedByProxmox = (p: Port) => proxmoxPin(p.file);
 
-/** Undoes this run's pins before any restart: its .link files and the pending network config it made. */
+/** Undoes this run's pins before any restart: its .link files, under either of the tool's names, and the pending network config it made. */
 export const undoPinCommand = (names: string[], hadPending: boolean) =>
-  [...names.map((n) => `rm -f /usr/local/lib/systemd/network/50-pve-${n}.link`), ...(hadPending ? [] : ["rm -f /etc/network/interfaces.new"])].join(" && ");
+  [...names.map((n) => `rm -f ${PIN_DIR}/50-pve-${n}.link ${PIN_DIR}/50-pmx-${n}.link`), ...(hadPending ? [] : ["rm -f /etc/network/interfaces.new"])].join(" && ");
 
 export interface LvmResult {
   node: string;
@@ -122,7 +128,8 @@ export function createUpgradeFixes(deps: FixDeps) {
       renames.push(...r.renames);
     }
     const after = readPorts((await deps.console(node, session, PORTS_COMMAND)).output);
-    const wrong = renames.filter((rn) => !after.find((p) => p.name === rn.from)?.file.endsWith(`/50-pve-${rn.to}.link`));
+    const fileOf = (ports: Port[], name: string) => ports.find((p) => p.name === name)?.file ?? "";
+    const wrong = renames.filter((rn) => !proxmoxPin(fileOf(after, rn.from), rn.to));
     if (wrong.length) {
       await deps.console(
         node,
@@ -132,14 +139,19 @@ export function createUpgradeFixes(deps: FixDeps) {
           pending,
         ),
       );
-      const why = wrong.map((rn) => `${rn.from} (named by ${after.find((p) => p.name === rn.from)?.file ?? "another file"})`).join(", ");
+      const why = wrong.map((rn) => `${rn.from} (named by ${fileOf(after, rn.from) || "another file"})`).join(", ");
+      // Ask udev once more: "took them back out" is only said when no pin of this run still applies.
+      const undone = readPorts((await deps.console(node, session, PORTS_COMMAND)).output);
+      const left = renames.map((rn) => fileOf(undone, rn.from)).filter((f, i) => proxmoxPin(f, (renames[i] as { to: string }).to));
       return {
         node,
         ok: false,
         renames: [],
         already: false,
         kept,
-        error: `Another naming file would win over the new pin for ${why}, so the node would come back without that network. BossMox took the pins back out; nothing changes at the next restart.`,
+        error: left.length
+          ? `Another naming file would win over the new pin for ${why}, so the node would come back without that network. BossMox couldn't take its pins back out: remove ${left.join(", ")} before this node restarts.`
+          : `Another naming file would win over the new pin for ${why}, so the node would come back without that network. BossMox took the pins back out; nothing changes at the next restart.`,
       };
     }
     return { node, ok: true, renames, already: false, kept, error: null };
