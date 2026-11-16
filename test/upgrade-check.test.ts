@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { attention, explain, parseChecker } from "../src/upgrade-check.js";
+import { attention, blockers, explain, parseChecker } from "../src/upgrade-check.js";
 
 /** pve8to9 --full on a Proxmox 8.4.21 lab node with shared LVM over iSCSI, names and address changed. */
 const LAB = readFileSync(new URL("../../test/pve8to9-8.4-shared-lvm.txt", import.meta.url), "utf8");
@@ -43,6 +43,29 @@ test("what needs attention is explained in plain words, with who deals with it",
       ["WARN", "advice", "No processor microcode package"],
     ],
   );
+});
+
+/** pve8to9 --full on a lab VM after the 9 packages went in, before the restart (2026-11-16), names and address changed. */
+const AFTER = readFileSync(new URL("../../test/pve8to9-9.2-after-packages.txt", import.meta.url), "utf8");
+
+test("the 9 checker's missing-microcode failure is advice, so it doesn't stop the restart", () => {
+  const run = parseChecker(AFTER);
+  assert.equal(run.summary?.failures, 1);
+  const fail = attention(run).filter((e) => e.level === "FAIL");
+  assert.deepEqual(
+    fail.map((e) => [e.handling, e.title]),
+    [["advice", "No processor microcode package"]],
+  );
+  assert.deepEqual(blockers(run), []);
+});
+
+test("what blocks: explained blockers, plus any failure the summary counts that wasn't read", () => {
+  const unknown = parseChecker("FAIL: something new went wrong\n\n= SUMMARY =\n\nTOTAL: 2\nPASSED: 1\nSKIPPED: 0\nWARNINGS: 0\nFAILURES: 1\n");
+  assert.deepEqual(blockers(unknown), ["something new went wrong"]);
+  const unread = parseChecker("= SUMMARY =\n\nTOTAL: 2\nPASSED: 1\nSKIPPED: 0\nWARNINGS: 0\nFAILURES: 1\n");
+  assert.deepEqual(blockers(unread), ["a failure BossMox couldn't read"]);
+  const extra = parseChecker(AFTER.replace(/FAILURES: 1/, "FAILURES: 2"));
+  assert.deepEqual(blockers(extra), ["a failure BossMox couldn't read"]);
 });
 
 test("a failure BossMox doesn't know still blocks, in Proxmox's words", () => {

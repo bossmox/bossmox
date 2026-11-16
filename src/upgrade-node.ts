@@ -11,7 +11,7 @@ import type { RawResource } from "./model.js";
 import { keptConfigFiles, type ShellResult } from "./node-shell.js";
 import { releaseMismatch } from "./release-guard.js";
 import type { RawRepositories, RawStatus } from "./server-detail.js";
-import { parseChecker } from "./upgrade-check.js";
+import { blockers, parseChecker } from "./upgrade-check.js";
 import type { PinResult } from "./upgrade-fixes.js";
 import { ROOT_MIN_GB } from "./upgrade-ready.js";
 import { PROXMOX_URI, switched } from "./upgrade-sources.js";
@@ -24,7 +24,15 @@ export const UPGRADE_LIMIT_MS = 2 * 60 * 60 * 1000;
 /** The sign-in has to outlast the upgrade, since every step uses it. */
 export const UPGRADE_NEEDS_MS = 90 * 60 * 1000;
 
-const asCommand = (script: string) => `printf '%s' '${Buffer.from(script, "utf8").toString("base64")}' | base64 -d | bash`;
+/** Failures alone don't stop it: only what the explainer says blocks (ADR 0042; the 9 checker fails on no microcode). */
+export interface CheckerCounts {
+  warnings: number;
+  failures: number;
+  blocking: string[];
+}
+const listed = (b: string[]) => `${b.length} ${b.length === 1 ? "problem" : "problems"} (${b.join("; ")})`;
+
+const asCommand =(script: string) => `printf '%s' '${Buffer.from(script, "utf8").toString("base64")}' | base64 -d | bash`;
 
 /**
  * Where the upgrade is, read on the node: running, or ended with apt's exit code, plus the config files dpkg kept and
@@ -87,9 +95,9 @@ export interface NodeUpgrade {
   finishedAt: number | null;
   /** Where it stopped and why. */
   error: string | null;
-  /** The checker's counts, before and after the packages. */
-  before: { warnings: number; failures: number } | null;
-  after: { warnings: number; failures: number } | null;
+  /** The checker's counts, before and after the packages, and what in them stops the upgrade. */
+  before: CheckerCounts | null;
+  after: CheckerCounts | null;
   keptConfig: string[];
   pins: PinResult | null;
   kernelBefore: string | null;
@@ -133,11 +141,12 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
     }
   }
 
-  async function checker(session: Session, node: string, major: number) {
+  async function checker(session: Session, node: string, major: number): Promise<CheckerCounts> {
     const r = await deps.console(node, session, `pve${major}to${major + 1} --full`);
-    const s = parseChecker(r.output).summary;
+    const run = parseChecker(r.output);
+    const s = run.summary;
     if (!s) throw new Error(`Proxmox's checker didn't finish on ${node} (exit code ${r.exitCode}).`);
-    return { warnings: s.warnings, failures: s.failures };
+    return { warnings: s.warnings, failures: s.failures, blocking: blockers(run) };
   }
 
   /** Runs the upgrade, then follows it until it ends, through a dropped console or a restart of Proxmox's API. */
@@ -168,7 +177,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
     };
     try {
       job.before = await checker(session, node, major);
-      if (job.before.failures) throw new Error(`Proxmox's checker found ${job.before.failures} ${job.before.failures === 1 ? "failure" : "failures"} on ${node}. Nothing was changed; fix them first.`);
+      if (job.before.blocking.length) throw new Error(`Proxmox's checker found ${listed(job.before.blocking)} on ${node}. Nothing was changed; fix them first.`);
 
       phase("upgrading");
       // From here the old sources must never go back.
@@ -189,8 +198,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
       const left = await settled(() => deps.pve.get<unknown[]>(`/nodes/${enc(node)}/apt/update`, t()));
       if (left.length) throw new Error(`${left.length} ${left.length === 1 ? "package is" : "packages are"} still waiting on ${node} after the upgrade, so it wasn't restarted.`);
       job.after = await checker(session, node, major);
-      if (job.after.failures)
-        throw new Error(`After the packages, Proxmox's checker found ${job.after.failures} ${job.after.failures === 1 ? "failure" : "failures"} on ${node}, so it wasn't restarted.`);
+      if (job.after.blocking.length) throw new Error(`After the packages, Proxmox's checker found ${listed(job.after.blocking)} on ${node}, so it wasn't restarted.`);
 
       phase("pinning");
       job.pins = await deps.pin(session, node);

@@ -99,6 +99,16 @@ const KNOWN: { match: RegExp; explain: (f: Finding, m: RegExpExecArray) => Omit<
     explain: (f) => ({ title: "Disks with autoactivation on", detail: f.text, handling: "advice" }),
   },
   {
+    // Proxmox VE 9's checker adds this FAIL beside the WARN below when the package isn't there (8.4's only warned).
+    // Every VM and any real node without the package hits it; it says nothing about whether the upgrade works.
+    match: /unable to determine installed ([\w-]*microcode) version/,
+    explain: (_f, m) => ({
+      title: "No processor microcode package",
+      detail: `Proxmox VE 9's checker counts a missing ${m[1]} as a failure, but it doesn't stop the upgrade. The package carries security fixes for the processor, from Debian's non-free-firmware section, and can be installed any time. On a virtual machine it does nothing.`,
+      handling: "advice",
+    }),
+  },
+  {
     match: /microcode package '([\w-]+)' could not be found/,
     explain: (_f, m) => ({
       title: "No processor microcode package",
@@ -131,4 +141,17 @@ export function explain(f: Finding): Explained {
 /** What needs the person's attention: failures, warnings and notices, explained. Passes and info stay out of the way. */
 export function attention(run: CheckerRun): Explained[] {
   return run.findings.filter((f) => f.level === "FAIL" || f.level === "WARN" || f.level === "NOTICE").map(explain);
+}
+
+/**
+ * What stops an upgrade step: every finding explained as 'blocks', plus any failure the summary counts that wasn't
+ * read as a FAIL line, so a line the reader missed still stops it. Known harmless failures (microcode) don't.
+ */
+export function blockers(run: CheckerRun): string[] {
+  const out = attention(run)
+    .filter((e) => e.handling === "blocks")
+    .map((e) => e.title);
+  const unread = (run.summary?.failures ?? 0) - run.findings.filter((f) => f.level === "FAIL").length;
+  for (let i = 0; i < unread; i++) out.push("a failure BossMox couldn't read");
+  return out;
 }

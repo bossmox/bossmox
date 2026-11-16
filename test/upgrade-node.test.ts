@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import type { Session } from "../src/auth.js";
 import type { RawRepositories } from "../src/server-detail.js";
@@ -58,7 +59,13 @@ const CHECK_OK = "= SUMMARY =\n\nTOTAL:    40\nPASSED:   37\nSKIPPED:  0\nWARNIN
 const CHECK_FAIL = "= SUMMARY =\n\nTOTAL:    40\nPASSED:   36\nSKIPPED:  0\nWARNINGS: 3\nFAILURES: 1\n";
 
 /** A fake cluster: node2 on 8.4 with its sources switched and nothing running, which turns 9 after the packages. */
-function lab(over: { guests?: unknown[]; repos?: RawRepositories; apt?: string[]; pinOk?: boolean; kernelAfter?: string; checkerBefore?: string } = {}) {
+/** The real 9 checker on a VM after the packages: 1 failure, the missing microcode package. */
+const CHECK_AFTER_VM = readFileSync(new URL("../../test/pve8to9-9.2-after-packages.txt", import.meta.url), "utf8");
+const CHECK_AFTER_UNKNOWN = "FAIL: something new went wrong\n\n= SUMMARY =\n\nTOTAL:    40\nPASSED:   39\nSKIPPED:  0\nWARNINGS: 0\nFAILURES: 1\n";
+
+function lab(
+  over: { guests?: unknown[]; repos?: RawRepositories; apt?: string[]; pinOk?: boolean; kernelAfter?: string; checkerBefore?: string; checkerAfter?: string } = {},
+) {
   const calls: string[] = [];
   let upgraded = false;
   let rebooted = false;
@@ -89,7 +96,7 @@ function lab(over: { guests?: unknown[]; repos?: RawRepositories; apt?: string[]
     console: async (_node, _s, line) => {
       if (line.startsWith("pve8to9")) {
         calls.push(upgraded ? "checker-after" : "checker");
-        return out(upgraded ? CHECK_OK : (over.checkerBefore ?? CHECK_OK));
+        return out(upgraded ? (over.checkerAfter ?? CHECK_OK) : (over.checkerBefore ?? CHECK_OK));
       }
       calls.push("upgrade");
       upgraded = true;
@@ -149,8 +156,21 @@ test("a checker failure before the packages changes nothing, not even the way ba
   assert.deepEqual(calls, ["checker"]);
 });
 
+test("the 9 checker's missing-microcode failure doesn't stop the restart (it's on every VM)", async () => {
+  const { deps, calls } = lab({ checkerAfter: CHECK_AFTER_VM });
+  const job = createNodeUpgrade(deps);
+  await job.start(root(), "n2", "n2");
+  const r = await finish(job, "n2");
+  assert.equal(r?.phase, "done", r?.error ?? "");
+  assert.deepEqual(calls, ["checker", "forget", "upgrade", "checker-after", "pin", "reboot"]);
+  assert.equal(r?.after?.failures, 1);
+  assert.deepEqual(r?.after?.blocking, []);
+});
+
 test("never restarts after a step that didn't finish", async () => {
   const cases: [Parameters<typeof lab>[0], RegExp][] = [
+    [{ checkerAfter: CHECK_AFTER_UNKNOWN }, /found 1 problem \(something new went wrong\).*wasn't restarted/],
+    [{ checkerAfter: CHECK_FAIL }, /found 1 problem \(a failure BossMox couldn't read\)/],
     [{ pinOk: false }, /Pinning the port names didn't work/],
     [{ apt: ["pve-manager"] }, /1 package is still waiting/],
   ];

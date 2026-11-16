@@ -1,0 +1,127 @@
+= CHECKING VERSION INFORMATION FOR PVE PACKAGES =
+
+Checking for package updates..
+[33mWARN: updates for the following packages are available:
+  pve-docs, proxmox-widget-toolkit, libpve-rs-perl, pve-qemu-kvm, libproxmox-acme-perl, swtpm-libs, swtpm-tools, libpve-storage-perl, libpve-guest-common-perl, proxmox-kernel-7.0, proxmox-kernel-7.0.14-29-pve-signed, swtpm, proxmox-backup-file-restore, ifupdown2, libpve-access-control, pve-container, libproxmox-acme-plugins, proxmox-backup-client, libpve-network-api-perl, proxmox-firewall, pve-manager, libpve-common-perl, libpve-network-perl
+[0m
+Checking proxmox-ve package version..
+[32mPASS: already upgraded to Proxmox VE 9
+[0m
+Checking running kernel version..
+[33mWARN: a suitable kernel (proxmox-kernel-7.0) is installed, but an unsuitable (6.8.12-43-pve) is booted, missing reboot?!
+[0m
+= CHECKING CLUSTER HEALTH/SETTINGS =
+
+[32mPASS: systemd unit 'pve-cluster.service' is in state 'active'
+[0m[32mPASS: systemd unit 'corosync.service' is in state 'active'
+[0m[32mPASS: Cluster Filesystem is quorate.
+[0m
+Analzying quorum settings and state..
+INFO: configured votes - nodes: 3
+[0mINFO: configured votes - qdevice: 0
+[0mINFO: current expected votes: 3
+[0mINFO: current total votes: 3
+[0m
+Checking nodelist entries..
+[32mPASS: nodelist settings OK
+[0m
+Checking totem settings..
+[32mPASS: totem settings OK
+[0m
+INFO: run 'pvecm status' to get detailed cluster status..
+[0m
+= CHECKING HYPER-CONVERGED CEPH STATUS =
+
+SKIP: no hyper-converged ceph setup detected!
+[0m
+= CHECKING CONFIGURED STORAGES =
+
+[32mPASS: storage 'ISCSI_SHARE' enabled and active.
+[0m[32mPASS: storage 'SAN-TEST' enabled and active.
+[0m[32mPASS: storage 'local' enabled and active.
+[0mINFO: Checking storage content type configuration..
+[0m[32mPASS: no storage content problems found
+[0m[32mPASS: no storage reuses a directory for multiple content types.
+[0mINFO: Check for usage of native GlusterFS storage plugin...
+[0m[32mPASS: No GlusterFS storage found.
+[0mINFO: Checking whether all external RBD storages have the 'keyring' option configured
+[0mSKIP: No RBD storage configured.
+[0m
+= VIRTUAL GUEST CHECKS =
+
+SKIP: Skipping check for running guests - already upgraded.
+[0mINFO: Checking if LXCFS is running with FUSE3 library, if already upgraded..
+[0m[32mPASS: systems seems to be upgraded and LXCFS is running with FUSE 3 library
+[0mINFO: Checking for VirtIO devices that would change their MTU...
+[0m[32mPASS: All guest config descriptions fit in the new limit of 8 KiB
+[0mINFO: Checking container configs for deprecated lxc.cgroup entries
+[0m[32mPASS: No legacy 'lxc.cgroup' keys found.
+[0mINFO: Checking VM configurations for outdated machine versions
+[0m[32mPASS: All VM machine versions are recent enough
+[0m
+= MISCELLANEOUS CHECKS =
+
+INFO: Checking common daemon services..
+[0m[32mPASS: systemd unit 'pveproxy.service' is in state 'active'
+[0m[32mPASS: systemd unit 'pvedaemon.service' is in state 'active'
+[0m[32mPASS: systemd unit 'pvescheduler.service' is in state 'active'
+[0m[32mPASS: systemd unit 'pvestatd.service' is in state 'active'
+[0mINFO: Checking for supported & active NTP service..
+[0m[33mWARN: No (active) time synchronisation daemon (NTP) detected, but synchronized systems are important, especially for cluster and/or ceph!
+[0mINFO: Checking if the local node's hostname 'node2' is resolvable..
+[0mINFO: Checking if resolved IP is configured on local node..
+[0m[32mPASS: Resolved node IP '192.0.2.12' configured and active on single interface.
+[0mINFO: Check node certificate's RSA key size
+[0m[32mPASS: Certificate 'pve-root-ca.pem' passed Debian Busters (and newer) security level for TLS connections (4096 >= 2048 RSA)
+[0m[32mPASS: Certificate 'pve-ssl.pem' passed Debian Busters (and newer) security level for TLS connections (2048 >= 2048 RSA)
+[0mINFO: Checking backup retention settings..
+[0m[32mPASS: no backup retention problems found.
+[0mINFO: checking CIFS credential location..
+[0m[32mPASS: no CIFS credentials at outdated location found.
+[0mINFO: Checking permission system changes..
+[0mSKIP: user.cfg does not exist
+[0mINFO: Checking node and guest description/note length..
+[0m[32mPASS: All node config descriptions fit in the new limit of 64 KiB
+[0mINFO: Checking if the suite for the Debian security repository is correct..
+[0m[32mPASS: found no suite mismatch
+[0mINFO: Checking for existence of NVIDIA vGPU Manager..
+[0m[32mPASS: No NVIDIA vGPU Service found.
+[0mINFO: Checking bootloader configuration...
+[0mSKIP: System booted in legacy-mode - no need for additional packages
+[0mINFO: Check for dkms modules...
+[0mSKIP: could not get dkms status
+[0mINFO: Check for legacy 'filter' or 'group' sections in /etc/pve/notifications.cfg...
+[0m[32mPASS: No legacy 'filter' or 'group' sections found!
+[0mINFO: Check for legacy 'notification-policy' or 'notification-target' options in /etc/pve/jobs.cfg...
+[0m[32mPASS: No legacy 'notification-policy' or 'notification-target' options found!
+[0mINFO: Check for LVM autoactivation settings on LVM and LVM-thin storages...
+[0m[32mPASS: all guest volumes on storage 'ISCSI_SHARE' have autoactivation disabled
+[0m[32mPASS: No problematic volumes found.
+[0mINFO: Checking lvm config for thin_check_options...
+[0m[32mPASS: Check for correct thin_check_options passed
+[0mINFO: Check post RRD metrics data format update situation...
+[0mINFO: Found '30' RRD files using the old format.
+ These are now only used to display historic data. You can delete them if you do not need that.
+
+[0mINFO: Checking for IPAM DB files that have not yet been migrated.
+[0m[32mPASS: No legacy IPAM DB found.
+[0m[32mPASS: No legacy MAC DB found.
+[0mINFO: Checking if the legacy sysctl file '/etc/sysctl.conf' needs to be migrated to new '/etc/sysctl.d/' path.
+[0m[32mPASS: Legacy file '/etc/sysctl.conf' is not present.
+[0mINFO: Checking if matching CPU microcode package is installed.
+[0m[1;31mFAIL: unable to determine installed intel-microcode version.
+[0m[33mWARN: The matching CPU microcode package 'intel-microcode' could not be found! Consider installing it to receive the latest security and bug fixes for your CPU.
+	apt install intel-microcode
+[0mSKIP: No containers on node detected.
+[0m
+= SUMMARY =
+
+TOTAL:    48
+[32mPASSED:   36
+[0mSKIPPED:  7
+[33mWARNINGS: 4
+[0m[1;31mFAILURES: 1
+[0m[1;31m
+ATTENTION: Please check the output for detailed information!
+[0m[1;31mTry to solve the problems one at a time and then run this checklist tool again.
+[0m
