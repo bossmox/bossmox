@@ -52,3 +52,10 @@ Each piece is proven on the lab before the next starts, read-only first.
 - Debian's unattended-upgrades can hold the package lock just after a node starts; apt waits up to 10 minutes for it.
 - Proven on bmx8-node2 from the browser: 8.4.21 to 9.2.28, kernel 7.0.14, ens19 pinned to nic0 with its heartbeat address kept, cluster quorate.
 - Not handled yet: a node whose packages are on 9 but that hasn't restarted reports 9, so Upgrade won't start again on it and the readiness check runs a checker that doesn't exist. Piece 6 finishes such a node.
+
+## Found building piece 6 (2026-11-16)
+
+- The cluster upgrade is a third kind of run on the same runner as Update all nodes (ADR 0027), not a separate one: it inherits the per-guest choices, placement, Stop, coming home and the record on disk. The one-node upgrade replaces that run's install and restart steps.
+- A node whose packages are on the new version but which still runs the old version's kernel counts as unfinished, read from Proxmox's `apt/versions` (`RunningKernel` against the newest installed kernel of another series). The run takes such a node first and finishes it without installing again. A newer kernel of the same series is an ordinary update waiting for a restart, not this.
+- The run starts only for root@pam with a readiness check from the last hour that found nothing blocking.
+- Proven on bmx8lab from a mixed cluster (one node already on 9): the other two went 8.4.21 to 9.2.28, with BossMox itself and an HA guest moved off and back.
