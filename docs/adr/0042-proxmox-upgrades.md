@@ -44,3 +44,11 @@ Each piece is proven on the lab before the next starts, read-only first.
 - A node mid-upgrade can't be updated normally (ADR 0039) until this run finishes it.
 - What a nested lab can't show is said in the release notes: real hardware port renames, UEFI-on-LVM boot, Ceph, passthrough.
 - The tables of end-of-life dates and known issues need updating with each Proxmox major release. A BossMox that hasn't been updated says it doesn't know the newer version, rather than guessing.
+
+## Found on the lab, piece 5 (2026-11-16)
+
+- **What stops an upgrade is what BossMox's explainer marks 'blocks', not Proxmox's raw failure count** (Rocky, 2026-11-16). The 9 checker fails with "unable to determine installed intel-microcode version" wherever that package is missing, which is every VM; 8.4's only warned. It is shown as advice. Any failure BossMox can't read, or doesn't know, still blocks.
+- Proxmox 9's pinning tool names its files `50-pmx-<name>.link` (8.4: `50-pve-`). The upgrade pins after the 9 packages are in, so both count as Proxmox's own pin.
+- Debian's unattended-upgrades can hold the package lock just after a node starts; apt waits up to 10 minutes for it.
+- Proven on bmx8-node2 from the browser: 8.4.21 to 9.2.28, kernel 7.0.14, ens19 pinned to nic0 with its heartbeat address kept, cluster quorate.
+- Not handled yet: a node whose packages are on 9 but that hasn't restarted reports 9, so Upgrade won't start again on it and the readiness check runs a checker that doesn't exist. Piece 6 finishes such a node.
