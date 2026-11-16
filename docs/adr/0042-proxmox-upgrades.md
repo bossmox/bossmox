@@ -59,3 +59,10 @@ Each piece is proven on the lab before the next starts, read-only first.
 - A node whose packages are on the new version but which still runs the old version's kernel counts as unfinished, read from Proxmox's `apt/versions` (`RunningKernel` against the newest installed kernel of another series). The run takes such a node first and finishes it without installing again. A newer kernel of the same series is an ordinary update waiting for a restart, not this.
 - The run starts only for root@pam with a readiness check from the last hour that found nothing blocking.
 - Proven on bmx8lab from a mixed cluster (one node already on 9): the other two went 8.4.21 to 9.2.28, with BossMox itself and an HA guest moved off and back.
+
+## Proven from 8.4, piece 7 (2026-11-16)
+
+- bmx8lab (three nodes, HA guest, shared LVM over iSCSI) went from 8.4.21 to 9.2.28 entirely from the browser, in two runs: Stop pressed while the second node upgraded let that node finish and stopped before the third; a second run upgraded the third.
+- bmx2lab (two nodes and a tie-breaker vote) went from 8.4.21 to 9.2.28 in one run; the vote held quorum while each node restarted.
+- After Stop, guests stay where they are; they are not brought home. The screen's wording ('Stop waits for the node under way to finish') says less than that, and is open.
+- The node's version in the upgrade window counts only an upgrade that ended after the readiness check: the run's record stays on disk and would otherwise show an old version.
