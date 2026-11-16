@@ -758,9 +758,11 @@ const UP_PHASE = {
 };
 const upgrading = (u) => Object.values(u?.upgrades ?? {}).some((j) => !j.finishedAt);
 /** What a node runs now: an upgrade since the check (one node, or a cluster run) beats what the check read. */
-function nowOn(n, up) {
-  const ran = S.run?.nodes?.find((x) => x.name === n.node && x.phase === "done" && x.upgrade?.version);
-  return (up?.phase === "done" && up.version) || ran?.upgrade?.version || n.version;
+function nowOn(n, up, checkedAt) {
+  // Only an upgrade that ended after the check is newer than what the check read: an old run's record stays on disk.
+  const since = (at) => (at ?? Number.POSITIVE_INFINITY) > (checkedAt ?? 0);
+  const ran = since(S.run?.finishedAt) && S.run?.nodes?.find((x) => x.name === n.node && x.phase === "done" && x.upgrade?.version);
+  return (up?.phase === "done" && since(up.finishedAt) && up.version) || ran?.upgrade?.version || n.version;
 }
 function upgradeBody(u) {
   if (!u.checkedAt && !u.running) return `<p>BossMox runs Proxmox's own upgrade checker on every node, one at a time, and explains what it finds. It only reads: nothing on the nodes changes.</p>`;
@@ -802,7 +804,7 @@ function upgradeBody(u) {
         : src?.error
           ? `<p class="loginerr">${esc(src.error)}</p>`
           : "";
-    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${nowOn(n, up) ? `Proxmox VE ${esc(nowOn(n, up))}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}</small></div>${!pin?.ok ? `<div class="actions"><button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button></div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${srcWords}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
+    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${nowOn(n, up, u.checkedAt) ? `Proxmox VE ${esc(nowOn(n, up, u.checkedAt))}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}</small></div>${!pin?.ok ? `<div class="actions"><button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button></div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${srcWords}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
   };
   const lvm = u.fixes?.lvm;
   const lvmWords = lvm
