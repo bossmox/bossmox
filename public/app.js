@@ -13,7 +13,7 @@ const GLYPHS = {
 };
 const APPS = {
   vms: { title: "VMs and Containers", color: "#0E7EA6", w: 920, h: 610 },
-  create: { title: "Create", color: "#178A5F", w: 560, h: 640 },
+  create: { title: "Create", label: "Create a VM or container", color: "#178A5F", w: 560, h: 640 },
   monitor: { title: "Nodes", color: "#7A5AC8", w: 900, h: 620 },
   storage: { title: "Storage", color: "#B9680A", w: 760, h: 610 },
   network: { title: "Network", color: "#2F7A7E", w: 860, h: 580 },
@@ -80,9 +80,11 @@ function readGuestListPrefs() {
   const p = guestListPrefs(saved);
   return { vmType: p.type, vmSort: p.sort };
 }
-function saveGuestListPrefs() {
+/** Saves only the choice the person just made, so a jump's temporary "all types" never overwrites the stored type. */
+function saveGuestListPref(key, value) {
   try {
-    localStorage.setItem("bossmox.guest-list", JSON.stringify({ type: S.vmType, sort: S.vmSort }));
+    const p = readGuestListPrefs();
+    localStorage.setItem("bossmox.guest-list", JSON.stringify({ type: p.vmType, sort: p.vmSort, [key]: value }));
   } catch {
     // Storage can be off (a private window); the choice then lasts until the page closes.
   }
@@ -1393,16 +1395,17 @@ function openWin(app) {
   const n = Object.keys(wins).length;
   const el = document.createElement("section");
   el.className = "win";
-  el.setAttribute("aria-label", a.title);
+  el.setAttribute("aria-label", a.label ?? a.title);
   const vw = innerWidth,
     vh = innerHeight,
     w = Math.min(a.w, vw - 40),
     h = Math.min(a.h, vh - 90);
   el.style.cssText = `width:${w}px;height:${h}px;left:${Math.max(20, (vw - w) / 2 - 120 + n * 30)}px;top:${Math.max(58, (vh - h) / 2 - 10 + n * 26)}px`;
   const title = esc(a.title);
+  const named = esc(a.label ?? a.title);
   el.innerHTML = `<div class="tbar"><span>${title}</span>${app === "vms" ? `<button class="btn tbarbtn" data-open="create">Create</button>` : ""}
-    <button class="wbtn" data-min="${app}" aria-label="Minimize ${title}"><svg viewBox="0 0 16 16"><path d="M3 12h10"/></svg></button>
-    <button class="wbtn" data-close="${app}" aria-label="Close ${title}"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>
+    <button class="wbtn" data-min="${app}" aria-label="Minimize ${named}"><svg viewBox="0 0 16 16"><path d="M3 12h10"/></svg></button>
+    <button class="wbtn" data-close="${app}" aria-label="Close ${named}"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>
     <div class="wbody"></div>`;
   $("#windows").append(el);
   wins[app] = el;
@@ -1476,6 +1479,11 @@ function render(app) {
   if (!w) return;
   $(".wbody", w).innerHTML = RENDER[app]();
   if (app === "vms") {
+    const keep = S.data ? shownGuest(shownList(), S.sel) : S.sel;
+    if (keep !== S.sel) {
+      S.sel = keep;
+      S.tab = "overview";
+    }
     renderList();
     renderDetail();
   }
@@ -1524,9 +1532,25 @@ function vmsShell() {
     <div class="tools"><div class="pair wide"><input class="search" id="vmq" type="search" placeholder="Find a VM or container" aria-label="Find a VM or container" value="${esc(S.q)}">
     <select class="search" id="vmsort" aria-label="Sort by">${GUEST_SORTS.map(([k, l]) => `<option value="${k}" ${k === S.vmSort ? "selected" : ""}>${l}</option>`).join("")}</select></div>
     <div class="pair"><select class="search" id="vmnode" aria-label="Show VMs and containers on"></select>
-    <select class="search" id="vmtype" aria-label="Show">${GUEST_TYPES.map(([k, l]) => `<option value="${k}" ${k === S.vmType ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+    <select class="search" id="vmtype" aria-label="Show which type">${GUEST_TYPES.map(([k, l]) => `<option value="${k}" ${k === S.vmType ? "selected" : ""}>${l}</option>`).join("")}</select></div>
     <div class="seg" id="seg"></div></div>
     <div id="vmlist"></div></aside><div id="vmdetail"></div></div>`;
+}
+const shownList = () => guestList(S.data?.vms ?? [], { q: S.q, node: S.vmNode, state: S.filter, type: S.vmType, sort: S.vmSort });
+/**
+ * After a filter, sort or search change, or when the window opens: if the guest in the detail pane is no longer in
+ * the list, the pane moves to the first guest the list shows, so its buttons never act on a hidden guest. Not on the
+ * timed refresh, which leaves a Settings form alone while someone is editing it.
+ */
+function refilter() {
+  const keep = shownGuest(shownList(), S.sel);
+  const moved = keep !== S.sel;
+  if (moved) {
+    S.sel = keep;
+    S.tab = "overview";
+  }
+  renderList();
+  if (moved) renderDetail();
 }
 function renderList() {
   if (!$("#vmlist")) return;
@@ -1545,7 +1569,7 @@ function renderList() {
   const names = S.data.nodes.map((n) => n.name);
   if (S.vmNode && !names.includes(S.vmNode)) S.vmNode = "";
   $("#vmnode").innerHTML = `<option value="">Every node</option>${names.map((n) => `<option value="${esc(n)}" ${n === S.vmNode ? "selected" : ""}>On ${esc(n)}</option>`).join("")}`;
-  const list = guestList(S.data.vms, { q: S.q, node: S.vmNode, state: S.filter, type: S.vmType, sort: S.vmSort });
+  const list = shownList();
   const what = { all: "VMs or containers", qemu: "VMs", lxc: "containers" }[S.vmType];
   $("#vmlist").innerHTML = list.length
     ? list
@@ -3312,6 +3336,7 @@ function createGuest() {
       S.sel = id;
       S.tab = "overview";
       S.filter = "all";
+      S.vmNode = "";
       S.vmType = "all";
       S.q = "";
       wins.create?.remove();
@@ -4810,7 +4835,8 @@ document.addEventListener("click", (e) => {
     S.sel = +d.vm;
     S.tab = "overview";
     S.filter = "all";
-    // Shown in the list too, whatever type was picked; the remembered choice comes back on the next visit.
+    // Shown in the list too, whatever node or type was picked. Not saved: the stored type is used again on the next page load.
+    S.vmNode = "";
     S.vmType = "all";
     S.q = "";
     openWin("vms");
@@ -4824,7 +4850,7 @@ document.addEventListener("click", (e) => {
   }
   if (d.filter) {
     S.filter = d.filter;
-    return renderList();
+    return refilter();
   }
   if (d.tab) {
     S.tab = d.tab;
@@ -4860,13 +4886,13 @@ document.addEventListener("change", (e) => {
   }
   if (e.target.id === "vmnode") {
     S.vmNode = e.target.value;
-    return renderList();
+    return refilter();
   }
   if (e.target.id === "vmtype" || e.target.id === "vmsort") {
     if (e.target.id === "vmtype") S.vmType = e.target.value;
     else S.vmSort = e.target.value;
-    saveGuestListPrefs();
-    return renderList();
+    saveGuestListPref(e.target.id === "vmtype" ? "type" : "sort", e.target.value);
+    return refilter();
   }
   if (e.target.id === "alkind") return openAlertsSetup(e.target.value);
   if (e.target.dataset?.keepagain) {
@@ -4931,7 +4957,7 @@ document.addEventListener("input", (e) => {
   }
   if (e.target.id === "vmq") {
     S.q = e.target.value;
-    renderList();
+    refilter();
   }
 });
 
@@ -5131,7 +5157,8 @@ async function refresh() {
     // Not over a window someone is using: it opens on the next refresh after that one closes (#57).
     if (S.run?.running && S.runView === undefined && !$("#scrim").classList.contains("on")) openRun();
     else if (wasRunning && !S.run?.running && S.runView === undefined) renderHealth();
-    if (S.sel === null && body.vms[0]) S.sel = body.vms[0].id;
+    // The first guest the list shows, with the filter and sort this browser remembers (review 2026-11-18).
+    if (S.sel === null) S.sel = shownGuest(shownList(), null);
     S.failed = false;
   } catch (err) {
     if (late()) return;

@@ -26,8 +26,9 @@ interface Filter {
   sort?: string;
 }
 // Run it the way the browser does: a plain script in its own scope, no module system.
-const page = vm.runInNewContext(`${read("guest-list.js")}\n;({ guestList, guestTypeWord, guestListPrefs, GUEST_TYPES, GUEST_SORTS })`) as {
+const page = vm.runInNewContext(`${read("guest-list.js")}\n;({ guestList, guestTypeWord, guestListPrefs, shownGuest, GUEST_TYPES, GUEST_SORTS })`) as {
   guestList: (vms: Guest[], f: Filter) => Guest[];
+  shownGuest: (list: Guest[], sel: number | null) => number | null;
   guestTypeWord: (v: { type: string }) => string;
   guestListPrefs: (saved: unknown) => { type: string; sort: string };
   GUEST_TYPES: [string, string][];
@@ -96,13 +97,36 @@ test("the page loads the list script before app.js, and the server serves it (#1
   assert.ok(at > 0, "index.html loads guest-list.js");
   assert.ok(at < html.indexOf('<script src="app.js"></script>'), "before app.js, which uses it");
   const server = readFileSync(path.join(PUBLIC, "..", "src", "server.ts"), "utf8");
-  assert.match(server, /"\/guest-list\.js": \["guest-list\.js", "text\/javascript; charset=utf-8"\]/);
+  // A whole live line in the static table: a commented-out or misspelled entry fails (review 2026-11-18).
+  assert.match(server, /^\s*"\/guest-list\.js": \["guest-list\.js", "text\/javascript; charset=utf-8"\],$/m);
 });
 
 test("the home screen names containers: VMs and Containers, and Create (#107)", () => {
   const app = read("app.js");
   assert.match(app, /vms: \{ title: "VMs and Containers"/);
-  assert.match(app, /create: \{ title: "Create"/);
+  assert.match(app, /create: \{ title: "Create", label: "Create a VM or container"/, "screen readers hear the full name");
   assert.doesNotMatch(app, /title: "Virtual Machines"|title: "Create a VM"/);
-  assert.match(app, /guestList\(S\.data\.vms,/, "the list uses the tested filter and sort, not its own copy");
+});
+
+test("the list, the first pick and every filter change go through the tested functions (review 2026-11-18)", () => {
+  const app = read("app.js");
+  assert.match(app, /^const shownList = \(\) => guestList\(S\.data\?\.vms \?\? \[\], \{ q: S\.q, node: S\.vmNode, state: S\.filter, type: S\.vmType, sort: S\.vmSort \}\);$/m);
+  assert.match(app, /^ {2}const list = shownList\(\);$/m, "renderList draws the same list");
+  assert.match(app, /^ {4}if \(S\.sel === null\) S\.sel = shownGuest\(shownList\(\), null\);$/m, "the first pick is one the list shows");
+  assert.doesNotMatch(app, /S\.sel = body\.vms\[0\]/, "not simply Proxmox's first guest");
+  for (const handler of ["S.vmNode = e.target.value;\n    return refilter();", "S.filter = d.filter;\n    return refilter();", "S.q = e.target.value;\n    refilter();"])
+    assert.ok(app.includes(handler), `a filter change moves the detail pane off a hidden guest: ${handler.split("\n")[0]}`);
+  assert.match(app, /saveGuestListPref\(e\.target\.id === "vmtype" \? "type" : "sort", e\.target\.value\)/, "only the changed choice is saved");
+});
+
+test("the detail pane keeps the guest picked while the list shows it, and otherwise moves to the first one shown (review 2026-11-18)", () => {
+  const shown = page.guestList(GUESTS, { type: "lxc" });
+  assert.equal(page.shownGuest(shown, 104), 104, "dns is a container: it stays");
+  assert.equal(page.shownGuest(shown, 101), 103, "web is a VM, now hidden: the pane moves to cache");
+  assert.equal(page.shownGuest(shown, null), 103, "nothing picked yet: the first one shown");
+  assert.equal(page.shownGuest([], 101), null, "nothing shown: nothing picked, so no buttons for a hidden guest");
+});
+
+test("a sort name that happens to be on every object (toString, constructor) sorts by name instead of breaking (review 2026-11-18)", () => {
+  for (const sort of ["toString", "constructor", "__proto__", "hasOwnProperty"]) assert.deepEqual(names(page.guestList(GUESTS, { sort })), ["cache", "db", "dns", "web", "web9", "web10"], sort);
 });
