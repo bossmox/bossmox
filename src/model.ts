@@ -195,13 +195,17 @@ export function buildOverview(resources: RawResource[], guests: Map<number, Gues
           .filter(([k, v]) => /^(scsi|virtio|sata|ide|mp)\d+$|^rootfs$/.test(k) && String(v).startsWith("/dev/"))
           .map(([, v]) => String(v).split(",")[0] as string),
         refs: volumeRefs(config ?? {}),
-        tech: {
-          "Machine type": config?.machine ?? "i440fx (default)",
-          Firmware: config?.bios ?? "seabios (default)",
-          "Disk controller": config?.scsihw ?? "lsi (default)",
-          "CPU type": config?.cpu ?? "kvm64 (default)",
-          "VM ID": id,
-        },
+        // A container has no machine type, firmware, disk controller or CPU model: those are a VM's (#107).
+        tech:
+          r.type === "lxc"
+            ? { "Container ID": id }
+            : {
+                "Machine type": config?.machine ?? "i440fx (default)",
+                Firmware: config?.bios ?? "seabios (default)",
+                "Disk controller": config?.scsihw ?? "lsi (default)",
+                "CPU type": config?.cpu ?? "kvm64 (default)",
+                "VM ID": id,
+              },
         snapshots: (guest?.snapshots ?? []).filter((s) => s.name !== "current").map((s) => ({ name: s.name, description: s.description ?? "", takenAt: s.snaptime ?? null })),
         issues,
       };
