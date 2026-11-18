@@ -54,6 +54,18 @@
     },
     {
       "includes": [
+        "public/guest-list.js"
+      ],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedVariables": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": [
         "**/*.json"
       ],
       "formatter": {

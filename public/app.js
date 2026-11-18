@@ -12,8 +12,8 @@ const GLYPHS = {
   settings: '<path d="M5 9h4M15 9h12M5 16h12M23 16h4M5 23h2M13 23h14"/><circle cx="12" cy="9" r="3"/><circle cx="20" cy="16" r="3"/><circle cx="10" cy="23" r="3"/>',
 };
 const APPS = {
-  vms: { title: "Virtual Machines", color: "#0E7EA6", w: 920, h: 610 },
-  create: { title: "Create a VM", color: "#178A5F", w: 560, h: 640 },
+  vms: { title: "VMs and Containers", color: "#0E7EA6", w: 920, h: 610 },
+  create: { title: "Create", color: "#178A5F", w: 560, h: 640 },
   monitor: { title: "Nodes", color: "#7A5AC8", w: 900, h: 620 },
   storage: { title: "Storage", color: "#B9680A", w: 760, h: 610 },
   network: { title: "Network", color: "#2F7A7E", w: 860, h: 580 },
@@ -33,6 +33,8 @@ const S = {
   tab: "overview",
   filter: "all",
   q: "",
+  // Type and sort in VMs and Containers, remembered per browser (guest-list.js, ADR 0043).
+  ...readGuestListPrefs(),
   z: 100,
   failed: false,
   server: null,
@@ -67,6 +69,24 @@ const CELL_W = 110,
 /** The fixed app order: the default layout, never the order the icons happen to sit in the page. */
 const iconApps = () => Object.keys(APPS).filter((k) => !APPS[k].noIcon);
 const freeIcons = () => !matchMedia("(max-width:760px)").matches;
+// A function, not a const key, because S reads it while the script is still starting.
+function readGuestListPrefs() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem("bossmox.guest-list") ?? "null");
+  } catch {
+    // Storage off or a broken value: the defaults.
+  }
+  const p = guestListPrefs(saved);
+  return { vmType: p.type, vmSort: p.sort };
+}
+function saveGuestListPrefs() {
+  try {
+    localStorage.setItem("bossmox.guest-list", JSON.stringify({ type: S.vmType, sort: S.vmSort }));
+  } catch {
+    // Storage can be off (a private window); the choice then lasts until the page closes.
+  }
+}
 function readIconSpots() {
   try {
     const saved = JSON.parse(localStorage.getItem(ICON_KEY) ?? "{}");
@@ -1482,15 +1502,23 @@ function render(app) {
   if (app === "network") loadNetwork();
 }
 
-/* Virtual Machines */
+/* VMs and Containers */
 const selected = () => S.data?.vms.find((v) => v.id === S.sel) ?? null;
+// A small screen for a VM, a box for a container, drawn like the app glyphs.
+const TYPE_GLYPH = {
+  qemu: '<rect x="4" y="6" width="24" height="16" rx="2"/><path d="M11 27h10M16 22v5"/>',
+  lxc: '<path d="M16 4l11 6v12l-11 6-11-6V10z"/><path d="M5 10l11 6 11-6M16 16v12"/>',
+};
+const typeIcon = (v) => `<svg class="gtype" viewBox="0 0 32 32" role="img" aria-label="${guestTypeWord(v)}"><title>${guestTypeWord(v)}</title>${TYPE_GLYPH[v.type] ?? TYPE_GLYPH.qemu}</svg>`;
 const dotClass = (v) => (v.issues.length ? "warn" : v.running ? "running" : "");
 const stateWord = (v) => `${v.template ? "Template" : v.paused ? "Paused" : v.running ? "Running" : "Shut down"} on ${v.node}`;
 
 function vmsShell() {
   return `<div class="vms"><aside>
-    <div class="tools"><input class="search" id="vmq" type="search" placeholder="Find a VM" aria-label="Find a VM" value="${esc(S.q)}">
-    <select class="search" id="vmnode" aria-label="Show VMs on"></select>
+    <div class="tools"><div class="pair wide"><input class="search" id="vmq" type="search" placeholder="Find a VM or container" aria-label="Find a VM or container" value="${esc(S.q)}">
+    <select class="search" id="vmsort" aria-label="Sort by">${GUEST_SORTS.map(([k, l]) => `<option value="${k}" ${k === S.vmSort ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+    <div class="pair"><select class="search" id="vmnode" aria-label="Show guests on"></select>
+    <select class="search" id="vmtype" aria-label="Show">${GUEST_TYPES.map(([k, l]) => `<option value="${k}" ${k === S.vmType ? "selected" : ""}>${l}</option>`).join("")}</select></div>
     <div class="seg" id="seg"></div></div>
     <div id="vmlist"></div></aside><div id="vmdetail"></div></div>`;
 }
@@ -1511,29 +1539,28 @@ function renderList() {
   const names = S.data.nodes.map((n) => n.name);
   if (S.vmNode && !names.includes(S.vmNode)) S.vmNode = "";
   $("#vmnode").innerHTML = `<option value="">Every node</option>${names.map((n) => `<option value="${esc(n)}" ${n === S.vmNode ? "selected" : ""}>On ${esc(n)}</option>`).join("")}`;
-  const q = S.q.toLowerCase();
-  const list = S.data.vms.filter(
-    (v) => (!S.vmNode || v.node === S.vmNode) && (S.filter === "all" || (S.filter === "running" && v.running) || (S.filter === "look" && v.issues.length)) && (v.name + v.os).toLowerCase().includes(q),
-  );
+  const list = guestList(S.data.vms, { q: S.q, node: S.vmNode, state: S.filter, type: S.vmType, sort: S.vmSort });
+  const what = { all: "VMs or containers", qemu: "VMs", lxc: "containers" }[S.vmType];
   $("#vmlist").innerHTML = list.length
     ? list
         .map(
-          (v) => `<button class="row ${v.id === S.sel ? "on" : ""}" data-pick="${v.id}">
-      <span class="dot ${dotClass(v)}"></span><b>${esc(v.name)}</b><small>${esc(stateWord(v))}</small></button>`,
+          (v) => `<button class="row guest ${v.id === S.sel ? "on" : ""}" data-pick="${v.id}">
+      <span class="dot ${dotClass(v)}"></span><b>${esc(v.name)}</b>${typeIcon(v)}<small>${esc(stateWord(v))}</small></button>`,
         )
         .join("")
-    : `<p class="empty">No VMs match${S.vmNode ? ` on ${esc(S.vmNode)}` : ""}. Try a different word or filter.</p>`;
+    : `<p class="empty">No ${what} match${S.vmNode ? ` on ${esc(S.vmNode)}` : ""}. Try a different word or filter.</p>`;
 }
 function renderDetail() {
   const box = $("#vmdetail");
   if (!box) return;
   const v = selected();
   if (!v) {
-    box.innerHTML = `<p class="empty">${S.data?.vms.length ? "Pick a VM to see its details." : "There are no VMs on this node yet."}</p>`;
+    box.innerHTML = `<p class="empty">${S.data?.vms.length ? "Pick a VM or container to see its details." : "There are no VMs or containers yet."}</p>`;
     return;
   }
   box.innerHTML = `
     <div class="head"><div><h2>${esc(v.name)}</h2>
+      <div class="state">${typeIcon(v)}${guestTypeWord(v)}</div>
       <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
       <div class="actions">${
         v.template
@@ -3279,6 +3306,7 @@ function createGuest() {
       S.sel = id;
       S.tab = "overview";
       S.filter = "all";
+      S.vmType = "all";
       S.q = "";
       wins.create?.remove();
       delete wins.create;
@@ -4776,6 +4804,8 @@ document.addEventListener("click", (e) => {
     S.sel = +d.vm;
     S.tab = "overview";
     S.filter = "all";
+    // Shown in the list too, whatever type was picked; the remembered choice comes back on the next visit.
+    S.vmType = "all";
     S.q = "";
     openWin("vms");
     return render("vms");
@@ -4824,6 +4854,12 @@ document.addEventListener("change", (e) => {
   }
   if (e.target.id === "vmnode") {
     S.vmNode = e.target.value;
+    return renderList();
+  }
+  if (e.target.id === "vmtype" || e.target.id === "vmsort") {
+    if (e.target.id === "vmtype") S.vmType = e.target.value;
+    else S.vmSort = e.target.value;
+    saveGuestListPrefs();
     return renderList();
   }
   if (e.target.id === "alkind") return openAlertsSetup(e.target.value);

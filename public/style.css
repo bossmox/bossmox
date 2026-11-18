@@ -144,6 +144,12 @@ h1,h2,h3,p{margin:0}
 .row.on{background:var(--surface);box-shadow:0 0 0 1px var(--line)}
 .row b{font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row small{grid-column:2;color:var(--muted);font-size:13px}
+.tools .pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tools .pair.wide{grid-template-columns:1fr auto}
+.tools .pair select{min-width:0;padding-right:4px}
+.row.guest{grid-template-columns:auto 1fr auto}
+.row.guest small{grid-column:2/4}
+.gtype{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;color:var(--muted)}
 .newvm{margin:0 12px 12px}
 #vmdetail{overflow:auto;padding:24px 26px;min-width:0}
 .head{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}
