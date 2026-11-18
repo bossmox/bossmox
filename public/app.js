@@ -1513,7 +1513,9 @@ const TYPE_GLYPH = {
   qemu: '<rect x="4" y="6" width="24" height="16" rx="2"/><path d="M11 27h10M16 22v5"/>',
   lxc: '<path d="M16 4l11 6v12l-11 6-11-6V10z"/><path d="M5 10l11 6 11-6M16 16v12"/>',
 };
-const typeIcon = (v) => `<svg class="gtype" viewBox="0 0 32 32" role="img" aria-label="${guestTypeWord(v)}"><title>${guestTypeWord(v)}</title>${TYPE_GLYPH[v.type] ?? TYPE_GLYPH.qemu}</svg>`;
+// Named in the list, where the icon is the only sign of the type; hidden where the word is printed beside it.
+const typeIcon = (v, named = true) =>
+  `<svg class="gtype" viewBox="0 0 32 32" ${named ? `role="img" aria-label="${guestTypeWord(v)}"><title>${guestTypeWord(v)}</title>` : 'aria-hidden="true">'}${TYPE_GLYPH[v.type] ?? TYPE_GLYPH.qemu}</svg>`;
 const dotClass = (v) => (v.issues.length ? "warn" : v.running ? "running" : "");
 const stateWord = (v) => `${v.template ? "Template" : v.paused ? "Paused" : v.running ? "Running" : "Shut down"} on ${v.node}`;
 
@@ -1564,7 +1566,7 @@ function renderDetail() {
   }
   box.innerHTML = `
     <div class="head"><div><h2>${esc(v.name)}</h2>
-      <div class="state">${typeIcon(v)}${guestTypeWord(v)}</div>
+      <div class="state">${typeIcon(v, false)}${guestTypeWord(v)}</div>
       <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
       <div class="actions">${
         v.template

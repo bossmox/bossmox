@@ -8,9 +8,10 @@ const GUEST_TYPES = [
   ["lxc", "Containers only"],
 ];
 const GUEST_SORTS = [
-  ["name", "Name"],
-  ["type", "Type"],
-  ["node", "Node"],
+  // "By", so the sort never reads as a second type filter beside it.
+  ["name", "By name"],
+  ["type", "By type"],
+  ["node", "By node"],
 ];
 
 /** Proxmox calls a VM "qemu" and a container "lxc"; people call them a virtual machine and a container. */
