@@ -131,7 +131,7 @@ h1,h2,h3,p{margin:0}
 .wbody{flex:1;min-height:0;overflow:auto;background:var(--surface)}
 
 /* Virtual machines app */
-.vms{display:grid;grid-template-columns:296px 1fr;height:100%}
+.vms{display:grid;grid-template-columns:320px 1fr;height:100%}
 .vms aside{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--surface2)}
 .tools{padding:12px;display:grid;gap:8px}
 .search{width:100%;padding:8px 11px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface)}
@@ -144,6 +144,12 @@ h1,h2,h3,p{margin:0}
 .row.on{background:var(--surface);box-shadow:0 0 0 1px var(--line)}
 .row b{font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .row small{grid-column:2;color:var(--muted);font-size:13px}
+.tools .pair{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tools .pair.wide{grid-template-columns:1fr auto}
+.tools .pair select{min-width:0;padding-right:4px}
+.row.guest{grid-template-columns:auto 1fr auto}
+.row.guest small{grid-column:2/4}
+.gtype{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round;color:var(--muted)}
 .newvm{margin:0 12px 12px}
 #vmdetail{overflow:auto;padding:24px 26px;min-width:0}
 .head{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap}
@@ -247,7 +253,7 @@ summary{cursor:pointer;font-weight:650}
   #icons{grid-template-columns:repeat(3,1fr)}
   #side{width:100%;order:-1;max-height:none;overflow:visible}
   .win{inset:46px 0 0 0!important;width:auto!important;height:auto!important;border-radius:0}
-  .vms{grid-template-columns:1fr;grid-template-rows:230px 1fr}
+  .vms{grid-template-columns:1fr;grid-template-rows:330px 1fr}
   .vms aside{border-right:0;border-bottom:1px solid var(--line)}
   .newvm{display:none}
   .facts{grid-template-columns:repeat(2,minmax(0,1fr))}

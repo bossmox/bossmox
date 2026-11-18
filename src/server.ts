@@ -83,6 +83,7 @@ const STATIC: Record<string, [string, string]> = {
   "/": ["index.html", "text/html; charset=utf-8"],
   "/style.css": ["style.css", "text/css; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
+  "/guest-list.js": ["guest-list.js", "text/javascript; charset=utf-8"],
   "/vendor/xterm.js": ["vendor/xterm.js", "text/javascript; charset=utf-8"],
   "/vendor/addon-fit.js": ["vendor/addon-fit.js", "text/javascript; charset=utf-8"],
   "/vendor/xterm.css": ["vendor/xterm.css", "text/css; charset=utf-8"],

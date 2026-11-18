@@ -12,8 +12,8 @@ const GLYPHS = {
   settings: '<path d="M5 9h4M15 9h12M5 16h12M23 16h4M5 23h2M13 23h14"/><circle cx="12" cy="9" r="3"/><circle cx="20" cy="16" r="3"/><circle cx="10" cy="23" r="3"/>',
 };
 const APPS = {
-  vms: { title: "Virtual Machines", color: "#0E7EA6", w: 920, h: 610 },
-  create: { title: "Create a VM", color: "#178A5F", w: 560, h: 640 },
+  vms: { title: "VMs and Containers", color: "#0E7EA6", w: 920, h: 610 },
+  create: { title: "Create", label: "Create a VM or container", color: "#178A5F", w: 560, h: 640 },
   monitor: { title: "Nodes", color: "#7A5AC8", w: 900, h: 620 },
   storage: { title: "Storage", color: "#B9680A", w: 760, h: 610 },
   network: { title: "Network", color: "#2F7A7E", w: 860, h: 580 },
@@ -33,6 +33,8 @@ const S = {
   tab: "overview",
   filter: "all",
   q: "",
+  // Type and sort in VMs and Containers, remembered per browser (guest-list.js, ADR 0043).
+  ...readGuestListPrefs(),
   z: 100,
   failed: false,
   server: null,
@@ -67,6 +69,26 @@ const CELL_W = 110,
 /** The fixed app order: the default layout, never the order the icons happen to sit in the page. */
 const iconApps = () => Object.keys(APPS).filter((k) => !APPS[k].noIcon);
 const freeIcons = () => !matchMedia("(max-width:760px)").matches;
+// A function, not a const key, because S reads it while the script is still starting.
+function readGuestListPrefs() {
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem("bossmox.guest-list") ?? "null");
+  } catch {
+    // Storage off or a broken value: the defaults.
+  }
+  const p = guestListPrefs(saved);
+  return { vmType: p.type, vmSort: p.sort };
+}
+/** Saves only the choice the person just made, so a jump's temporary "all types" never overwrites the stored type. */
+function saveGuestListPref(key, value) {
+  try {
+    const p = readGuestListPrefs();
+    localStorage.setItem("bossmox.guest-list", JSON.stringify({ type: p.vmType, sort: p.vmSort, [key]: value }));
+  } catch {
+    // Storage can be off (a private window); the choice then lasts until the page closes.
+  }
+}
 function readIconSpots() {
   try {
     const saved = JSON.parse(localStorage.getItem(ICON_KEY) ?? "{}");
@@ -379,7 +401,7 @@ function renderHealth() {
     .join("");
   h.innerHTML = `
     <h1>${heading}</h1>
-    <p class="sub">${up} of ${nodes.length} ${nodes.length === 1 ? "node" : "nodes"} online. ${run} of ${guests.length} ${guests.length === 1 ? "VM" : "VMs"} running, and ${freeText} free.</p>
+    <p class="sub">${up} of ${nodes.length} ${nodes.length === 1 ? "node" : "nodes"} online. ${run} of ${guests.length} ${guests.length === 1 ? "VM or container" : "VMs and containers"} running, and ${freeText} free.</p>
     ${overallBars(S.data.cluster, nodes.length)}
     ${runLine()}
     <div class="rack">${nodes
@@ -919,7 +941,7 @@ function redundancySection() {
     action = `<button class="btn" data-hbwatch="1">Show progress</button>`;
   } else if (v.state === "backed-up") detail = `Set up. The nodes check on each other over ${v.links} networks.`;
   else if (v.state === "offer") {
-    detail = `${HB_WHY} Every node has ${v.network} on a second port.${v.sharesMoves ? " VM moves use that network too, which is fine for a backup: the heartbeat only falls back to it when the main network fails." : ""}`;
+    detail = `${HB_WHY} Every node has ${v.network} on a second port.${v.sharesMoves ? " Moves use that network too, which is fine for a backup: the heartbeat only falls back to it when the main network fails." : ""}`;
     action = v.canSetUp ? `<button class="btn primary" data-hbsetup="1">Set up</button>` : "";
     if (!v.canSetUp) detail += " Setting it up changes a file in a node's console, so it needs a root@pam sign-in.";
   } else if (v.state === "no-port")
@@ -1068,7 +1090,7 @@ function openHeartbeatSetup() {
   dialog(`<h3>Set up a backup network for the heartbeat?</h3>
     <p>${esc(HB_WHY)} BossMox adds ${esc(v.network)} as a second heartbeat network. The current one stays the main one; the nodes only use the new one if the main one fails.</p>
     <ul class="hblist">${lines}</ul>
-    ${v.sharesMoves ? `<p class="meta">VM moves use ${esc(v.network)} too. That's fine for a backup.</p>` : ""}
+    ${v.sharesMoves ? `<p class="meta">Moves use ${esc(v.network)} too. That's fine for a backup.</p>` : ""}
     <details class="hbdetails"><summary>What changes, exactly</summary><p class="meta">In /etc/pve/corosync.conf, which Proxmox copies to every node: each node gets a ring${v.link}_addr line with the address above, the totem section gets an interface for link ${v.link}, and config_version goes up by one. First, BossMox checks every node can reach the others on ${esc(v.network)}. The old file is kept as corosync.conf.bak. If the new link isn't connected on every node within a minute, BossMox puts the old file back.</p></details>
     <label class="field restartname"><span>Type the cluster's name, ${esc(v.clusterName)}, to confirm</span><input id="hbname" autocomplete="off" spellcheck="false"></label>
     <p id="formerr" class="loginerr" hidden></p>
@@ -1182,17 +1204,21 @@ function askSetting(id, on, choice) {
   const words = {
     "move-network": on
       ? [
-          `Move VMs over ${choice}?`,
+          `Move VMs and containers over ${choice}?`,
           `Proxmox's Migration setting changes to ${choice} for the whole cluster. Moves started after this, from BossMox or Proxmox, use that network, and BossMox moves up to 3 at a time. Moves already running finish where they are.`,
           `Use ${choice}`,
         ]
       : [
-          "Move VMs over the heartbeat's network again?",
-          "Proxmox's Migration setting is cleared, so moves go back to the network the cluster heartbeat uses, and BossMox moves one VM at a time.",
+          "Move VMs and containers over the heartbeat's network again?",
+          "Proxmox's Migration setting is cleared, so moves go back to the network the cluster heartbeat uses, and BossMox moves one at a time.",
           "Clear it",
         ],
     "move-limit": on
-      ? [`Limit moves to ${choice} MB/s?`, `Every move in the cluster, from BossMox or Proxmox, runs at ${choice} MB/s or less. Bigger VMs take longer to move.`, `Limit to ${choice} MB/s`]
+      ? [
+          `Limit moves to ${choice} MB/s?`,
+          `Every move in the cluster, from BossMox or Proxmox, runs at ${choice} MB/s or less. Bigger VMs and containers take longer to move.`,
+          `Limit to ${choice} MB/s`,
+        ]
       : ["Remove the move speed limit?", "Moves run as fast as their network allows.", "Remove the limit"],
     "ha-shutdown": on
       ? [
@@ -1233,7 +1259,7 @@ async function moveFix() {
 function drawMoveFix() {
   const f = S.moveFix;
   const close = (label = "Cancel") => `<div class="row-end"><button class="btn" data-dlg="cancel">${label}</button></div>`;
-  const head = "<h3>Give VM moves their own network</h3>";
+  const head = "<h3>Give moves their own network</h3>";
   if (f.loading) return dialog(`${head}<p>Reading the cluster's networks.</p>${close()}`);
   if (f.error) return dialog(`${head}<p class="loginerr">${esc(f.error)}</p>${close("Close")}`);
   if (f.done) return dialog(`<h3>Done</h3><p>${esc(f.done)}</p>${close("Close")}`);
@@ -1259,7 +1285,7 @@ function drawMoveFix() {
   dialog(`${head}<p>Moves run on the only network the nodes use to check on each other, so heavy moves can make them lose touch. ${net.choices.length === 1 ? "This network reaches" : "These networks reach"} every node and ${net.choices.length === 1 ? "leaves" : "leave"} the heartbeat alone:</p>
     <div class="choices" role="radiogroup" aria-label="Network for moves" style="grid-template-columns:1fr">${net.choices.map((c) => `<button class="choice ${c === chosen ? "on" : ""}" role="radio" aria-checked="${c === chosen}" data-mfnet="${esc(c.value)}"><b>${esc(c.value)}</b><small>${c.storage ? `Also carries ${esc(c.storage.join(", "))}, so a speed limit keeps moves from crowding the disks.` : "Nothing else BossMox knows of uses it."}</small></button>`).join("")}</div>
     ${limitRow(chosen.storage ? "250 MB/s is about 2 Gbps: most of a 10 Gb link stays free for the disks, and a 16 GB VM still moves in about a minute." : "Not needed on a network of its own. It only makes moves slower.")}
-    <p><b>What changes:</b> ${esc(changes.join(", and "))}. This is for the whole cluster, from BossMox and Proxmox alike. BossMox then moves up to 3 VMs at a time. Moves already running finish where they are.</p>
+    <p><b>What changes:</b> ${esc(changes.join(", and "))}. This is for the whole cluster, from BossMox and Proxmox alike. BossMox then moves up to 3 at a time. Moves already running finish where they are.</p>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-mfgo="1">Make the change</button></div>`);
 }
 async function applyMoveFix() {
@@ -1369,16 +1395,17 @@ function openWin(app) {
   const n = Object.keys(wins).length;
   const el = document.createElement("section");
   el.className = "win";
-  el.setAttribute("aria-label", a.title);
+  el.setAttribute("aria-label", a.label ?? a.title);
   const vw = innerWidth,
     vh = innerHeight,
     w = Math.min(a.w, vw - 40),
     h = Math.min(a.h, vh - 90);
   el.style.cssText = `width:${w}px;height:${h}px;left:${Math.max(20, (vw - w) / 2 - 120 + n * 30)}px;top:${Math.max(58, (vh - h) / 2 - 10 + n * 26)}px`;
   const title = esc(a.title);
-  el.innerHTML = `<div class="tbar"><span>${title}</span>${app === "vms" ? `<button class="btn tbarbtn" data-open="create">Create a VM</button>` : ""}
-    <button class="wbtn" data-min="${app}" aria-label="Minimize ${title}"><svg viewBox="0 0 16 16"><path d="M3 12h10"/></svg></button>
-    <button class="wbtn" data-close="${app}" aria-label="Close ${title}"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>
+  const named = esc(a.label ?? a.title);
+  el.innerHTML = `<div class="tbar"><span>${title}</span>${app === "vms" ? `<button class="btn tbarbtn" data-open="create">Create</button>` : ""}
+    <button class="wbtn" data-min="${app}" aria-label="Minimize ${named}"><svg viewBox="0 0 16 16"><path d="M3 12h10"/></svg></button>
+    <button class="wbtn" data-close="${app}" aria-label="Close ${named}"><svg viewBox="0 0 16 16"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>
     <div class="wbody"></div>`;
   $("#windows").append(el);
   wins[app] = el;
@@ -1452,6 +1479,11 @@ function render(app) {
   if (!w) return;
   $(".wbody", w).innerHTML = RENDER[app]();
   if (app === "vms") {
+    const keep = S.data ? shownGuest(shownList(), S.sel) : S.sel;
+    if (keep !== S.sel) {
+      S.sel = keep;
+      S.tab = "overview";
+    }
     renderList();
     renderDetail();
   }
@@ -1482,17 +1514,43 @@ function render(app) {
   if (app === "network") loadNetwork();
 }
 
-/* Virtual Machines */
+/* VMs and Containers */
 const selected = () => S.data?.vms.find((v) => v.id === S.sel) ?? null;
+// A small screen for a VM, a box for a container, drawn like the app glyphs.
+const TYPE_GLYPH = {
+  qemu: '<rect x="4" y="6" width="24" height="16" rx="2"/><path d="M11 27h10M16 22v5"/>',
+  lxc: '<path d="M16 4l11 6v12l-11 6-11-6V10z"/><path d="M5 10l11 6 11-6M16 16v12"/>',
+};
+// Named in the list, where the icon is the only sign of the type; hidden where the word is printed beside it.
+const typeIcon = (v, named = true) =>
+  `<svg class="gtype" viewBox="0 0 32 32" ${named ? `role="img" aria-label="${guestTypeWord(v)}"><title>${guestTypeWord(v)}</title>` : 'aria-hidden="true">'}${TYPE_GLYPH[v.type] ?? TYPE_GLYPH.qemu}</svg>`;
 const dotClass = (v) => (v.issues.length ? "warn" : v.running ? "running" : "");
 const stateWord = (v) => `${v.template ? "Template" : v.paused ? "Paused" : v.running ? "Running" : "Shut down"} on ${v.node}`;
 
 function vmsShell() {
   return `<div class="vms"><aside>
-    <div class="tools"><input class="search" id="vmq" type="search" placeholder="Find a VM" aria-label="Find a VM" value="${esc(S.q)}">
-    <select class="search" id="vmnode" aria-label="Show VMs on"></select>
+    <div class="tools"><div class="pair wide"><input class="search" id="vmq" type="search" placeholder="Find a VM or container" aria-label="Find a VM or container" value="${esc(S.q)}">
+    <select class="search" id="vmsort" aria-label="Sort by">${GUEST_SORTS.map(([k, l]) => `<option value="${k}" ${k === S.vmSort ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+    <div class="pair"><select class="search" id="vmnode" aria-label="Show VMs and containers on"></select>
+    <select class="search" id="vmtype" aria-label="Show which type">${GUEST_TYPES.map(([k, l]) => `<option value="${k}" ${k === S.vmType ? "selected" : ""}>${l}</option>`).join("")}</select></div>
     <div class="seg" id="seg"></div></div>
     <div id="vmlist"></div></aside><div id="vmdetail"></div></div>`;
+}
+const shownList = () => guestList(S.data?.vms ?? [], { q: S.q, node: S.vmNode, state: S.filter, type: S.vmType, sort: S.vmSort });
+/**
+ * After a filter, sort or search change, or when the window opens: if the guest in the detail pane is no longer in
+ * the list, the pane moves to the first guest the list shows, so its buttons never act on a hidden guest. Not on the
+ * timed refresh, which leaves a Settings form alone while someone is editing it.
+ */
+function refilter() {
+  const keep = shownGuest(shownList(), S.sel);
+  const moved = keep !== S.sel;
+  if (moved) {
+    S.sel = keep;
+    S.tab = "overview";
+  }
+  renderList();
+  if (moved) renderDetail();
 }
 function renderList() {
   if (!$("#vmlist")) return;
@@ -1511,29 +1569,28 @@ function renderList() {
   const names = S.data.nodes.map((n) => n.name);
   if (S.vmNode && !names.includes(S.vmNode)) S.vmNode = "";
   $("#vmnode").innerHTML = `<option value="">Every node</option>${names.map((n) => `<option value="${esc(n)}" ${n === S.vmNode ? "selected" : ""}>On ${esc(n)}</option>`).join("")}`;
-  const q = S.q.toLowerCase();
-  const list = S.data.vms.filter(
-    (v) => (!S.vmNode || v.node === S.vmNode) && (S.filter === "all" || (S.filter === "running" && v.running) || (S.filter === "look" && v.issues.length)) && (v.name + v.os).toLowerCase().includes(q),
-  );
+  const list = shownList();
+  const what = { all: "VMs or containers", qemu: "VMs", lxc: "containers" }[S.vmType];
   $("#vmlist").innerHTML = list.length
     ? list
         .map(
-          (v) => `<button class="row ${v.id === S.sel ? "on" : ""}" data-pick="${v.id}">
-      <span class="dot ${dotClass(v)}"></span><b>${esc(v.name)}</b><small>${esc(stateWord(v))}</small></button>`,
+          (v) => `<button class="row guest ${v.id === S.sel ? "on" : ""}" data-pick="${v.id}">
+      <span class="dot ${dotClass(v)}"></span><b>${esc(v.name)}</b>${typeIcon(v)}<small>${esc(stateWord(v))}</small></button>`,
         )
         .join("")
-    : `<p class="empty">No VMs match${S.vmNode ? ` on ${esc(S.vmNode)}` : ""}. Try a different word or filter.</p>`;
+    : `<p class="empty">No ${what} match${S.vmNode ? ` on ${esc(S.vmNode)}` : ""}. Try a different word or filter.</p>`;
 }
 function renderDetail() {
   const box = $("#vmdetail");
   if (!box) return;
   const v = selected();
   if (!v) {
-    box.innerHTML = `<p class="empty">${S.data?.vms.length ? "Pick a VM to see its details." : "There are no VMs on this node yet."}</p>`;
+    box.innerHTML = `<p class="empty">${S.data?.vms.length ? "Pick a VM or container to see its details." : "There are no VMs or containers yet."}</p>`;
     return;
   }
   box.innerHTML = `
     <div class="head"><div><h2>${esc(v.name)}</h2>
+      <div class="state">${typeIcon(v, false)}${guestTypeWord(v)}</div>
       <div class="state"><span class="dot ${dotClass(v)}"></span>${esc(stateWord(v))}</div></div>
       <div class="actions">${
         v.template
@@ -1666,7 +1723,7 @@ const TAB = {
             .join("")
         : S.snapSupport?.[v.id] === false
           ? ""
-          : `<p class="empty">This VM has no snapshots yet.</p>`
+          : `<p class="empty">This ${v.type === "lxc" ? "container" : "VM"} has no snapshots yet.</p>`
     }`,
   settings: (v) => settingsPane(v),
 };
@@ -2045,7 +2102,7 @@ function diskLine(d) {
   const blocked = d.blocked || known?.blocked || "";
   return `<div class="stdisk"><div><b>${esc(d.model || d.path)}</b>${d.system ? `<span class="sttag">System disk</span>` : ""}
       <small>${esc(facts.join(", "))}${d.model ? `, ${esc(d.path)}` : ""}${d.wearLeft === null ? "" : `, ${Number(d.wearLeft)}% life left`}</small>
-      ${d.givenTo ? `<small>Given to ${esc(d.givenTo)} directly. That VM reads and writes this drive itself, so BossMox won't touch it.</small>` : blocked ? `<small>${esc(blocked)}</small>` : d.otherUses.length ? `<small>Also has ${esc(d.otherUses.join(", "))}, which isn't Proxmox storage.</small>` : ""}</div>
+      ${d.givenTo ? `<small>Given to ${esc(d.givenTo)} directly. It reads and writes this drive itself, so BossMox won't touch it.</small>` : blocked ? `<small>${esc(blocked)}</small>` : d.otherUses.length ? `<small>Also has ${esc(d.otherUses.join(", "))}, which isn't Proxmox storage.</small>` : ""}</div>
     <div class="actions"><button class="linkbtn healthbtn ${d.failing ? "bad" : ""}" data-diskhealth="${esc(d.path)}"><span class="dot ${d.failing ? "warn" : d.health === "UNKNOWN" ? "" : "running"}"></span>${d.failing ? "Failing" : d.health === "UNKNOWN" ? "Health unknown" : "Healthy"}</button>${wipe ? `<button class="btn" data-diskwipe="${esc(d.path)}">Wipe</button>` : ""}</div></div>`;
 }
 function poolBlock(p, onSystem = false) {
@@ -2721,10 +2778,10 @@ function drawRunStart(kind, server, plan, reboot) {
     `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${kind === "update" ? `<small>${n.updates} ${n.updates === 1 ? "update" : "updates"}${n.version ? `, version ${esc(n.version)}` : ""}</small>` : kind === "upgrade" ? `<small>${n.upgrade?.finishing ? `Packages on Proxmox VE ${esc(n.version ?? "")} already, not restarted yet: BossMox finishes it` : `Proxmox VE ${esc(n.version ?? "")} to ${esc(String(n.upgrade?.to ?? ""))}`}</small>` : ""}</div><span class="state">${kind === "upgrade" ? (n.vms.length ? "Upgrades and restarts" : "Upgrades and restarts, nothing running") : n.restart ? (n.vms.length ? "Restarts" : "Restarts, nothing running") : "No restart needed"}</span></div>${n.vms.map(row).join("")}</div>`;
   const how =
     kind === "upgrade"
-      ? `BossMox upgrades one node at a time, in this order. For each node it moves or shuts down each running VM as chosen below, switches the node's update sources, runs Proxmox's checker, installs Proxmox VE ${esc(String(to ?? ""))}, checks again, pins the port names and restarts it. Once it's back on the new version, it starts what it shut down and brings the rest home. Guests never move from a node on the new version to one on the old. Each node takes 10 to 30 minutes. Stop lets the node under way finish its upgrade and start what it shut down, then ends the run. Guests it moved stay where they are: Move everything back on a node's Overview brings them home. It runs on the BossMox server: you can close this window, and follow it from any browser.`
+      ? `BossMox upgrades one node at a time, in this order. For each node it moves or shuts down each running VM and container as chosen below, switches the node's update sources, runs Proxmox's checker, installs Proxmox VE ${esc(String(to ?? ""))}, checks again, pins the port names and restarts it. Once it's back on the new version, it starts what it shut down and brings the rest home. Guests never move from a node on the new version to one on the old. Each node takes 10 to 30 minutes. Stop lets the node under way finish its upgrade and start what it shut down, then ends the run. Guests it moved stay where they are: Move everything back on a node's Overview brings them home. It runs on the BossMox server: you can close this window, and follow it from any browser.`
       : kind === "update"
-        ? "BossMox updates one node at a time, in this order. For a node that restarts, it moves or shuts down each running VM as chosen below, installs, restarts, starts what it shut down and brings the rest home. Config files you've changed keep your version. It runs on the BossMox server: you can close this window, and follow it from any browser."
-        : "BossMox moves or shuts down each running VM as chosen below, restarts the node, then starts what it shut down and brings the rest home. It runs on the BossMox server: you can close this window, and follow it from any browser.";
+        ? "BossMox updates one node at a time, in this order. For a node that restarts, it moves or shuts down each running VM and container as chosen below, installs, restarts, starts what it shut down and brings the rest home. Config files you've changed keep your version. It runs on the BossMox server: you can close this window, and follow it from any browser."
+        : "BossMox moves or shuts down each running VM and container as chosen below, restarts the node, then starts what it shut down and brings the rest home. It runs on the BossMox server: you can close this window, and follow it from any browser.";
   const word = kind === "restart" ? "reboot" : "confirm";
   dialog(`<h3>${kind === "upgrade" ? `Upgrade ${plan.nodes.length === 1 ? esc(plan.nodes[0].name) : `${plan.nodes.length} nodes`} to Proxmox VE ${esc(String(to ?? ""))}?` : kind === "update" ? `Update ${plan.nodes.length === 1 ? esc(plan.nodes[0].name) : `${skipped ? "" : "all "}${plan.nodes.length} nodes`}?` : `Restart ${esc(server)}?`}</h3>
     <p>${how}</p>${skipped}
@@ -3279,6 +3336,8 @@ function createGuest() {
       S.sel = id;
       S.tab = "overview";
       S.filter = "all";
+      S.vmNode = "";
+      S.vmType = "all";
       S.q = "";
       wins.create?.remove();
       delete wins.create;
@@ -3469,7 +3528,7 @@ function askBackupReplace() {
   const v = S.data?.vms.find((g) => g.id === x.group.id);
   const storage = $("#bkdisk").value;
   if (v?.running)
-    return dialog(`<h3>Shut down ${esc(v.name)} first</h3><p>BossMox won't replace a guest while it's running. Shut it down in Virtual Machines, then come back to this backup.</p>${closeRow}`);
+    return dialog(`<h3>Shut down ${esc(v.name)} first</h3><p>BossMox won't replace a guest while it's running. Shut it down in VMs and Containers, then come back to this backup.</p>${closeRow}`);
   S.bkPlan.storage = storage;
   S.bkPlan.node = v?.node ?? x.node;
   if (v && v.node !== x.node)
@@ -4776,6 +4835,9 @@ document.addEventListener("click", (e) => {
     S.sel = +d.vm;
     S.tab = "overview";
     S.filter = "all";
+    // Shown in the list too, whatever node or type was picked. Not saved: the stored type is used again on the next page load.
+    S.vmNode = "";
+    S.vmType = "all";
     S.q = "";
     openWin("vms");
     return render("vms");
@@ -4788,7 +4850,7 @@ document.addEventListener("click", (e) => {
   }
   if (d.filter) {
     S.filter = d.filter;
-    return renderList();
+    return refilter();
   }
   if (d.tab) {
     S.tab = d.tab;
@@ -4824,7 +4886,13 @@ document.addEventListener("change", (e) => {
   }
   if (e.target.id === "vmnode") {
     S.vmNode = e.target.value;
-    return renderList();
+    return refilter();
+  }
+  if (e.target.id === "vmtype" || e.target.id === "vmsort") {
+    if (e.target.id === "vmtype") S.vmType = e.target.value;
+    else S.vmSort = e.target.value;
+    saveGuestListPref(e.target.id === "vmtype" ? "type" : "sort", e.target.value);
+    return refilter();
   }
   if (e.target.id === "alkind") return openAlertsSetup(e.target.value);
   if (e.target.dataset?.keepagain) {
@@ -4889,7 +4957,7 @@ document.addEventListener("input", (e) => {
   }
   if (e.target.id === "vmq") {
     S.q = e.target.value;
-    renderList();
+    refilter();
   }
 });
 
@@ -5089,7 +5157,8 @@ async function refresh() {
     // Not over a window someone is using: it opens on the next refresh after that one closes (#57).
     if (S.run?.running && S.runView === undefined && !$("#scrim").classList.contains("on")) openRun();
     else if (wasRunning && !S.run?.running && S.runView === undefined) renderHealth();
-    if (S.sel === null && body.vms[0]) S.sel = body.vms[0].id;
+    // The first guest the list shows, with the filter and sort this browser remembers (review 2026-11-18).
+    if (S.sel === null) S.sel = shownGuest(shownList(), null);
     S.failed = false;
   } catch (err) {
     if (late()) return;

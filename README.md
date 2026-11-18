@@ -40,7 +40,7 @@ Other options (`--storage`, `--bridge`, `--vlan`, `--vmid`) are listed at the to
 
 Make VMs and containers from an installer disc or a template, start, stop, restart, open a console, change settings in plain words, add disks and network cards, take and roll back snapshots, clone, make templates, move to another node, and delete with an honest answer about whether a backup exists.
 
-![The Create a VM form](docs/screenshots/create-vm.png)
+![The Create form](docs/screenshots/create-vm.png)
 *Making a VM: every choice in plain words, down to which drive its disk goes on and which network it joins.*
 
 ### Storage as disks and pools

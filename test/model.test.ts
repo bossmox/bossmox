@@ -52,6 +52,23 @@ test("builds the overview from real-shaped data", () => {
   );
 });
 
+test("a container's technical details leave out what only a VM has (#107)", () => {
+  const res: RawResource[] = [
+    { type: "node", node: "n1", status: "online" },
+    { type: "lxc", vmid: 103, node: "n1", name: "cache", status: "running" },
+    { type: "qemu", vmid: 101, node: "n1", name: "web", status: "running" },
+  ];
+  const guests = new Map([
+    [103, { config: { ostype: "debian", hostname: "cache" } }],
+    [101, { config: { ostype: "l26", machine: "q35" } }],
+  ]);
+  const o = buildOverview(res, guests, []);
+  assert.deepEqual(o.vms.find((v) => v.id === 103)?.tech, { "Container ID": 103 });
+  const vm = o.vms.find((v) => v.id === 101)?.tech;
+  assert.equal(vm?.["Machine type"], "q35");
+  assert.equal(vm?.["VM ID"], 101);
+});
+
 test("refuses to send passwords to Proxmox over plain http", () => {
   assert.throws(() => loadConfig({ PVE_URL: "http://192.0.2.1:8006" }), /https/);
   assert.equal(loadConfig({ PVE_URL: "http://127.0.0.1:9" }).pveUrl.port, "9");
