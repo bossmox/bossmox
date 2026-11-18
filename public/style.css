@@ -131,7 +131,7 @@ h1,h2,h3,p{margin:0}
 .wbody{flex:1;min-height:0;overflow:auto;background:var(--surface)}
 
 /* Virtual machines app */
-.vms{display:grid;grid-template-columns:296px 1fr;height:100%}
+.vms{display:grid;grid-template-columns:320px 1fr;height:100%}
 .vms aside{border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;background:var(--surface2)}
 .tools{padding:12px;display:grid;gap:8px}
 .search{width:100%;padding:8px 11px;border:1px solid var(--line);border-radius:var(--r-s);background:var(--surface)}

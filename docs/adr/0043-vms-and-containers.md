@@ -10,7 +10,7 @@ BossMox has managed containers since the first milestone, in the same screens as
 
 - The apps are called **VMs and Containers** and **Create**. "Guests" is Proxmox's word but few people use it; "Machines" still doesn't say container.
 - Each row in the list has a small type icon (a screen for a VM, a box for a container), drawn like the app glyphs, with the type as its accessible name. The detail pane says "Virtual machine" or "Container" under the name.
-- The list gets a **type filter** (VMs and containers, VMs only, Containers only) and a **sort** (name, type, node). They combine with the node filter, the All / Running / Needs a look buttons and the search. Name order breaks every tie, and names sort with numbers as numbers (web9 before web10).
+- The list gets a **type filter** (All types, VMs only, Containers only) and a **sort** (By name, By type, By node). They combine with the node filter, the All / Running / Needs a look buttons and the search. Name order breaks every tie, and names sort with numbers as numbers (web9 before web10).
 - The type and sort are remembered per browser, like the look. A stored value the list doesn't offer falls back to the default. Opening a guest from elsewhere (Health check, after Create) shows every type for that visit, so the guest is never hidden from the list.
 - The filter and sort live in `public/guest-list.js`, a plain script loaded before `app.js`, so the tests run the same code the page does (in Node's `vm`, as a script, not a module).
 - Wording that covers both says so ("VMs and containers", or no noun: "moves"). VM-only wording stays: the guest agent, Force BIOS and the boot menu, installer discs, NUMA, and the BossMox VM itself.

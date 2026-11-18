@@ -3,7 +3,7 @@
 
 /** What the list can be narrowed and sorted by. The first entry of each is the default. */
 const GUEST_TYPES = [
-  ["all", "VMs and containers"],
+  ["all", "All types"],
   ["qemu", "VMs only"],
   ["lxc", "Containers only"],
 ];
