@@ -8,7 +8,7 @@ import { writeJsonAtomic } from "./json-file.js";
 
 export type Choice = "move" | "shutdown";
 export type VmState = "waiting" | "moving" | "moved" | "stopping" | "off" | "starting" | "started" | "home" | "stayed" | "failed";
-export type Phase = "waiting" | "checking" | "emptying" | "installing" | "restarting" | "starting" | "returning" | "done" | "failed";
+export type Phase = "waiting" | "checking" | "emptying" | "installing" | "restarting" | "upgrading" | "starting" | "returning" | "done" | "failed";
 
 export interface RunVm {
   id: number;
@@ -30,10 +30,15 @@ export interface RunNode {
   note: string | null;
   /** Config files apt kept the old version of; the new one is beside each. */
   keptConfig: string[];
+  /**
+   * Upgraded to the next Proxmox VE major version in place of the install and restart (ADR 0042, piece 6): sources,
+   * packages, checker, pins, restart and check, all by the one-node upgrade. Absent on update and restart runs.
+   */
+  upgrade?: { to: number; finishing: boolean; version?: string | null; kernel?: string | null };
 }
 export interface Run {
   id: string;
-  kind: "update" | "restart";
+  kind: "update" | "restart" | "upgrade";
   by: string;
   startedAt: number;
   finishedAt: number | null;
@@ -104,6 +109,14 @@ export interface MoveOffResult {
   went: Record<number, string>;
   error: string | null;
 }
+export interface UpgradeResult {
+  /** The node was asked to restart. Before that, a failure leaves it running as it was. */
+  restarted: boolean;
+  error: string | null;
+  keptConfig: string[];
+  version: string | null;
+  kernel: string | null;
+}
 /** What a run needs from Proxmox and the move job, passed in so the run is tested without either. */
 export interface RunDeps {
   stopped(): string | null;
@@ -122,6 +135,8 @@ export interface RunDeps {
   moveOff(node: string, ids: number[]): Promise<MoveOffResult>;
   install(node: string): Promise<InstallResult>;
   restart(node: string): Promise<void>;
+  /** Upgrades the node to the next major version, switching its sources first. Only upgrade runs ask for it. */
+  upgrade?(node: string): Promise<UpgradeResult>;
   start(node: string, vm: RunVm): Promise<void>;
   /** Brings this node's moved VMs home. Resolves with each of `ids` that isn't home afterwards: where it is, and why. */
   moveHome(node: string, ids: number[]): Promise<Record<number, { on: string; why: string }>>;
@@ -140,6 +155,35 @@ async function step(run: Run, deps: RunDeps, node: RunNode, phase: Phase, work: 
   deps.save(run);
 }
 class StopError extends Error {}
+
+/**
+ * Read again right before the restart or upgrade: a guest may have arrived during the moves or the install (#49).
+ * Anything running there that wasn't shut down for it is moved off; one that won't move stops the node here.
+ */
+async function moveLate(run: Run, deps: RunDeps, node: RunNode, done: "restarted" | "upgraded") {
+  const late = (await deps.runningOn(node.name)).filter((g) => !node.vms.some((v) => v.id === g.id && v.state === "off"));
+  if (!late.length) return;
+  for (const g of late) if (!node.vms.some((v) => v.id === g.id)) node.vms.push({ ...g, choice: "move", state: "waiting", note: "arrived during the run" });
+  const lateVms = node.vms.filter((v) => late.some((g) => g.id === v.id));
+  for (const vm of lateVms) vm.state = "moving";
+  deps.save(run);
+  const result = await deps.moveOff(
+    node.name,
+    lateVms.map((v) => v.id),
+  );
+  for (const vm of lateVms) {
+    const on = result.went[vm.id];
+    if (on) {
+      vm.state = "moved";
+      vm.on = on;
+    } else {
+      vm.state = "failed";
+      vm.note = `still on ${node.name}`;
+    }
+  }
+  const left = lateVms.filter((v) => v.state === "failed");
+  if (left.length) throw new Error(`${left.map((v) => v.name).join(", ")} arrived on ${node.name} during the run and didn't move off, so it wasn't ${done}.`);
+}
 
 /** Drives the run to its end. Never throws: how it ended is written on the run. */
 export async function drive(run: Run, deps: RunDeps): Promise<void> {
@@ -214,7 +258,21 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
             if (left.length) throw new Error(`${left.map((v) => v.name).join(", ")} didn't move off ${node.name}, so it wasn't updated or restarted.`);
           });
         }
-        if (node.install) {
+        if (node.upgrade) {
+          const up = node.upgrade;
+          // Stop is honoured before it begins, never inside: the packages and the restart run to their end (ADR 0042).
+          await step(run, deps, node, "upgrading", async () => {
+            await moveLate(run, deps, node, "upgraded");
+            if (!deps.upgrade) throw new Error("This BossMox can't upgrade nodes.");
+            const r = await deps.upgrade(node.name);
+            rebootAsked = r.restarted;
+            node.keptConfig = r.keptConfig;
+            up.version = r.version;
+            up.kernel = r.kernel;
+            if (r.error) throw new Error(r.error);
+          });
+        }
+        if (node.install && !node.upgrade) {
           await step(run, deps, node, "installing", async () => {
             const r = await deps.install(node.name);
             node.keptConfig = r.keptConfig;
@@ -224,34 +282,12 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
           });
         }
         if (node.restart) {
-          await step(run, deps, node, "restarting", async () => {
-            // Read again right before the restart: a guest may have arrived during the moves or the install (#49).
-            const late = (await deps.runningOn(node.name)).filter((g) => !node.vms.some((v) => v.id === g.id && v.state === "off"));
-            if (late.length) {
-              for (const g of late) if (!node.vms.some((v) => v.id === g.id)) node.vms.push({ ...g, choice: "move", state: "waiting", note: "arrived during the run" });
-              const lateVms = node.vms.filter((v) => late.some((g) => g.id === v.id));
-              for (const vm of lateVms) vm.state = "moving";
-              deps.save(run);
-              const result = await deps.moveOff(
-                node.name,
-                lateVms.map((v) => v.id),
-              );
-              for (const vm of lateVms) {
-                const on = result.went[vm.id];
-                if (on) {
-                  vm.state = "moved";
-                  vm.on = on;
-                } else {
-                  vm.state = "failed";
-                  vm.note = `still on ${node.name}`;
-                }
-              }
-              const left = lateVms.filter((v) => v.state === "failed");
-              if (left.length) throw new Error(`${left.map((v) => v.name).join(", ")} arrived on ${node.name} during the run and didn't move off, so it wasn't restarted.`);
-            }
-            rebootAsked = true;
-            await deps.restart(node.name);
-          });
+          if (!node.upgrade)
+            await step(run, deps, node, "restarting", async () => {
+              await moveLate(run, deps, node, "restarted");
+              rebootAsked = true;
+              await deps.restart(node.name);
+            });
           // Starting what was shut down finishes this node's restart, so Stop doesn't skip it (#44).
           await step(
             run,
@@ -306,7 +342,11 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
       } catch (err) {
         // Ended before the restart: start again what was shut down for it, so nothing stays off for a restart
         // that never came. (Live 2026-11-11, Stop during emptying left a container off.)
-        if (node.phase === "emptying" || node.phase === "installing" || (node.phase === "restarting" && !rebootAsked)) {
+        // Restarted for an upgrade that then didn't pass its checks: what was shut down stays off until someone has
+        // looked at the node, and each says so.
+        if (node.phase === "upgrading" && rebootAsked)
+          for (const vm of node.vms.filter((v) => v.state === "off")) vm.note = `still off: ${node.name} restarted but didn't pass its checks; start it once the node looks right`;
+        if (node.phase === "emptying" || node.phase === "installing" || ((node.phase === "restarting" || node.phase === "upgrading") && !rebootAsked)) {
           for (const vm of node.vms.filter((v) => v.state === "off")) {
             try {
               await deps.start(node.name, vm);

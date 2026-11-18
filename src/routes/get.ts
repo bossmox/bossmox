@@ -82,6 +82,11 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
       return json(res, 200, { guests: await c.ha.list(session.ticket) });
     },
     "/api/alerts": async (_route, session, _params, _req, res) => json(res, 200, await c.alerts.view(session)),
+    // Only root@pam can run the checker, and its findings name storage and guests, so only root@pam sees them.
+    "/api/upgrade": async (_route, session, _params, _req, res) =>
+      session.username === "root@pam"
+        ? json(res, 200, { ...c.upgradeReady.view(), fixes: c.upgradeFixes.last(), sources: c.upgradeSources.view(), upgrades: c.nodeUpgrade.view() })
+        : json(res, 403, { error: "Only root@pam can check the upgrade, because the checker runs in each node's root console." }),
     "/api/email": async (_route, session, _params, _req, res) => json(res, 200, c.email.view({ username: session.username, canChange: await c.alerts.canChange(session) })),
     "/api/tiebreaker": async (_route, session, params, _req, res) => {
       // verify=1 reads pvecm status in a node's console after the person ran the setup there.
@@ -248,10 +253,11 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
       return json(res, 200, { run: runFor(jobs.currentRun, await viewerOf(session, jobs.currentRun?.by)) });
     },
     "/api/run-plan": async (_route, session, params, _req, res) => {
-      const kind = params.get("kind") === "restart" ? "restart" : "update";
+      const asked = params.get("kind");
+      const kind = asked === "restart" ? "restart" : asked === "upgrade" ? "upgrade" : "update";
       const name = params.get("server") ?? "";
       if (kind === "restart" && !NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-      return json(res, 200, await jobs.runPlan(session.ticket, kind, name));
+      return json(res, 200, await jobs.runPlan(session, kind, name));
     },
     "/api/moves": async (_route, session, _params, _req, res) => {
       // Only what's still where BossMox left it can go home; the rest was moved by someone since.
@@ -275,7 +281,7 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
     },
     "/api/overview": async (_route, session, _params, _req, res) => {
       // Only after sign-in: the exact version tells an attacker what to try.
-      return json(res, 200, { ...(await overview(session)), username: session.username, version: VERSION, update: updateView() });
+      return json(res, 200, { ...(await overview(session)), username: session.username, version: VERSION, update: updateView(), proxmox: c.proxmoxNotice.get(session) });
     },
   };
   return routes;

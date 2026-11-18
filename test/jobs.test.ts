@@ -243,3 +243,19 @@ test("when Proxmox won't say how many votes or which guests HA looks after, a re
     c.done();
   }
 });
+
+test("runs and moves wait while a node is upgrading on its own (review 2026-11-16)", async () => {
+  const c = cluster();
+  try {
+    c.ctx.upgrading = () => "n2";
+    const jobs = createJobs(c.ctx);
+    await assert.rejects(jobs.startRun(person, "restart", "n1", true, {}), /upgrading n2/);
+    await assert.rejects(
+      jobs.startMoveJob(person, async () => null),
+      /upgrading n2/,
+    );
+    assert.equal(jobs.busy(), null);
+  } finally {
+    c.done();
+  }
+});

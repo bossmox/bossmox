@@ -10,6 +10,7 @@ import { checkNetworks, migrationNetwork, SAFE_BATCH, type NetCheck } from "./cl
 import type { Overview, RawConfig, RawResource, RawSnapshot } from "./model.js";
 import { readMoves, runMoveHome, runMoveOff, writeMoves, type MoveDeps } from "./moves.js";
 import { INSTALL_COMMAND, runOnNode, STILL_RUNNING, type ShellConfig } from "./node-shell.js";
+import { rebootAndWait } from "./reboot.js";
 import { releaseMismatch } from "./release-guard.js";
 import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type Pending, type RawPrecondition } from "./placement.js";
 import type { Preferences } from "./preferences.js";
@@ -32,6 +33,7 @@ import {
   type Section,
 } from "./server-detail.js";
 import type { TermProxy } from "./terminal.js";
+import type { RunUpgrade } from "./upgrade-node.js";
 import { HttpError } from "./http-error.js";
 
 /** What the jobs need from the server. Tests pass a fake Proxmox and files in a temporary folder. */
@@ -47,6 +49,10 @@ export interface JobsContext {
   runsFile: string;
   /** This BossMox's own network cards; the real ones unless a test says otherwise. */
   macs?: () => Set<string>;
+  /** The cluster upgrade's planning and one-node upgrade (ADR 0042, piece 6). Without it, upgrade runs are refused. */
+  upgrade?: Pick<RunUpgrade, "plan" | "run">;
+  /** A node being upgraded on its own, outside a run: runs and moves wait for it (it may restart that node). */
+  upgrading?: () => string | null;
 }
 
 /** The MAC addresses of this BossMox's own network cards: the VM that has one of them is BossMox itself. */
@@ -61,6 +67,7 @@ function ownMacs(): Set<string> {
 
 /** How long a sign-in must still have left to start a run: long enough for a slow cluster update. */
 export const RUN_NEEDS_MS = 4 * 60 * 60 * 1000;
+export type RunKind = "update" | "restart" | "upgrade";
 
 export function createJobs(ctx: JobsContext) {
   const { pve } = ctx;
@@ -206,8 +213,21 @@ export function createJobs(ctx: JobsContext) {
     };
   }
 
+  function notWhileUpgrading() {
+    const node = ctx.upgrading?.();
+    if (node) throw new HttpError(409, `BossMox is upgrading ${node} to a new Proxmox VE version. Wait for that to finish.`);
+  }
+
+  /** A run or a move that's going, in words, or null: the one-node upgrade waits for either (it restarts a node). */
+  function busy(): string | null {
+    if (currentRun?.running || runState.starting) return "A run is going.";
+    if (moveRecord.job?.running || moveJob.starting) return "BossMox is moving guests.";
+    return null;
+  }
+
   /** Starts a move job in the background. The check and the claim happen before any wait, so two can't start. */
   async function startMoveJob(session: Session, prepare: () => Promise<((deps: MoveDeps) => Promise<void>) | null>): Promise<string | null> {
+    notWhileUpgrading();
     // A run claims the cluster before its first wait, while it plans; that counts as going too (#45).
     if (currentRun?.running || runState.starting) throw new HttpError(409, "An update or restart run is going. Its moves are part of it.");
     if (moveJob.starting || moveRecord.job?.running)
@@ -316,13 +336,20 @@ export function createJobs(ctx: JobsContext) {
     choice: "move" | "shutdown";
   }
   /** What a run would do on each node, with a choice per running VM: what it can do, and the safe default. */
-  async function runPlan(ticket: string, kind: "update" | "restart", server: string, assumeEjected: number[] = []) {
+  async function runPlan(who: string | Pick<Session, "username" | "ticket">, kind: RunKind, server: string, assumeEjected: number[] = []) {
+    // A ticket alone is enough for updates and restarts; an upgrade also needs to know it's root@pam.
+    const session = typeof who === "string" ? { username: "", ticket: who } : who;
+    const ticket = session.ticket;
     const macs = (ctx.macs ?? ownMacs)();
     const rolling = kind === "update" ? await loadRollingPlan(ticket, assumeEjected) : null;
-    const nodes =
+    // An upgrade empties and restarts every node still to go, one at a time, oldest first (ADR 0042).
+    const upgrades = kind === "upgrade" ? await upgradePlan(session) : [];
+    const nodes: { name: string; version: string | null; updates: number; restart: boolean; install: boolean; upgrade?: { to: number; finishing: boolean } }[] =
       kind === "update"
         ? (rolling?.servers ?? []).map((s) => ({ name: s.name, version: s.version, updates: s.updates ?? 0, restart: s.rebootNeeded, install: true }))
-        : [{ name: server, version: null, updates: 0, restart: true, install: false }];
+        : kind === "upgrade"
+          ? upgrades.map((u) => ({ name: u.name, version: u.version, updates: 0, restart: true, install: false, upgrade: { to: u.to, finishing: u.finishing } }))
+          : [{ name: server, version: null, updates: 0, restart: true, install: false }];
     const out = await Promise.all(
       nodes.map(async (n) => {
         if (!n.restart) return { ...n, vms: [] as PlanVm[] };
@@ -482,19 +509,8 @@ export function createJobs(ctx: JobsContext) {
         );
         return { exitCode: r.exitCode, keptConfig: r.keptConfig, left };
       },
-      restart: async (node) => {
-        const asked = Date.now();
-        await pve.post<null>(`/nodes/${enc(node)}/status`, session, { command: "reboot" });
-        for (const until = asked + 20 * 60 * 1000; ; await new Promise((r) => setTimeout(r, 5000))) {
-          const s = await pve.get<RawStatus>(`/nodes/${enc(node)}/status`, t()).catch(() => null);
-          const back = s?.uptime !== undefined && s.uptime * 1000 < Date.now() - asked;
-          if (back) {
-            const resources = await pve.get<RawResource[]>("/cluster/resources?type=node", t()).catch(() => []);
-            if (resources.some((r) => r.node === node && r.status === "online")) return;
-          }
-          if (Date.now() > until) throw new Error(`${node} hasn't come back after 20 minutes. Someone may need to look at the node itself.`);
-        }
-      },
+      restart: (node) => rebootAndWait(pve, session, node),
+      upgrade: (node) => (ctx.upgrade ? ctx.upgrade.run(session, node) : Promise.reject(new Error("This BossMox can't upgrade nodes."))),
       start: async (node, vm) => {
         // A node that has just come back can refuse for a few seconds.
         for (let i = 0; ; i++) {
@@ -538,8 +554,13 @@ export function createJobs(ctx: JobsContext) {
     };
   }
 
+  async function upgradePlan(session: Pick<Session, "username" | "ticket">) {
+    if (!ctx.upgrade) throw new HttpError(400, "This BossMox can't upgrade nodes.");
+    return ctx.upgrade.plan(session);
+  }
+
   /** Starts a run with the person's choices. Everything is checked again here; the page's copy is only a request. */
-  async function startRun(session: Session, kind: "update" | "restart", server: string, confirmed: boolean, choices: Record<string, unknown>): Promise<string> {
+  async function startRun(session: Session, kind: RunKind, server: string, confirmed: boolean, choices: Record<string, unknown>): Promise<string> {
     if (!confirmed) throw new HttpError(400, "It wasn't confirmed.");
     // A run stops when the sign-in that started it ends. One that won't last a long update is refused up front (#59).
     const left = session.expiresAt - Date.now();
@@ -547,15 +568,17 @@ export function createJobs(ctx: JobsContext) {
       throw new HttpError(400, `Your sign-in ends in ${Math.max(1, Math.round(left / 60000))} minutes, and a run stops when it does. Sign out and in again first, then start it.`);
     if (currentRun?.running || runState.starting) throw new HttpError(409, "A run is already going. Open it to follow or stop it.");
     if (moveRecord.job?.running || moveJob.starting) throw new HttpError(409, "BossMox is moving guests right now. Wait for that to finish.");
+    notWhileUpgrading();
     runState.starting = true;
     try {
       // Discs chosen to come out are planned as already out. Nothing is ejected until every check below passes (#48).
       const eject = Object.entries(choices)
         .filter(([, c]) => c === "eject")
         .map(([id]) => Number(id));
-      const plan = await runPlan(session.ticket, kind, server, eject);
+      const plan = await runPlan(session, kind, server, eject);
       if (plan.blocked.length) throw new HttpError(400, plan.blocked.join(" "));
       if (kind === "update" && !plan.nodes.length) throw new HttpError(400, "Every node is up to date.");
+      if (kind === "upgrade" && !plan.nodes.length) throw new HttpError(400, "Every node is on the new version already.");
       const nodes: RunNode[] = plan.nodes.map((n) => ({
         name: n.name,
         install: n.install,
@@ -564,6 +587,7 @@ export function createJobs(ctx: JobsContext) {
         phase: "waiting",
         note: null,
         keptConfig: [],
+        ...(n.upgrade ? { upgrade: { ...n.upgrade } } : {}),
         vms: n.vms.map((v) => {
           const asked = choices[String(v.id)];
           const choice: Choice = v.self ? "move" : asked === "shutdown" ? "shutdown" : asked === "move" || asked === "eject" ? "move" : v.choice;
@@ -615,6 +639,7 @@ export function createJobs(ctx: JobsContext) {
     runPlan,
     startRun,
     startMoveJob,
+    busy,
     loadRollingPlan,
     readNetCheck,
     batchFor,

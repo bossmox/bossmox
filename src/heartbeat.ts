@@ -40,9 +40,9 @@ export interface HeartbeatDeps {
 
 /** The real console: Proxmox's termproxy, as updates use (ADR 0027). */
 export function nodeConsole(pve: PveClient, shell: () => ShellConfig) {
-  return async (node: string, session: Session, line: string) => {
+  return async (node: string, session: Session, line: string, timeoutMs = 2 * 60 * 1000) => {
     const proxy = await pve.post<TermProxy>(`/nodes/${encodeURIComponent(node)}/termproxy`, session);
-    return runOnNode(shell(), node, session.ticket, proxy, `( ${line} ); echo __BOSSMOX_DONE__:$?\n`, 2 * 60 * 1000);
+    return runOnNode(shell(), node, session.ticket, proxy, `( ${line} ); echo __BOSSMOX_DONE__:$?\n`, timeoutMs);
   };
 }
 

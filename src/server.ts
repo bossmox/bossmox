@@ -57,6 +57,12 @@ import { createEmail, emailPath } from "./email.js";
 import { CLIENT_ID, createOutlook } from "./outlook.js";
 import { keyPath, readKey } from "./sealed.js";
 import { createAlertLink, INBOUND_PATH } from "./alert-link.js";
+import { createProxmoxNotice } from "./proxmox-notice.js";
+import { createUpgradeReady } from "./upgrade-ready.js";
+import { createUpgradeFixes } from "./upgrade-fixes.js";
+import { createUpgradeSources } from "./upgrade-sources.js";
+import { createNodeUpgrade, createRunUpgrade } from "./upgrade-node.js";
+import { rebootAndWait } from "./reboot.js";
 import { X509Certificate } from "node:crypto";
 import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
@@ -116,7 +122,9 @@ sessions.onEnd = (session) => {
   if (session === jobs.runState.session && jobs.currentRun?.running) jobs.currentRun.stop = `${session.username} signed out.`;
 };
 // A move job keeps its person's Proxmox login renewed, like an open console does.
-sessions.isBusy = (session) => terminals.hasOpen(session) || session === jobs.moveJob.session || session === jobs.runState.session;
+// So does a one-node upgrade: it carries on after its person signs out, like a run's node under way, and must not fail
+// part way because nobody kept the login fresh.
+sessions.isBusy = (session) => terminals.hasOpen(session) || session === jobs.moveJob.session || session === jobs.runState.session || session === nodeUpgrade.session();
 setInterval(() => void sessions.tick().catch((err: Error) => console.error("Session check failed:", err.message)), 60 * 1000).unref();
 const secureCookie = Boolean(config.tls) || config.behindProxy;
 // The __Host- prefix stops a sibling site or another port from setting this cookie over the real one.
@@ -218,10 +226,43 @@ const jobs = createJobs({
   shell: () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName }),
   movesFile: movesPath(settingsPath(process.env)),
   runsFile: runsPath(settingsPath(process.env)),
+  // Made further down with the other upgrade pieces; only called once a run starts.
+  upgrade: { plan: (s) => runUpgrade.plan(s), run: (s, n) => runUpgrade.run(s, n) },
+  // Called only once someone acts, after nodeUpgrade below exists.
+  upgrading: () => nodeUpgrade.running(),
 });
 
 /** Checks GitHub for a newer BossMox every 6 hours while it's on (ADR 0019). A copy with no version never checks. */
 const updates = new UpdateChecker(VERSION, preferences.updateCheck);
+const proxmoxNotice = createProxmoxNotice(pve);
+const rootConsole = nodeConsole(pve, () => ({ pveUrl: pve.activeUrl, pveCa: config.pveCa, pveTlsName: config.pveTlsName }));
+const upgradeReady = createUpgradeReady({ pve, console: rootConsole });
+const upgradeSources = createUpgradeSources({
+  pve,
+  console: rootConsole,
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
+  upgrading: () => nodeUpgrade.running(),
+});
+const upgradeFixes = createUpgradeFixes({
+  console: rootConsole,
+  onlineNodes: async (session) =>
+    (await pve.get<{ node?: string; status?: string }[]>("/cluster/resources?type=node", session.ticket))
+      .filter((r) => r.node && r.status === "online")
+      .map((r) => r.node as string)
+      .sort(),
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
+  upgrading: () => nodeUpgrade.running(),
+});
+const nodeUpgrade = createNodeUpgrade({
+  pve,
+  console: rootConsole,
+  pin: (session, node) => upgradeFixes.pinForUpgrade(session, node),
+  reboot: (session, node) => rebootAndWait(pve, session, node),
+  sources: upgradeSources,
+  audit: (event, who, detail) => audit(event, who, "settings", detail),
+  busy: () => jobs.busy(),
+});
+const runUpgrade = createRunUpgrade({ pve, sources: upgradeSources, nodes: nodeUpgrade, ready: () => upgradeReady.view() });
 updates.start();
 const HAS_VERSION = versionNumbers(VERSION) !== null;
 const SHORT_VERSION = VERSION.replace(/^(\d+\.\d+\.\d+(?:-[a-z]+)?).*$/, "$1");
@@ -531,6 +572,7 @@ async function loadHealth(session: Session) {
         : null),
     linkMissing: alertsView?.kind === "email" ? alertLink.missing(data.nodes.map((n) => n.name)) : [],
     certDaysLeft: certDaysLeft(),
+    versions: details.flatMap((d) => (d?.summary && d.summary.proxmoxVersion !== "Unknown" ? [{ node: d.name, version: d.summary.proxmoxVersion }] : [])),
     channels: details.flatMap((d) => (d?.channel ? [{ node: d.name, ...d.channel }] : [])),
     updates: details.flatMap((d) => (d?.updates ? [{ node: d.name, total: d.updates.total }] : [])),
     guests: data.vms,
@@ -675,6 +717,10 @@ const actionContext = {
   alerts,
   email,
   alertLink,
+  upgradeReady,
+  upgradeFixes,
+  upgradeSources,
+  nodeUpgrade,
   updates,
   preferences: () => preferences,
   setPreferences: (next: Preferences) => {
@@ -963,6 +1009,11 @@ const routeContext = {
   pve,
   snapshotFixFor,
   updateView,
+  proxmoxNotice,
+  upgradeReady,
+  upgradeFixes,
+  upgradeSources,
+  nodeUpgrade,
   viewerOf,
   epoch: () => preferencesEpoch,
 };

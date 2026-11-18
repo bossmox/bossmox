@@ -1,5 +1,6 @@
 import { AuthError } from "../auth.js";
 import { KINDS, type AlertKind } from "../alerts.js";
+import { RELEASES } from "../lifecycle.js";
 import { applyChannel, ChannelError } from "../update-channel.js";
 import { canChangeCluster, KEEP_FREE_CHOICES, writePreferences } from "../preferences.js";
 import { runMoveHome, runMoveOff } from "../moves.js";
@@ -68,6 +69,39 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       await c.alerts.remove(who);
       c.alertLink.forget();
       if (c.email.status().account) await c.email.remove(who);
+      return null;
+    },
+    "upgrade-check": async (_name, who) => {
+      await c.upgradeReady.start(who);
+      return null;
+    },
+    "upgrade-fix-lvm": async (_name, who, body) => {
+      await c.upgradeFixes.lvm(who, text(body.confirm, 64));
+      return null;
+    },
+    "upgrade-sources": async (name, who, body) => {
+      // Refused before anything is read from Proxmox, like every other upgrade action.
+      if (who.username !== "root@pam") throw new HttpError(403, "This runs in the node's root console. Sign in as root@pam.");
+      const version = await pve.get<{ version?: string }>(`/nodes/${encodeURIComponent(name)}/version`, who.ticket);
+      const major = Number.parseInt(version.version ?? "", 10);
+      const from = RELEASES.find((r) => r.major === major)?.codename;
+      const to = RELEASES.find((r) => r.major === major + 1)?.codename;
+      if (!from || !to) throw new HttpError(400, `BossMox doesn't know which release comes after Proxmox VE ${version.version ?? "this version"}.`);
+      const r = await c.upgradeSources.switchNode(who, name, text(body.confirm, 64), from, to);
+      if (r.error) throw new HttpError(400, r.error);
+      return null;
+    },
+    "upgrade-sources-undo": async (name, who, body) => {
+      const r = await c.upgradeSources.undo(who, name, text(body.confirm, 64));
+      if (r.error) throw new HttpError(400, r.error);
+      return null;
+    },
+    "upgrade-node": async (name, who, body) => {
+      await c.nodeUpgrade.start(who, name, text(body.confirm, 64));
+      return null;
+    },
+    "upgrade-pin": async (name, who, body) => {
+      await c.upgradeFixes.pin(who, name, text(body.confirm, 64));
       return null;
     },
     "email-start": async (_name, who) => {
@@ -151,12 +185,12 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       });
     },
     "run-start": (_name, who, body) => {
-      const kind = body.kind === "restart" ? "restart" : body.kind === "update" ? "update" : null;
+      const kind = body.kind === "restart" ? "restart" : body.kind === "update" ? "update" : body.kind === "upgrade" ? "upgrade" : null;
       if (!kind) throw new HttpError(400, "That request isn't valid.");
       const server = text(body.server, 64);
       if (kind === "restart" && !NODE_NAME.test(server)) throw new HttpError(400, "That server name isn't valid.");
       const choices = (body.choices && typeof body.choices === "object" ? body.choices : {}) as Record<string, unknown>;
-      return jobs.startRun(who, kind, server, body.confirm === (kind === "update" ? "confirm" : "reboot"), choices);
+      return jobs.startRun(who, kind, server, body.confirm === (kind === "restart" ? "reboot" : "confirm"), choices);
     },
     "run-stop": async (_name, who) => {
       if (!jobs.currentRun?.running) return null;

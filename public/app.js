@@ -357,7 +357,7 @@ function renderHealth() {
   }
   const { nodes, vms, storage } = S.data;
   const avail = S.data.update?.available;
-  const issues = [...(avail ? [{ kind: "bossmox-update", title: `BossMox ${avail.version} is available`, detail: "" }] : []), ...S.data.issues, ...diskIssues()];
+  const issues = [...(avail ? [{ kind: "bossmox-update", title: `BossMox ${avail.version} is available`, detail: "" }] : []), ...proxmoxIssues(), ...S.data.issues, ...diskIssues()];
   const up = nodes.filter((n) => n.online).length;
   const guests = vms.filter((v) => !v.template);
   const run = guests.filter((v) => v.running).length;
@@ -390,7 +390,7 @@ function renderHealth() {
         <small>${n.online ? `${n.cpuPct}% busy` : "Offline"}</small></button>`;
       })
       .join("")}</div>
-    ${shown.length && !notes.collapsed ? `<div class="look-items">${shown.map((i) => `<div class="look-row"><button class="look-item" ${i.vmId ? `data-vm="${i.vmId}"` : i.kind === "bossmox-update" ? 'data-bmupdate="1"' : 'data-open="storage"'}><span class="dot warn"></span><span>${esc(i.title)}</span></button><button class="look-x" data-noticex="${esc(noticeKey(i))}" aria-label="Dismiss ${esc(i.title)}" title="Dismiss">&times;</button></div>`).join("")}</div>` : ""}
+    ${shown.length && !notes.collapsed ? `<div class="look-items">${shown.map((i) => `<div class="look-row"><button class="look-item" ${i.vmId ? `data-vm="${i.vmId}"` : i.kind === "bossmox-update" ? 'data-bmupdate="1"' : i.kind === "pve-ended" ? 'data-open="health"' : i.kind === "pve-updates" ? 'data-rolling="1"' : 'data-open="storage"'}><span class="dot warn"></span><span>${esc(i.title)}</span></button><button class="look-x" data-noticex="${esc(noticeKey(i))}" aria-label="Dismiss ${esc(i.title)}" title="Dismiss">&times;</button></div>`).join("")}</div>` : ""}
     ${controls ? `<div class="look-controls">${controls}</div>` : ""}`;
 }
 
@@ -448,6 +448,8 @@ function healthFix(f) {
       return b(`data-checknow="1"`);
     case "settings":
       return b(`data-open="settings"`);
+    case "upgrade":
+      return b(`data-upgrade="1"`);
     case "move-network":
       return b(`data-movefix="1"`);
     case "ha-policy":
@@ -734,6 +736,171 @@ async function cancelOutlook() {
   await post("api/action/email-cancel", { server: onlineNodes()[0] }).catch(() => null);
   closeDialog();
   loadSettings();
+}
+
+/*
+ * Getting ready to upgrade Proxmox (ADR 0042): Proxmox's own checker on every node, read and explained, beside
+ * BossMox's own checks. Nothing is changed on the nodes.
+ */
+const UP_HANDLING = {
+  blocks: ["bad", "Fix first"],
+  fix: ["warn", "BossMox can fix this"],
+  bossmox: ["ok", "BossMox takes care of it"],
+  advice: ["off", "Good to know"],
+};
+const UP_PHASE = {
+  checking: "Running Proxmox's checker",
+  upgrading: "Installing the new version. This usually takes 10 to 30 minutes",
+  rechecking: "Checking the new packages",
+  pinning: "Pinning the port names",
+  restarting: "Restarting",
+  verifying: "Checking it came back on the new version",
+};
+const upgrading = (u) => Object.values(u?.upgrades ?? {}).some((j) => !j.finishedAt);
+/** What a node runs now: an upgrade since the check (one node, or a cluster run) beats what the check read. */
+function nowOn(n, up, checkedAt) {
+  // Only an upgrade that ended after the check is newer than what the check read: an old run's record stays on disk.
+  const since = (at) => (at ?? Number.POSITIVE_INFINITY) > (checkedAt ?? 0);
+  const ran = since(S.run?.finishedAt) && S.run?.nodes?.find((x) => x.name === n.node && x.phase === "done" && x.upgrade?.version);
+  return (up?.phase === "done" && since(up.finishedAt) && up.version) || ran?.upgrade?.version || n.version;
+}
+function upgradeBody(u) {
+  if (!u.checkedAt && !u.running) return `<p>BossMox runs Proxmox's own upgrade checker on every node, one at a time, and explains what it finds. It only reads: nothing on the nodes changes.</p>`;
+  if (u.running) return `<p>Running Proxmox's checker on each node. This takes about a minute per node.</p>`;
+  const verdict = u.ready
+    ? `<p class="okline">Nothing stands in the way of upgrading to Proxmox VE ${esc(String(u.to))}.</p>`
+    : `<p class="loginerr">${u.blocking === 1 ? "One thing has" : `${u.blocking} things have`} to be fixed before upgrading${u.to ? ` to Proxmox VE ${esc(String(u.to))}` : ""}.</p>`;
+  const nodeBlock = (n) => {
+    const counts = n.counts
+      ? `${n.counts.passed} passed, ${n.counts.warnings} ${n.counts.warnings === 1 ? "warning" : "warnings"}, ${n.counts.failures} ${n.counts.failures === 1 ? "failure" : "failures"}`
+      : "";
+    const items = n.items
+      .map((i) => {
+        const [tone, words] = UP_HANDLING[i.handling] ?? UP_HANDLING.advice;
+        return `<div class="snap"><div><span class="dot ${tone}"></span><b>${esc(i.title)}</b> <span class="rec${tone === "ok" ? " ok" : ""}">${esc(words)}</span>${i.detail ? `<small>${esc(i.detail)}</small>` : ""}${i.fixId === "lvm-autoactivation" ? `<div class="actions"><button class="btn" data-upfix="lvm">Turn it off</button></div>` : ""}${i.original && i.original !== i.title ? `<details class="hbdetails"><summary>Proxmox's words</summary><pre class="meta">${esc(i.original)}</pre></details>` : ""}</div></div>`;
+      })
+      .join("");
+    const pin = u.fixes?.pins?.[n.node];
+    const pinWords = !pin
+      ? "Before this node restarts for the upgrade, BossMox pins its port names, so a new kernel can't rename them."
+      : !pin.ok
+        ? `Pinning didn't work: ${pin.error}`
+        : pin.already
+          ? "Every port already has a fixed name, so a new kernel can't rename them."
+          : `Pinned: ${pin.renames.map((r) => `${r.from} becomes ${r.to}`).join(", ")}, at the next restart.${pin.kept?.length ? ` ${pin.kept.map((k) => k.name).join(", ")} ${pin.kept.length === 1 ? "keeps its name" : "keep their names"}: another file already fixes ${pin.kept.length === 1 ? "it" : "them"}.` : ""}`;
+    const up = u.upgrades?.[n.node];
+    const upWords = up
+      ? up.phase === "done"
+        ? `<div class="snap"><div><span class="dot ok"></span><b>Upgraded to Proxmox VE ${esc(up.version ?? String(up.to))}</b><small>Running kernel ${esc(up.kernel ?? "unknown")}.${up.keptConfig?.length ? ` These config files had been changed, so they were kept, with the new version beside each as .dpkg-dist: ${esc(up.keptConfig.join(", "))}.` : ""}</small></div></div>`
+        : up.phase === "failed"
+          ? `<div class="snap"><div><span class="dot bad"></span><b>The upgrade stopped</b><small>${esc(up.error ?? "")}</small></div></div>`
+          : `<div class="snap"><div><span class="dot warn"></span><b>Upgrading to Proxmox VE ${esc(String(up.to))}</b><small>${esc(UP_PHASE[up.phase] ?? up.phase)}. You can close this window; the upgrade carries on.</small></div></div>`
+      : "";
+    const src = u.sources?.[n.node];
+    const srcErr = src?.error ? `<p class="loginerr">${esc(src.error)}</p>` : "";
+    const srcBack = src?.backup && !src.switchedAt ? `<div class="actions"><button class="btn" data-upsrcback="${esc(n.node)}">Put the old sources back</button></div>` : "";
+    const srcWords = upWords
+      ? `${upWords}${up?.phase === "failed" && src?.backup ? `${srcErr}<div class="actions"><button class="btn" data-upsrcback="${esc(n.node)}">Put the old sources back</button></div>` : ""}`
+      : src?.backup && !src.switchedAt
+        ? `${srcErr}${srcBack}`
+        : src?.backup
+          ? `<div class="snap"><div><span class="dot warn"></span><b>Update sources switched to the next release</b><small>Normal updates are held for this node until it's upgraded or the old sources are back.${src.others?.length ? ` Left as they were: ${esc(src.others.map((o) => o.uri).join(", "))}.` : ""}</small></div><div class="actions"><button class="btn primary" data-upnode="${esc(n.node)}">Upgrade to Proxmox VE ${esc(String(u.to ?? ""))}</button><button class="btn" data-upsrcback="${esc(n.node)}">Put the old sources back</button></div></div>${srcErr}`
+          : src?.error
+            ? `<p class="loginerr">${esc(src.error)}</p>`
+            : "";
+    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${nowOn(n, up, u.checkedAt) ? `Proxmox VE ${esc(nowOn(n, up, u.checkedAt))}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}</small></div>${!pin?.ok ? `<div class="actions"><button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button></div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${srcWords}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
+  };
+  const lvm = u.fixes?.lvm;
+  const lvmWords = lvm
+    ? `<details class="hbdetails" ${lvm.every((r) => r.ok) ? "" : "open"}><summary>${lvm.every((r) => r.ok) ? "Autoactivation was turned off" : "Turning off autoactivation didn't finish"}</summary><pre class="meta">${esc(lvm.map((r) => `${r.node}\n${r.lines.join("\n")}`).join("\n\n"))}</pre></details>`
+    : "";
+  return `${verdict}${lvmWords}${u.nodes.map(nodeBlock).join("")}<p class="meta">Checked ${esc(new Date(u.checkedAt).toLocaleString())}.</p>`;
+}
+async function openUpgrade() {
+  let u;
+  try {
+    u = await signal("api/upgrade");
+  } catch (err) {
+    if (err.message === "signed out") return;
+    return dialog(`<h3>Upgrade Proxmox</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  drawUpgrade(u);
+  if (u.running || upgrading(u)) followUpgradeCheck();
+}
+function drawUpgrade(u) {
+  dialog(`<h3>Get ready to upgrade${u.to ? ` to Proxmox VE ${esc(String(u.to))}` : " Proxmox"}</h3>
+    <div id="upbody">${upgradeBody(u)}</div>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn${u.ready ? "" : " primary"}" data-upgradecheck="1" ${u.running ? "disabled" : ""}>${u.checkedAt ? "Check again" : "Run the checker"}</button>${u.ready && !u.running && !S.run?.running ? `<button class="btn primary" data-runupgrade="1">Upgrade all nodes</button>` : ""}</div>`);
+}
+async function startUpgradeCheck() {
+  try {
+    const res = await post("api/action/upgrade-check", { server: onlineNodes()[0] });
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) return dialog(`<h3>The checker didn't start</h3><p class="loginerr">${esc((await res.json()).error)}</p>${closeRow}`);
+  } catch (err) {
+    return dialog(`<h3>The checker didn't start</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  drawUpgrade({ running: true, nodes: [], checkedAt: null, to: null });
+  followUpgradeCheck();
+}
+function askLvmFix() {
+  dialog(`<h3>Turn off autoactivation for existing disks?</h3>
+    <p>BossMox runs Proxmox's own command on every node, one at a time: <code>pve-lvm-disable-autoactivation</code>. It changes a setting on the guests' LVM disks, so a node only activates a disk when a guest needs it. Disks on shared storage are changed once. Guests keep running, and nothing is erased.</p>
+    <p class="meta">Proxmox strongly recommends this for LVM storage shared between nodes. Proxmox VE 9 makes new disks this way.</p>
+    <label class="field restartname"><span>Type confirm to turn it off on every node</span><input id="rname" data-word="confirm" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-uplvmgo="1" disabled>Turn it off</button></div>`);
+  $("#rname").focus();
+}
+function askPin(node) {
+  dialog(`<h3>Pin the port names on ${esc(node)}?</h3>
+    <p>BossMox runs Proxmox's <code>pve-network-interface-pinning</code> on ${esc(node)}. Each network port gets a fixed name (nic0, nic1 and so on), and the network settings, firewall and SDN settings are changed to match. Nothing changes until ${esc(node)} restarts.</p>
+    <p class="meta">BossMox does this anyway before it restarts a node for the upgrade. Doing it now means the restart after the next update already uses the new names, and you can see the result before upgrading.</p>
+    <label class="field restartname"><span>Type ${esc(node)} to confirm</span><input id="rname" data-word="${esc(node.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-uppingo="${esc(node)}" disabled>Pin port names</button></div>`);
+  $("#rname").focus();
+}
+function askUpgradeNode(node, to) {
+  dialog(`<h3>Upgrade ${esc(node)} to Proxmox VE ${esc(to)}?</h3>
+    <p>BossMox runs Proxmox's checker, installs the new version's packages, checks again, pins the port names and restarts ${esc(node)}, then checks it came back on the new version. Config files that were changed by hand are kept, with the new version beside each.</p>
+    <p>It usually takes 10 to 30 minutes. If anything goes wrong, BossMox stops there and doesn't restart the node.</p>
+    <p class="meta">Nothing may run on ${esc(node)} while it upgrades, so move its guests first. There's no going back to the old version once the packages start installing.</p>
+    <label class="field restartname"><span>Type ${esc(node)} to confirm</span><input id="rname" data-word="${esc(node.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-upnodego="${esc(node)}" disabled>Upgrade ${esc(node)}</button></div>`);
+  $("#rname").focus();
+}
+function askSourcesBack(node) {
+  dialog(`<h3>Put the old update sources back on ${esc(node)}?</h3>
+    <p>BossMox restores the copy of ${esc(node)}'s sources it saved before switching them, and refreshes the package lists. Nothing is installed or removed.</p>
+    <label class="field restartname"><span>Type ${esc(node)} to confirm</span><input id="rname" data-word="${esc(node.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-upsrcbackgo="${esc(node)}" disabled>Put them back</button></div>`);
+  $("#rname").focus();
+}
+async function runUpgradeFix(action, node, body, words, checkAfter) {
+  dialog(`<h3>${esc(words)}</h3><p>This can take a minute.</p>`);
+  try {
+    const res = await post(`api/action/${action}`, { server: node, ...body });
+    if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+    if (!res.ok) throw new Error((await res.json()).error);
+  } catch (err) {
+    return dialog(
+      `<h3>That didn't finish</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><div class="row-end"><button class="btn primary" data-upgrade="1">Back</button></div>`,
+    );
+  }
+  if (checkAfter) return startUpgradeCheck();
+  openUpgrade();
+}
+async function followUpgradeCheck() {
+  for (;;) {
+    await new Promise((r) => setTimeout(r, 3000));
+    if (!$("#upbody")) return;
+    const u = await signal("api/upgrade").catch(() => null);
+    if (!u || !$("#upbody")) return;
+    if (upgrading(u)) {
+      $("#upbody").innerHTML = upgradeBody(u);
+      continue;
+    }
+    if (!u.running) return drawUpgrade(u);
+  }
 }
 
 /* Redundancy (ADR 0035): a backup network for the cluster heartbeat, set up here when every node has a second port. */
@@ -1224,6 +1391,33 @@ function openWin(app) {
 function focusWin(app) {
   wins[app].style.zIndex = ++S.z;
   renderTasks(app);
+}
+/*
+ * The header's notice about Proxmox itself (ADR 0042): a version whose updates have stopped (red, opens Health
+ * check) and nodes with updates waiting (amber, opens Update all nodes). In the middle of the bar, because it matters;
+ * it can't be dismissed, and goes away once there's nothing to do.
+ */
+const updatesText = (u) => `Updates on ${u.nodes.length === 1 ? u.nodes[0] : `${u.nodes.length} nodes`}`;
+function proxmoxIssues() {
+  const p = S.data?.proxmox;
+  if (!p) return [];
+  return [
+    ...(p.ended ? [{ kind: "pve-ended", title: `${p.ended.text}${p.ended.newer ? `: upgrade to Proxmox VE ${p.ended.newer}` : ""}`, detail: "" }] : []),
+    ...(p.updates ? [{ kind: "pve-updates", title: `${updatesText(p.updates)} (${p.updates.total} waiting)`, detail: "" }] : []),
+  ];
+}
+function renderProxmoxNotice() {
+  const el = $("#pvenote");
+  const p = S.data?.proxmox;
+  const parts = p ? [...(p.ended ? [`Proxmox VE ${p.ended.major} has ended`] : []), ...(p.updates ? [updatesText(p.updates)] : [])] : [];
+  el.hidden = !parts.length;
+  $("#bar").classList.toggle("noticed", parts.length > 0);
+  if (!parts.length) return;
+  el.className = `pvenote ${p.ended ? "bad" : "warn"}`;
+  el.dataset.pvenote = p.ended ? "ended" : "updates";
+  el.title = [...(p.ended ? [`${p.ended.text}. It gets no security fixes.`] : []), ...(p.updates ? [`${p.updates.total} updates waiting on ${p.updates.nodes.join(", ")}.`] : [])].join(" ");
+  el.innerHTML = `<span class="pvedot" aria-hidden="true"></span><span class="pvetext">${esc(parts.join(" · "))}</span>`;
+  el.setAttribute("aria-label", el.title);
 }
 function renderTasks(active) {
   const top =
@@ -2439,6 +2633,7 @@ const PHASE_WORDS = {
   emptying: "Moving and shutting down",
   installing: "Installing updates",
   restarting: "Restarting",
+  upgrading: "Upgrading Proxmox VE and restarting",
   starting: "Starting guests again",
   returning: "Bringing guests home",
   done: "Done",
@@ -2478,7 +2673,8 @@ async function openRunStart(kind, server = "") {
           await followTask(n, body.task);
         }),
       );
-    } else dialog(`<h3>Planning the restart of ${esc(server)}</h3><p>Reading what runs there and where it can go.</p>`);
+    } else if (kind === "upgrade") dialog(`<h3>Planning the upgrade</h3><p>Reading each node's version and what runs on it.</p>`);
+    else dialog(`<h3>Planning the restart of ${esc(server)}</h3><p>Reading what runs there and where it can go.</p>`);
     const [plan, reboot] = await Promise.all([
       signal(`api/run-plan?kind=${kind}${kind === "restart" ? `&server=${encodeURIComponent(server)}` : ""}`),
       kind === "restart" ? signal(`api/reboot-plan?server=${encodeURIComponent(server)}`).catch(() => null) : null,
@@ -2506,8 +2702,10 @@ function drawRunStart(kind, server, plan, reboot) {
         `<p class="loginerr">Left out: ${esc(n.name)}. Its check for updates failed (${esc(n.why)}), so BossMox doesn't know what it needs. If its update channel needs a subscription it doesn't have, Health check can switch it to the free one.</p>`,
     )
     .join("");
+  if (!plan.nodes.length && kind === "upgrade") return dialog(`<h3>Every node is on the new version</h3><p>Nothing is left to upgrade.</p>${closeRow}`);
   if (!plan.nodes.length)
     return dialog(skipped ? `<h3>Nothing to install on the nodes that were checked</h3>${skipped}${closeRow}` : `<h3>Every node is up to date</h3><p>Nothing is waiting to install.</p>${closeRow}`);
+  const to = plan.nodes[0]?.upgrade?.to;
   const restarts = plan.nodes.filter((n) => n.restart);
   const pick = (v) => {
     if (v.self) return `<span class="state">BossMox itself: moves${v.to ? ` to ${esc(v.to)}` : ""}</span>`;
@@ -2520,21 +2718,23 @@ function drawRunStart(kind, server, plan, reboot) {
   };
   const row = (v) => `<div class="snap"><div>${esc(v.name)}${!v.canMove && !v.self ? `<small>${esc(v.why)}</small>` : ""}</div>${pick(v)}</div>`;
   const nodeBlock = (n) =>
-    `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${kind === "update" ? `<small>${n.updates} ${n.updates === 1 ? "update" : "updates"}${n.version ? `, version ${esc(n.version)}` : ""}</small>` : ""}</div><span class="state">${n.restart ? (n.vms.length ? "Restarts" : "Restarts, nothing running") : "No restart needed"}</span></div>${n.vms.map(row).join("")}</div>`;
+    `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${kind === "update" ? `<small>${n.updates} ${n.updates === 1 ? "update" : "updates"}${n.version ? `, version ${esc(n.version)}` : ""}</small>` : kind === "upgrade" ? `<small>${n.upgrade?.finishing ? `Packages on Proxmox VE ${esc(n.version ?? "")} already, not restarted yet: BossMox finishes it` : `Proxmox VE ${esc(n.version ?? "")} to ${esc(String(n.upgrade?.to ?? ""))}`}</small>` : ""}</div><span class="state">${kind === "upgrade" ? (n.vms.length ? "Upgrades and restarts" : "Upgrades and restarts, nothing running") : n.restart ? (n.vms.length ? "Restarts" : "Restarts, nothing running") : "No restart needed"}</span></div>${n.vms.map(row).join("")}</div>`;
   const how =
-    kind === "update"
-      ? "BossMox updates one node at a time, in this order. For a node that restarts, it moves or shuts down each running VM as chosen below, installs, restarts, starts what it shut down and brings the rest home. Config files you've changed keep your version. It runs on the BossMox server: you can close this window, and follow it from any browser."
-      : "BossMox moves or shuts down each running VM as chosen below, restarts the node, then starts what it shut down and brings the rest home. It runs on the BossMox server: you can close this window, and follow it from any browser.";
-  const word = kind === "update" ? "confirm" : "reboot";
-  dialog(`<h3>${kind === "update" ? `Update ${plan.nodes.length === 1 ? esc(plan.nodes[0].name) : `${skipped ? "" : "all "}${plan.nodes.length} nodes`}?` : `Restart ${esc(server)}?`}</h3>
+    kind === "upgrade"
+      ? `BossMox upgrades one node at a time, in this order. For each node it moves or shuts down each running VM as chosen below, switches the node's update sources, runs Proxmox's checker, installs Proxmox VE ${esc(String(to ?? ""))}, checks again, pins the port names and restarts it. Once it's back on the new version, it starts what it shut down and brings the rest home. Guests never move from a node on the new version to one on the old. Each node takes 10 to 30 minutes. Stop lets the node under way finish its upgrade and start what it shut down, then ends the run. Guests it moved stay where they are: Move everything back on a node's Overview brings them home. It runs on the BossMox server: you can close this window, and follow it from any browser.`
+      : kind === "update"
+        ? "BossMox updates one node at a time, in this order. For a node that restarts, it moves or shuts down each running VM as chosen below, installs, restarts, starts what it shut down and brings the rest home. Config files you've changed keep your version. It runs on the BossMox server: you can close this window, and follow it from any browser."
+        : "BossMox moves or shuts down each running VM as chosen below, restarts the node, then starts what it shut down and brings the rest home. It runs on the BossMox server: you can close this window, and follow it from any browser.";
+  const word = kind === "restart" ? "reboot" : "confirm";
+  dialog(`<h3>${kind === "upgrade" ? `Upgrade ${plan.nodes.length === 1 ? esc(plan.nodes[0].name) : `${plan.nodes.length} nodes`} to Proxmox VE ${esc(String(to ?? ""))}?` : kind === "update" ? `Update ${plan.nodes.length === 1 ? esc(plan.nodes[0].name) : `${skipped ? "" : "all "}${plan.nodes.length} nodes`}?` : `Restart ${esc(server)}?`}</h3>
     <p>${how}</p>${skipped}
     ${restarts.some((n) => n.vms.length) ? `<p class="meta">${plan.moveBatch > 1 ? `Moves run up to ${plan.moveBatch} at a time.` : plan.moveShared ? "Moves run one at a time: they share the cluster heartbeat's only network. Health check says how to give them their own." : "Moves run one at a time."}</p>` : ""}
     ${plan.nodes.map(nodeBlock).join("")}
     ${restarts.some((n) => n.vms.length) ? keepFreeField(again) : ""}
-    ${kind === "update" && !plan.keepsMajority && restarts.length ? `<div class="advice" style="margin-top:12px"><div><b>This cluster has only ${plan.votes} votes</b>Everything keeps running, but nothing can be started, stopped or changed while a node restarts.</div></div>` : ""}
+    ${kind !== "restart" && !plan.keepsMajority && restarts.length ? `<div class="advice" style="margin-top:12px"><div><b>This cluster has only ${plan.votes} votes</b>Everything keeps running, but nothing can be started, stopped or changed while a node restarts.</div></div>` : ""}
     ${kind === "restart" && reboot?.backupStorages?.length && restarts[0]?.vms.length ? `<div class="restartbackup"><select id="rstore" aria-label="Backup storage" data-bkwarn="${esc(server)}">${reboot.backupStorages.map((s) => poolOption(server, s)).join("")}</select><button class="btn" data-backup="${esc(server)}">Back up first</button></div>${backupWarnLine(server, reboot.backupStorages[0].name)}` : ""}
     <label class="field restartname"><span>Type ${word} to start</span><input id="rname" data-word="${word}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
-    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-runstart="1" disabled>${kind === "update" ? "Start updating" : `Restart ${esc(server)}`}</button></div>`);
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn danger" id="rgo" data-runstart="1" disabled>${kind === "upgrade" ? "Start upgrading" : kind === "update" ? "Start updating" : `Restart ${esc(server)}`}</button></div>`);
   S.restart = { server, guests: restarts.flatMap((n) => n.vms) };
   $("#rname").focus();
 }
@@ -2577,8 +2777,24 @@ async function openRun() {
 }
 function drawRun(run) {
   if (!run) return dialog(`<h3>Nothing is running</h3>${closeRow}`);
-  const what = run.kind === "update" ? (run.nodes.length === 1 ? `Updating ${run.nodes[0].name}` : `Updating ${run.nodes.length} nodes`) : `Restarting ${run.nodes[0]?.name ?? ""}`;
-  const title = run.running ? what : run.error ? `${what}: stopped` : run.kind === "update" ? "Updated" : `${run.nodes[0]?.name ?? ""} restarted`;
+  const to = run.nodes[0]?.upgrade?.to;
+  const what =
+    run.kind === "upgrade"
+      ? `Upgrading ${run.nodes.length === 1 ? run.nodes[0].name : `${run.nodes.length} nodes`} to Proxmox VE ${to ?? ""}`
+      : run.kind === "update"
+        ? run.nodes.length === 1
+          ? `Updating ${run.nodes[0].name}`
+          : `Updating ${run.nodes.length} nodes`
+        : `Restarting ${run.nodes[0]?.name ?? ""}`;
+  const title = run.running
+    ? what
+    : run.error
+      ? `${what}: stopped`
+      : run.kind === "upgrade"
+        ? `Upgraded to Proxmox VE ${to ?? ""}`
+        : run.kind === "update"
+          ? "Updated"
+          : `${run.nodes[0]?.name ?? ""} restarted`;
   const kept = run.nodes.flatMap((n) => n.keptConfig.map((f) => `${n.name}: ${f}`));
   const stayed = run.nodes.flatMap((n) => n.vms.filter((v) => v.state === "stayed"));
   // A node a Stop left partway reads as stopped, not as the step it was in.
@@ -2586,7 +2802,7 @@ function drawRun(run) {
   const nodeBlock = (
     n,
     i,
-  ) => `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${n.note ? `<small>${esc(n.note)}</small>` : ""}</div><span class="state"><span class="dot ${n.phase === "done" ? "running" : n.phase === "failed" || halted(n, i) ? "warn" : i === run.current && run.running ? "busy" : ""}"></span>${esc(halted(n, i) ? `Stopped after ${(PHASE_WORDS[n.phase] ?? n.phase).toLowerCase()}` : (PHASE_WORDS[n.phase] ?? n.phase))}</span></div>
+  ) => `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${n.upgrade?.version && n.upgrade?.kernel ? `<small>Now on Proxmox VE ${esc(n.upgrade.version)}, kernel ${esc(n.upgrade.kernel)}</small>` : ""}${n.note ? `<small>${esc(n.note)}</small>` : ""}</div><span class="state"><span class="dot ${n.phase === "done" ? "running" : n.phase === "failed" || halted(n, i) ? "warn" : i === run.current && run.running ? "busy" : ""}"></span>${esc(halted(n, i) ? `Stopped after ${(PHASE_WORDS[n.phase] ?? n.phase).toLowerCase()}` : (PHASE_WORDS[n.phase] ?? n.phase))}</span></div>
     ${n.restart ? n.vms.map((v) => `<div class="snap"><div>${esc(v.name)}${v.note && !["failed", "stayed"].includes(v.state) ? `<small>${esc(v.note)}</small>` : ""}</div><span class="state"><span class="dot ${vmDot(v)}"></span>${esc(vmWords(v, run.running))}</span></div>`).join("") : ""}</div>`;
   dialog(`<h3>${esc(title)}</h3>
     ${run.error ? `<p class="loginerr">${esc(run.error)}</p>` : run.running ? `<p>Started by ${esc(run.by)}. It runs on the BossMox server, so this window can be closed; open it again from the desktop.</p>` : `<p>Everything that was planned is done.</p>`}
@@ -2601,7 +2817,7 @@ function runLine() {
   const r = S.run;
   if (!r?.running) return "";
   const n = r.nodes[r.current];
-  return `<div class="look-items"><div class="look-row"><button class="look-item" data-runopen="1"><span class="dot busy"></span><span>${esc(r.kind === "update" ? "Updating nodes" : "Restarting a node")}${n ? `: ${esc(n.name)}, ${esc((PHASE_WORDS[n.phase] ?? n.phase).toLowerCase())}` : ""}</span></button></div></div>`;
+  return `<div class="look-items"><div class="look-row"><button class="look-item" data-runopen="1"><span class="dot busy"></span><span>${esc(r.kind === "upgrade" ? "Upgrading Proxmox VE" : r.kind === "update" ? "Updating nodes" : "Restarting a node")}${n ? `: ${esc(n.name)}, ${esc((PHASE_WORDS[n.phase] ?? n.phase).toLowerCase())}` : ""}</span></button></div></div>`;
 }
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const closeRow = `<div class="row-end"><button class="btn" data-dlg="cancel">Close</button></div>`;
@@ -4478,6 +4694,18 @@ document.addEventListener("click", (e) => {
     return runAction("move-guest", v.node, `Moving ${v.name} to ${target}`, { guest: String(v.id), type: v.type, target, confirm: String(v.id) }, () => refresh());
   }
   if (d.rolling) return openRunStart("update");
+  if (d.pvenote) return d.pvenote === "ended" ? openWin("health") : openRunStart("update");
+  if (d.upgrade) return openUpgrade();
+  if (d.upgradecheck) return startUpgradeCheck();
+  if (d.runupgrade) return openRunStart("upgrade");
+  if (d.upfix === "lvm") return askLvmFix();
+  if (d.uppin) return askPin(d.uppin);
+  if (d.upsrcback) return askSourcesBack(d.upsrcback);
+  if (d.upnode) return askUpgradeNode(d.upnode, t.textContent.replace(/^.*VE /, ""));
+  if (d.upnodego) return runUpgradeFix("upgrade-node", d.upnodego, { confirm: $("#rname").value.trim() }, `Starting the upgrade of ${d.upnodego}`, false);
+  if (d.upsrcbackgo) return runUpgradeFix("upgrade-sources-undo", d.upsrcbackgo, { confirm: $("#rname").value.trim() }, `Putting the old sources back on ${d.upsrcbackgo}`, false);
+  if (d.uplvmgo) return runUpgradeFix("upgrade-fix-lvm", onlineNodes()[0], { confirm: $("#rname").value.trim() }, "Turning off autoactivation on every node", true);
+  if (d.uppingo) return runUpgradeFix("upgrade-pin", d.uppingo, { confirm: $("#rname").value.trim() }, `Pinning port names on ${d.uppingo}`, false);
   if (d.runstart) {
     t.disabled = true;
     return startRun();
@@ -4871,6 +5099,7 @@ async function refresh() {
   const stale = $("#stale");
   stale.hidden = !(error && S.data);
   stale.textContent = "Showing old data, lost contact with Proxmox";
+  renderProxmoxNotice();
   renderHealth();
   // The Health check window's gauges follow the live numbers; the rest of it changes only on Check again.
   const hcGauges = $("#hcbox .overall");
