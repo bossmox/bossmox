@@ -32,7 +32,7 @@ bash -c "$(curl -fsSL https://github.com/bossmox/bossmox/releases/latest/downloa
 
 Other options (`--storage`, `--bridge`, `--vlan`, `--vmid`) are listed at the top of [install.sh](deploy/install.sh). A reservation in your router's DHCP settings works too.
 
-**Needs:** Proxmox VE 9 (tested on 9.2), a node that can reach the internet during the install, and a storage that holds VM disks. Proxmox VE 8 isn't tested yet.
+**Needs:** Proxmox VE 9 (tested on 9.2), a node that can reach the internet during the install, and a storage that holds VM disks. Proxmox VE 8.4 works too: BossMox has managed 8.4 clusters on our test lab and can upgrade them to 9. Proxmox VE 8 reached end of life on 2026-08-31.
 
 ## What it does
 
