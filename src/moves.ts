@@ -26,6 +26,8 @@ export interface JobGuest {
   state: "waiting" | "moving" | "done" | "failed" | "stayed";
   /** Why it stayed where it is, when it did. */
   note?: string;
+  /** While moving: how much is copied, from Proxmox's own task log (ADR 0044). A number only. */
+  percent?: number;
 }
 export interface JobView {
   kind: "off" | "home";
@@ -91,6 +93,8 @@ export interface MoveDeps {
   /** Starts one move and returns the Proxmox task. */
   migrate(move: Move, from: string): Promise<string>;
   task(node: string, upid: string): Promise<TaskEnd>;
+  /** Lines of a move BossMox started, from `start`, a few at a time (ADR 0044). Never a task BossMox didn't start. */
+  progress?(node: string, upid: string, start: number): Promise<string[]>;
   /** Where every guest is right now. */
   where(): Promise<Map<number, string>>;
   /** Why to stop before the next move (signed out, or someone pressed Stop), or null to carry on. */
@@ -106,8 +110,25 @@ const ARRIVE_MS = 10 * 60 * 1000;
 const BLIP_MS = 2 * 60 * 1000;
 
 /** Runs one move to the end: the task, then the guest seen on the target. Throws with a plain reason. */
-async function moveOne(deps: MoveDeps, move: Move, from: string): Promise<void> {
+const UNITS: Record<string, number> = { B: 1, KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3, TiB: 1024 ** 4 };
+/**
+ * How far a move is, from the newest progress line of Proxmox's migration log (formats read in Proxmox's own code,
+ * 2026-11-19): "transferred X of Y VM-state, S/s" for memory, "drive-scsi0: transferred X of Y (N%) in T" for a disk.
+ * The percent Proxmox gives wins; otherwise X of Y. Only the number leaves this function.
+ */
+export function movePercent(lines: string[]): number | null {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = /transferred (\d+(?:\.\d+)?) (B|KiB|MiB|GiB|TiB) of (\d+(?:\.\d+)?) (B|KiB|MiB|GiB|TiB)(?: VM-state| \((\d{1,3}(?:\.\d+)?)%\))?/.exec(lines[i] ?? "");
+    if (!m) continue;
+    const pct = m[5] !== undefined ? Number(m[5]) : ((Number(m[1]) * (UNITS[m[2] as string] ?? 1)) / (Number(m[3]) * (UNITS[m[4] as string] ?? 1) || 1)) * 100;
+    if (Number.isFinite(pct)) return Math.max(0, Math.min(100, Math.round(pct)));
+  }
+  return null;
+}
+
+async function moveOne(deps: MoveDeps, move: Move, from: string, seen?: (percent: number) => void): Promise<void> {
   const upid = await deps.migrate(move, from);
+  let logAt = 0;
   // Watching is a read: a blip in reaching Proxmox is waited out for a while, since the move carries on regardless.
   let failingSince = 0;
   const read = async <T>(get: () => Promise<T>): Promise<T | undefined> => {
@@ -124,7 +145,15 @@ async function moveOne(deps: MoveDeps, move: Move, from: string): Promise<void> 
   for (;;) {
     await deps.wait(2000);
     const end = await read(() => deps.task(from, upid));
-    if (!end?.finished) continue;
+    if (!end?.finished) {
+      if (deps.progress && seen) {
+        const lines = await deps.progress(from, upid, logAt).catch((): string[] => []);
+        logAt += lines.length;
+        const p = movePercent(lines);
+        if (p !== null) seen(p);
+      }
+      continue;
+    }
     if (!end.ok) throw new Error(`Proxmox couldn't move ${move.name}: ${end.error}`);
     break;
   }
@@ -140,6 +169,16 @@ const plainError = (err: unknown) => (err instanceof Error && err.message ? err.
  * Moves the given guests off `node`, a batch at a time. Each move is planned again with fresh numbers first, so a node
  * that filled up meanwhile isn't used. Every finished move is written to the record at once.
  */
+/** Writes a moving guest's percent to the job, saving only when it moved on by a step worth showing. */
+function percentOf(deps: MoveDeps, record: MoveRecord, job: JobView, id: number) {
+  return (p: number) => {
+    const g = job.guests.find((x) => x.id === id);
+    if (g?.state !== "moving" || (g.percent !== undefined && Math.abs(p - g.percent) < 2)) return;
+    g.percent = p;
+    deps.save(record);
+  };
+}
+
 export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: string, by: string, first: Move[], batch = BATCH): Promise<void> {
   const job: JobView = {
     kind: "off",
@@ -174,7 +213,7 @@ export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: strin
         g.state = "moving";
       }
       deps.save(record);
-      const results = await Promise.allSettled(take.map((m) => moveOne(deps, m, node)));
+      const results = await Promise.allSettled(take.map((m) => moveOne(deps, m, node, percentOf(deps, record, job, m.id))));
       // A move that errored may still have happened: BossMox lost sight of it, Proxmox carried on. Where each one
       // is now decides, not the error (#50). If even that can't be read, it stays a failure.
       const now = results.some((r) => r.status === "rejected") ? await deps.where().catch(() => null) : null;
@@ -300,7 +339,7 @@ export async function runMoveHome(record: MoveRecord, deps: MoveDeps, node: stri
       }
       deps.save(record);
       if (!take.length) continue;
-      const results = await Promise.allSettled(take.map(({ g, move }) => moveOne(deps, move, g.to)));
+      const results = await Promise.allSettled(take.map(({ g, move }) => moveOne(deps, move, g.to, percentOf(deps, record, job, g.id))));
       let failure: unknown = null;
       take.forEach(({ g }, i) => {
         const jg = job.guests.find((x) => x.id === g.id) as JobGuest;

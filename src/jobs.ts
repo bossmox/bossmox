@@ -205,6 +205,8 @@ export function createJobs(ctx: JobsContext) {
         return { finished: s.status === "stopped", ok: exit === "OK" || exit.startsWith("WARNINGS"), error: exit || "unknown error" };
       },
       where: async () => new Map((await pve.get<RawResource[]>("/cluster/resources?type=vm", session.ticket)).map((r) => [Number(r.vmid), r.node ?? ""])),
+      // A few lines at a time from where the last read ended: only moves BossMox started reach here (ADR 0044, R11).
+      progress: async (node, upid, start) => (await pve.get<{ n?: number; t?: string }[]>(`/nodes/${enc(node)}/tasks/${enc(upid)}/log?start=${start}&limit=50`, session.ticket)).map((l) => l.t ?? ""),
       stopped: () => moveJob.stop,
       wait: (ms) => new Promise((r) => setTimeout(r, ms)),
       save: (record) => {

@@ -2733,7 +2733,7 @@ function jobRows(job, home) {
       done: home ? `Back on ${g.target}` : `Moved to ${g.target}`,
       failed: home ? "Didn't get home" : "Didn't move",
       stayed: "Stayed where it is: no room at home",
-      moving: home ? "Moving back" : `Moving to ${g.target}`,
+      moving: `${home ? "Moving back" : `Moving to ${g.target}`}${Number.isFinite(g.percent) ? `, ${g.percent}%` : ""}`,
       waiting: job.running ? "Waiting its turn" : "Not moved",
     })[g.state];
   const dot = (g) => (g.state === "done" ? "running" : g.state === "failed" || g.state === "stayed" || (!job.running && g.state === "waiting") ? "warn" : "busy");
@@ -2842,11 +2842,16 @@ const PHASE_WORDS = {
   done: "Done",
   failed: "Stopped here",
 };
+/** A guest's move percent from the move job, when it's the one moving (ADR 0044). */
+function movingPercent(id) {
+  const g = S.moves?.job?.running ? S.moves.job.guests.find((x) => x.id === id && x.state === "moving") : null;
+  return Number.isFinite(g?.percent) ? `, ${g.percent}%` : "";
+}
 function vmWords(v, running = true) {
   return (
     {
       waiting: !running ? (v.choice === "shutdown" ? "Not shut down" : "Not moved") : v.choice === "shutdown" ? "Will shut down" : "Will move",
-      moving: "Moving",
+      moving: `Moving${movingPercent(v.id)}`,
       moved: `On ${v.on ?? "another node"}`,
       stopping: "Shutting down",
       off: "Off for the restart",
@@ -2977,6 +2982,8 @@ async function openRun() {
       S.run = (await signal("api/run")).run;
       // An upgrade run's node under way: its steps and package count come from the upgrade's own view (ADR 0044).
       S.upgradeLive = S.run?.kind === "upgrade" && S.run.running ? await signal("api/upgrade").catch(() => null) : null;
+      // A guest moving in the run: its percent is on the move job.
+      if (S.run?.running && S.run.nodes.some((n) => n.vms.some((v) => v.state === "moving"))) await loadMoves().catch(() => null);
     } catch (err) {
       if (err.message === "signed out") return;
     }
