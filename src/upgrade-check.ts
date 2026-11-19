@@ -79,6 +79,7 @@ export const UPGRADE_HELP = [
   "upgrade-root-space",
   "upgrade-passthrough",
   "upgrade-storage-plugins",
+  "upgrade-port-names",
 ] as const;
 export type HelpKey = (typeof UPGRADE_HELP)[number];
 

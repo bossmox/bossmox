@@ -10,6 +10,7 @@ const GLYPHS = {
   backups: '<path d="M5 16a11 11 0 1 0 4-8.5L5 11V5"/><path d="M16 10v7l5 3"/>',
   health: '<path d="M16 27s-10-6-10-13a5.5 5.5 0 0 1 10-3 5.5 5.5 0 0 1 10 3c0 7-10 13-10 13z"/><path d="M9 16h4l2-4 3 7 2-3h3"/>',
   settings: '<path d="M5 9h4M15 9h12M5 16h12M23 16h4M5 23h2M13 23h14"/><circle cx="12" cy="9" r="3"/><circle cx="20" cy="16" r="3"/><circle cx="10" cy="23" r="3"/>',
+  help: '<circle cx="16" cy="16" r="11"/><path d="M12.5 12.5a3.5 3.5 0 1 1 5 3.2c-1 .5-1.5 1.3-1.5 2.3v1"/><circle cx="16" cy="23" r=".6"/>',
 };
 const APPS = {
   vms: { title: "VMs and Containers", color: "#0E7EA6", w: 920, h: 610 },
@@ -21,6 +22,7 @@ const APPS = {
   backups: { title: "Backups", color: "#C43838", w: 860, h: 610 },
   health: { title: "Health check", color: "#178A5F", w: 760, h: 640 },
   settings: { title: "Settings", color: "#56636E", w: 720, h: 620 },
+  help: { title: "Help", color: "#3C6E9E", w: 820, h: 620 },
   terminal: { title: "Install updates", color: "#20262A", w: 860, h: 560, noIcon: true },
   console: { title: "Console", color: "#20262A", w: 980, h: 680, noIcon: true },
 };
@@ -797,9 +799,10 @@ function upgradeBody(u) {
       ? `${n.counts.passed} passed, ${n.counts.warnings} ${n.counts.warnings === 1 ? "warning" : "warnings"}, ${n.counts.failures} ${n.counts.failures === 1 ? "failure" : "failures"}`
       : "";
     const items = n.items
-      .map((i) => {
+      .map((i, idx) => {
         const [tone, words] = UP_HANDLING[i.handling] ?? UP_HANDLING.advice;
-        return `<div class="snap"><div><span class="dot ${tone}"></span><b>${esc(i.title)}</b> <span class="rec${tone === "ok" ? " ok" : ""}">${esc(words)}</span>${i.detail ? `<small>${esc(i.detail)}</small>` : ""}${i.fixId === "lvm-autoactivation" ? `<div class="actions"><button class="btn" data-upfix="lvm">Turn it off</button></div>` : ""}${i.original && i.original !== i.title ? `<details class="hbdetails"><summary>Proxmox's words</summary><pre class="meta">${esc(i.original)}</pre></details>` : ""}</div></div>`;
+        const at = `${n.node}:${idx}`;
+        return `<div class="snap"><div><span class="dot ${tone}"></span><b>${esc(i.title)}</b> <span class="rec${tone === "ok" ? " ok" : ""}">${esc(words)}</span>${helpButton(i.help, at, i.title)}${i.detail ? `<small>${esc(i.detail)}</small>` : ""}${S.helpOpen === at ? helpBox(i.help) : ""}${i.fixId === "lvm-autoactivation" ? `<div class="actions"><button class="btn" data-upfix="lvm">Turn it off</button></div>` : ""}${i.original && i.original !== i.title ? `<details class="hbdetails"><summary>Proxmox's words</summary><pre class="meta">${esc(i.original)}</pre></details>` : ""}</div></div>`;
       })
       .join("");
     const pin = u.fixes?.pins?.[n.node];
@@ -830,7 +833,7 @@ function upgradeBody(u) {
           : src?.error
             ? `<p class="loginerr">${esc(src.error)}</p>`
             : "";
-    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${nowOn(n, up, u.checkedAt) ? `Proxmox VE ${esc(nowOn(n, up, u.checkedAt))}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}</small></div>${!pin?.ok ? `<div class="actions"><button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button></div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${srcWords}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
+    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${nowOn(n, up, u.checkedAt) ? `Proxmox VE ${esc(nowOn(n, up, u.checkedAt))}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}${helpButton("upgrade-port-names", `${n.node}:pin`, "Pinning the port names")}</small>${S.helpOpen === `${n.node}:pin` ? helpBox("upgrade-port-names") : ""}</div>${!pin?.ok ? `<div class="actions"><button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button></div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${srcWords}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
   };
   const lvm = u.fixes?.lvm;
   const lvmWords = lvm
@@ -838,6 +841,67 @@ function upgradeBody(u) {
     : "";
   return `${verdict}${lvmWords}${u.nodes.map(nodeBlock).join("")}<p class="meta">Checked ${esc(new Date(u.checkedAt).toLocaleString())}.</p>`;
 }
+/*
+ * Help (ADR 0044). The articles come from the server once per page load, all together; the page never asks for a
+ * file by name. A ? opens an article under its item in the same window (the upgrade window is a dialog, so a second
+ * window behind it couldn't be used), and the Help app lists them all.
+ */
+async function helpArticles() {
+  if (!S.help) {
+    try {
+      S.help = (await signal("api/help")).articles ?? {};
+    } catch (err) {
+      if (err.message === "signed out") throw err;
+      return {};
+    }
+  }
+  return S.help;
+}
+const helpTitle = (md) => /^# (.+)$/m.exec(md ?? "")?.[1] ?? "";
+function helpButton(key, at, title) {
+  if (!key) return "";
+  const open = S.helpOpen === at;
+  return `<button class="helpq" data-help="${esc(key)}" data-helpat="${esc(at)}" aria-expanded="${open}" aria-label="${open ? "Hide" : "More about"}: ${esc(title)}">?</button>`;
+}
+function helpBox(key) {
+  const md = S.help?.[key];
+  if (!S.help) return `<div class="helpbox"><p class="meta">Loading.</p></div>`;
+  if (!md) return `<div class="helpbox"><p class="meta">This article isn't available in this copy of BossMox.</p></div>`;
+  return `<div class="helpbox">${helpHtml(md)}<p class="meta"><button class="linkbtn" data-helpapp="${esc(key)}">Open in Help</button></p></div>`;
+}
+async function toggleHelp(at) {
+  S.helpOpen = S.helpOpen === at ? null : at;
+  const redraw = () => {
+    if (!$("#upbody") || !S.upgradeView) return;
+    $("#upbody").innerHTML = upgradeBody(S.upgradeView);
+    document.querySelector(`#upbody [data-helpat="${CSS.escape(at)}"]`)?.focus();
+  };
+  redraw();
+  try {
+    await helpArticles();
+  } catch {
+    return;
+  }
+  redraw();
+}
+async function drawHelpApp(key = S.helpDoc) {
+  let articles;
+  try {
+    articles = await helpArticles();
+  } catch {
+    return;
+  }
+  const list = $("#helplist");
+  const doc = $("#helpdoc");
+  if (!list || !doc) return;
+  const keys = Object.keys(articles).sort((a, b) => helpTitle(articles[a]).localeCompare(helpTitle(articles[b])));
+  S.helpDoc = keys.includes(key) ? key : keys[0];
+  list.innerHTML = keys.length
+    ? `<p class="meta">Upgrading Proxmox</p>${keys.map((k) => `<button class="row ${k === S.helpDoc ? "on" : ""}" data-helpdoc="${esc(k)}"><b>${esc(helpTitle(articles[k]))}</b></button>`).join("")}`
+    : `<p class="meta">No articles in this copy of BossMox.</p>`;
+  doc.innerHTML = S.helpDoc ? helpHtml(articles[S.helpDoc]) : "";
+}
+
 async function openUpgrade() {
   let u;
   try {
@@ -850,6 +914,7 @@ async function openUpgrade() {
   if (u.running || upgrading(u)) followUpgradeCheck();
 }
 function drawUpgrade(u) {
+  S.upgradeView = u;
   dialog(`<h3>Get ready to upgrade${u.to ? ` to Proxmox VE ${esc(String(u.to))}` : " Proxmox"}</h3>
     <div id="upbody">${upgradeBody(u)}</div>
     <div class="row-end"><button class="btn" data-dlg="cancel">Close</button><button class="btn${u.ready ? "" : " primary"}" data-upgradecheck="1" ${u.running ? "disabled" : ""}>${u.checkedAt ? "Check again" : "Run the checker"}</button>${u.ready && !u.running && !S.run?.running ? `<button class="btn primary" data-runupgrade="1">Upgrade all nodes</button>` : ""}</div>`);
@@ -867,7 +932,7 @@ async function startUpgradeCheck() {
 }
 function askLvmFix() {
   dialog(`<h3>Turn off autoactivation for existing disks?</h3>
-    <p>BossMox runs Proxmox's own command on every node, one at a time: <code>pve-lvm-disable-autoactivation</code>. It changes a setting on the guests' LVM disks, so a node only activates a disk when a guest needs it. Disks on shared storage are changed once. Guests keep running, and nothing is erased.</p>
+    <p>BossMox runs Proxmox's own command on every node, one at a time: <code>pve-lvm-disable-autoactivation</code>. It changes one setting on each existing VM disk, so a node only opens a disk when a guest there needs it. Disks on shared storage are changed once. It creates no disks and moves no data; running VMs and HA aren't affected.</p>
     <p class="meta">Proxmox strongly recommends this for LVM storage shared between nodes. Proxmox VE 9 makes new disks this way.</p>
     <label class="field restartname"><span>Type confirm to turn it off on every node</span><input id="rname" data-word="confirm" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-uplvmgo="1" disabled>Turn it off</button></div>`);
@@ -1492,6 +1557,7 @@ function render(app) {
     drawBackups();
     loadBackups();
   }
+  if (app === "help") drawHelpApp();
   if (app === "health") {
     drawHealthCheck();
     loadHealthCheck();
@@ -4265,6 +4331,7 @@ const RENDER = {
   backups: () => `<div id="bkbox" class="bkbox"></div>`,
   health: () => `<div id="hcbox" class="bkbox"></div>`,
   settings: () => `<div id="setbox" class="bkbox"></div>`,
+  help: () => `<div class="vms"><aside><div id="helplist"></div></aside><div id="helpdoc" class="helpdoc"></div></div>`,
 };
 
 /* Events */
@@ -4755,6 +4822,14 @@ document.addEventListener("click", (e) => {
   if (d.rolling) return openRunStart("update");
   if (d.pvenote) return d.pvenote === "ended" ? openWin("health") : openRunStart("update");
   if (d.upgrade) return openUpgrade();
+  if (d.help && d.helpat) return toggleHelp(d.helpat);
+  if (d.helpdoc) return drawHelpApp(d.helpdoc);
+  if (d.helpapp) {
+    closeDialog();
+    S.helpDoc = d.helpapp;
+    openWin("help");
+    return drawHelpApp(d.helpapp);
+  }
   if (d.upgradecheck) return startUpgradeCheck();
   if (d.runupgrade) return openRunStart("upgrade");
   if (d.upfix === "lvm") return askLvmFix();
