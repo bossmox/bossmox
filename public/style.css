@@ -509,3 +509,6 @@ i.s1{background:var(--series1)}i.s2{background:var(--series2)}
 .upmark{display:inline-block;width:14px;text-align:center;color:var(--ok)}
 .upstep.now .upmark{color:var(--accent)}
 .visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.helpbox p,.helpdoc p{margin:0 0 10px}
+.helpbox ul,.helpbox ol,.helpdoc ul,.helpdoc ol{margin:0 0 10px;padding-left:22px}
+#helplist .meta{padding:6px 12px 2px}

@@ -831,7 +831,7 @@ function upgradeBody(u) {
           : src?.error
             ? `<p class="loginerr">${esc(src.error)}</p>`
             : "";
-    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${nowOn(n, up, u.checkedAt) ? `Proxmox VE ${esc(nowOn(n, up, u.checkedAt))}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}${helpButton("upgrade-port-names", `${n.node}:pin`, "Pinning the port names")}</small>${S.helpOpen === `${n.node}:pin` ? helpBox("upgrade-port-names") : ""}</div>${!pin?.ok || canUpgradeOne(u, n, up, src) ? `<div class="actions">${canUpgradeOne(u, n, up, src) ? `<button class="btn" data-runupgradeone="${esc(n.node)}">Upgrade this node</button>` : ""}${!pin?.ok ? `<button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button>` : ""}</div>` : ""}</div>${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${srcWords}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
+    return `<div class="restartlist"><div class="snap"><div><b>${esc(n.node)}</b><small>${nowOn(n, up, u.checkedAt) ? `Proxmox VE ${esc(nowOn(n, up, u.checkedAt))}` : "Version unknown"}${counts ? `. Checker: ${esc(counts)}` : ""}</small><small>${esc(pinWords)}${helpButton("upgrade-port-names", `${n.node}:pin`, "Pinning the port names")}</small></div>${!pin?.ok || canUpgradeOne(u, n, up, src) ? `<div class="actions">${canUpgradeOne(u, n, up, src) ? `<button class="btn" data-runupgradeone="${esc(n.node)}">Upgrade this node</button>` : ""}${!pin?.ok ? `<button class="btn" data-uppin="${esc(n.node)}">Pin port names now</button>` : ""}</div>` : ""}</div>${S.helpOpen === `${n.node}:pin` ? helpBox("upgrade-port-names") : ""}${n.error ? `<p class="loginerr">${esc(n.error)}</p>` : ""}${srcWords}${items || (n.error ? "" : `<p class="meta">Nothing to look at on this node.</p>`)}</div>`;
   };
   const lvm = u.fixes?.lvm;
   const lvmWords = lvm
@@ -2813,8 +2813,9 @@ async function openEmptyNode(server) {
           ? `Can't move: ${v.why}`
           : v.type === "lxc"
             ? `Restarts on ${v.to}: a container can't move while it runs`
-            : `Moves to ${v.to}, keeps running${v.self ? " (BossMox itself, moved last)" : ""}`;
-    return `<div class="snap"><div>${esc(v.name)}</div><span class="state"><span class="dot ${blocked.includes(v) ? "warn" : v.type === "lxc" ? "busy" : "running"}"></span>${esc(words)}</span></div>`;
+            : `Moves to ${v.to}, keeps running`;
+    // The note under the name, so the row's own words stay short enough for one line.
+    return `<div class="snap"><div>${esc(v.name)}${v.self ? "<small>BossMox itself: it moves last</small>" : ""}</div><span class="state"><span class="dot ${blocked.includes(v) ? "warn" : v.type === "lxc" ? "busy" : "running"}"></span>${esc(words)}</span></div>`;
   };
   const list = `<div class="restartlist">${vms.map(row).join("")}</div>`;
   if (blocked.length)

@@ -89,7 +89,7 @@ const KNOWN: { match: RegExp; explain: (f: Finding, m: RegExpExecArray) => Omit<
   {
     match: /(\d+) running guest\(s\) detected/,
     explain: (_f, m) => ({
-      title: `${m[1]} guests are running on this node`,
+      title: `${m[1]} ${m[1] === "1" ? "guest is" : "guests are"} running on this node`,
       detail: "BossMox moves them to another node before upgrading this one, as it does for updates.",
       handling: "bossmox",
       help: "upgrade-running-guests",

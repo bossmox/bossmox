@@ -129,3 +129,7 @@ test("every item, known or not, names a Help article from the fixed list", () =>
   for (const e of all) assert.ok((UPGRADE_HELP as readonly string[]).includes(e.help), `${e.title}: ${e.help}`);
   assert.equal(explain({ level: "WARN", section: "", text: "something new" }).help, "upgrade-checker");
 });
+
+test("one running guest reads as one guest (lab browser check, 2026-11-19)", () => {
+  assert.equal(explain({ level: "WARN", section: "", text: "1 running guest(s) detected - consider migrating or stopping them." }).title, "1 guest is running on this node");
+});
