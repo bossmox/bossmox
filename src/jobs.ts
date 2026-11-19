@@ -365,6 +365,7 @@ export function createJobs(ctx: JobsContext) {
         : kind === "upgrade"
           ? upgrades.map((u) => ({ name: u.name, version: u.version, updates: 0, restart: true, install: false, upgrade: { to: u.to, finishing: u.finishing } }))
           : [{ name: server, version: null, updates: 0, restart: true, install: false }];
+    const unreadable: string[] = [];
     const out = await Promise.all(
       nodes.map(async (n) => {
         if (!n.restart) return { ...n, vms: [] as PlanVm[] };
@@ -375,10 +376,12 @@ export function createJobs(ctx: JobsContext) {
           running.map(async (r) => {
             const id = Number(r.vmid);
             const type = r.type === "lxc" ? "lxc" : "qemu";
-            const config = await pve.get<RawConfig>(`/nodes/${enc(n.name)}/${type}/${id}/config`, ticket).catch((): RawConfig => ({}));
+            const config = await pve.get<RawConfig>(`/nodes/${enc(n.name)}/${type}/${id}/config`, ticket).catch(() => null);
+            // Not readable means BossMox can't tell whether it's itself: never planned for a shut down (review 0.3.2, R12).
+            if (!config) unreadable.push(`${r.name ?? `VM ${id}`} on ${n.name}`);
             const unplaced = evac.unplaced?.find((u) => u.id === id);
             const to = evac.tentative?.find((m) => m.id === id)?.target ?? null;
-            const self = isSelf(config, macs);
+            const self = config ? isSelf(config, macs) : false;
             return {
               id,
               name: r.name ?? `VM ${id}`,
@@ -396,7 +399,10 @@ export function createJobs(ctx: JobsContext) {
       }),
     );
     // Rooms counted with every VM moving; a person's Shut down choices only free more.
-    const blocked = [...(rolling?.blocked.filter((b) => !rolling.servers.some((s) => b.startsWith(`${s.name}: `))) ?? [])];
+    const blocked = [
+      ...(unreadable.length ? [`BossMox couldn't read the settings of ${unreadable.join(", ")}, so it can't tell whether that's BossMox itself. Try again.`] : []),
+      ...(rolling?.blocked.filter((b) => !rolling.servers.some((s) => b.startsWith(`${s.name}: `))) ?? []),
+    ];
     for (const n of out)
       for (const v of n.vms) {
         if (!v.self) continue;

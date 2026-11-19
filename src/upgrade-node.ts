@@ -346,6 +346,13 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
         if (r.unfinished) throw unfinishedPackages(node);
         if (freePlan.keep) await keepFreeChannel(session, node, freePlan, job);
       } else {
+        // Its packages went in earlier, so which paid source they added can't be told now; said, not guessed (review 0.3.2).
+        job.freeChannel = {
+          planned: false,
+          why: "",
+          turnedOff: [],
+          note: "Its packages went in earlier, so BossMox can't tell which paid update source they added. If its Updates tab says checks end in an error, use the free channel there.",
+        };
         deps.audit("upgrade-node-finish", session.username, { node, to: job.to });
         // BossMox's own package job may still be going there (BossMox restarted part way): wait for it, and never
         // finish over one that failed or left packages half in. No job there (upgraded by hand) reads as ended.

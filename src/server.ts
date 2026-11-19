@@ -837,7 +837,16 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
     const task = await run(name, session, body);
     // No task means it's already done, so nothing else will clear the old view of it.
     if (!task) cache.delete(session);
-    audit(action, session.username, addressOf(req), { node: name, ...(text(body.guest, 12) ? { guest: text(body.guest, 12) } : {}) });
+    // A run is recorded by what it is, not the node the request happened to name (review 0.3.2).
+    const runDetail =
+      action === "run-start"
+        ? { kind: text(body.kind, 12), ...(text(body.only, 64) ? { only: text(body.only, 64) } : {}), ...(body.keepFreePct !== undefined ? { keep: Number(body.keepFreePct) } : {}) }
+        : {};
+    audit(action, session.username, addressOf(req), {
+      node: action === "run-start" ? text(body.only, 64) || "cluster" : name,
+      ...runDetail,
+      ...(text(body.guest, 12) ? { guest: text(body.guest, 12) } : {}),
+    });
     return json(res, 200, { task });
   } catch (err) {
     if (answerPveError(res, id, err) === false) throw err;

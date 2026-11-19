@@ -339,6 +339,26 @@ test("while a run with its own Keep free goes, other planning still uses the sav
     assert.equal(jobs.currentRun?.keepFreePct, 25, "the run carries its own value");
     assert.equal((await jobs.runPlan("t", "restart", "n2")).keepFreePct, 10, "another plan, during the run, gets the saved setting");
     assert.equal((await jobs.planEvacuation("t", "n2")).keepFreePct, 10, "and so does a move or HA's check");
+    // Stop the run and let it end, so nothing is still writing when the test's folder goes.
+    if (jobs.currentRun) jobs.currentRun.stop = "test over";
+    for (let i = 0; i < 200 && jobs.currentRun?.running; i++) await new Promise((r) => setTimeout(r, 10));
+  } finally {
+    c.done();
+  }
+});
+
+test("a guest whose settings can't be read is never quietly planned for a shut down: it could be BossMox (review 0.3.2, R12)", async () => {
+  const c = cluster();
+  const real = c.ctx.pve.get;
+  c.ctx.pve.get = ((p: string, t: string) => (p.endsWith("/qemu/101/config") ? Promise.reject(new Error("403")) : real(p, t))) as never;
+  try {
+    const outcome = await createJobs(c.ctx)
+      .runPlan("t", "restart", "n1")
+      .then(
+        (plan) => ({ refused: plan.blocked.some((b) => /couldn't read the settings of db/.test(b)), plan }),
+        () => ({ refused: true, plan: null }),
+      );
+    assert.ok(outcome.refused, "the plan is refused, never offered with db shut down as if it weren't BossMox");
   } finally {
     c.done();
   }

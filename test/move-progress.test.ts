@@ -26,7 +26,8 @@ test("a moving guest's percent is kept on the move job while it moves (ADR 0044)
   const deps: MoveDeps = {
     plan: async () => ({ moves: [{ id: 101, name: "web", type: "qemu", target: "n3" }], problems: [] }) as never,
     migrate: async () => "UPID:n1:1:2:3:qmigrate:101:root@pam:",
-    task: async () => ({ finished: ++reads > 2, ok: true, error: "" }),
+    // Long enough for the log to be read twice: every third check (about 6 s).
+    task: async () => ({ finished: ++reads > 6, ok: true, error: "" }),
     progress: async (_n, _u, start) => {
       asked.push(start);
       return lines.slice(start, start + 2);
@@ -41,4 +42,36 @@ test("a moving guest's percent is kept on the move job while it moves (ADR 0044)
   assert.ok(percents.includes(75));
   assert.deepEqual(asked, [0, 2], "each read starts where the last one ended");
   assert.equal(record.job?.guests[0]?.state, "done");
+});
+
+test("BossMox's own guest moves after the others, even though each round plans again (review 0.3.2)", async () => {
+  const record: MoveRecord = { away: {}, job: null };
+  const order: number[] = [];
+  const all = [
+    { id: 100, name: "bossmox", type: "qemu" as const, target: "n3", mem: 8 },
+    { id: 101, name: "web", type: "qemu" as const, target: "n3", mem: 1 },
+    { id: 102, name: "db", type: "qemu" as const, target: "n2", mem: 2 },
+  ];
+  const where = new Map<number, string>([
+    [100, "n1"],
+    [101, "n1"],
+    [102, "n1"],
+  ]);
+  const deps: MoveDeps = {
+    // Planned again each round, biggest first, as the real planner sorts them.
+    plan: async (_f, ids) => ({ moves: all.filter((m) => ids.includes(m.id)), problems: [] }) as never,
+    migrate: async (m) => {
+      order.push(m.id);
+      where.set(m.id, m.target);
+      return `UPID:n1:1:2:3:qmigrate:${m.id}:root@pam:`;
+    },
+    task: async () => ({ finished: true, ok: true, error: "" }),
+    where: async () => where,
+    stopped: () => null,
+    wait: async () => {},
+    save: () => {},
+  };
+  await runMoveOff(record, deps, "n1", "root@pam", all, 2, 100);
+  assert.equal(order.at(-1), 100, `moved in the order ${order.join(", ")}`);
+  assert.equal(order.length, 3);
 });

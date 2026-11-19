@@ -60,3 +60,8 @@ test("only Proxmox's paid server counts as paid, by host, not by look-alike text
     ["/c"],
   );
 });
+
+test("a subscription answer without a status is not knowing, not 'no subscription' (review 0.3.2)", () => {
+  assert.equal(planFreeChannel(BEFORE, {}).keep, false);
+  assert.match(planFreeChannel(BEFORE, {}).why, /couldn't read/);
+});

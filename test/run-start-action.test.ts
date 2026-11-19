@@ -47,7 +47,7 @@ test("a channel switch or update check waits for a run, an upgrade or a sources 
   const posts: string[] = [];
   const make = (state: { run?: boolean; upgrading?: string | null; sources?: boolean }) =>
     clusterActions({
-      jobs: { currentRun: state.run ? { running: true } : null },
+      jobs: { currentRun: state.run ? { running: true } : null, runState: { starting: false } },
       nodeUpgrade: { running: () => state.upgrading ?? null },
       upgradeSources: { busy: () => state.sources ?? false },
       pve: {
@@ -128,4 +128,38 @@ test("Start again with a lower Keep free: one of the choices, the setting's own 
   await go(true, { kind: "upgrade", confirm: "confirm", keepFreePct: 5 });
   await go(false, { kind: "upgrade", confirm: "confirm" });
   assert.deepEqual(seen, [5, undefined], "without a value the run uses the saved setting, and needs no extra permission");
+});
+
+test("a malformed node for one node's upgrade is refused, never read as every node (review 0.3.2)", async () => {
+  for (const only of [12, "x".repeat(65), "n1; reboot", ["n1"]]) {
+    const { calls, done } = start({ kind: "upgrade", only, confirm: "confirm" });
+    await assert.rejects(done, /isn't valid/, String(only));
+    assert.deepEqual(calls, [], "no run started");
+  }
+});
+
+test("a run doesn't start while a node's update channel is being switched (R5, both ways)", async () => {
+  let release = () => {};
+  let reads = 0;
+  const actions = clusterActions({
+    jobs: { currentRun: null, runState: { starting: false }, startRun: async () => "run:1" },
+    nodeUpgrade: { running: () => null },
+    upgradeSources: { busy: () => false },
+    pve: {
+      // The first read waits, so the switch is still going when the run is asked for; later reads answer at once.
+      get: () => (reads++ === 0 ? new Promise((r) => (release = () => r({ files: [], digest: "x" }))) : Promise.resolve({ files: [], digest: "x" })),
+      put: async () => null,
+      post: async () => "UPID:n1:x",
+    },
+  } as never);
+  const who = { username: "root@pam", ticket: "t" } as unknown as Session;
+  const switching = Promise.resolve().then(() => actions["update-channel"]?.("n1", who, { channel: "free" }));
+  await new Promise((r) => setTimeout(r, 5));
+  await assert.rejects(
+    Promise.resolve().then(() => actions["run-start"]?.("n1", who, { kind: "update", confirm: "confirm" })),
+    /switching a node's update channel/,
+  );
+  release();
+  await switching.catch(() => null);
+  assert.equal(await actions["run-start"]?.("n1", who, { kind: "update", confirm: "confirm" }), "run:1", "once it's done, the run starts");
 });

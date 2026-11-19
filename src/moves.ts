@@ -142,11 +142,12 @@ async function moveOne(deps: MoveDeps, move: Move, from: string, seen?: (percent
       return undefined;
     }
   };
-  for (;;) {
+  for (let polls = 0; ; polls++) {
     await deps.wait(2000);
     const end = await read(() => deps.task(from, upid));
     if (!end?.finished) {
-      if (deps.progress && seen) {
+      // Every third check, about 6 s: the design's "no faster than every 5 s" for reading a task's log.
+      if (deps.progress && seen && polls % 3 === 2) {
         const lines = await deps.progress(from, upid, logAt).catch((): string[] => []);
         logAt += lines.length;
         const p = movePercent(lines);
@@ -179,7 +180,7 @@ function percentOf(deps: MoveDeps, record: MoveRecord, job: JobView, id: number)
   };
 }
 
-export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: string, by: string, first: Move[], batch = BATCH): Promise<void> {
+export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: string, by: string, first: Move[], batch = BATCH, last?: number): Promise<void> {
   const job: JobView = {
     kind: "off",
     node,
@@ -206,7 +207,9 @@ export async function runMoveOff(record: MoveRecord, deps: MoveDeps, node: strin
       if (fresh.problems.length) throw new Error(`The room changed while moving: ${fresh.problems.join(" ")}`);
       const gone = left.find((x) => !fresh.moves.some((m) => m.id === x.id));
       if (gone) throw new Error(`${gone.name} is no longer on ${node}, so BossMox stopped to let you check.`);
-      const take = fresh.moves.slice(0, batch);
+      // BossMox's own guest, when it's one of them, goes once everything else has (Empty this node, review 0.3.2).
+      const ready = last !== undefined && fresh.moves.some((m) => m.id !== last) ? fresh.moves.filter((m) => m.id !== last) : fresh.moves;
+      const take = ready.slice(0, batch);
       for (const m of take) {
         const g = job.guests.find((x) => x.id === m.id) as JobGuest;
         g.target = m.target;

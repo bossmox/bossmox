@@ -51,7 +51,7 @@ export interface FreeChannelPlan {
   why: string;
 }
 export function planFreeChannel(repos: RawRepositories | null, sub: RawSubscription | null): FreeChannelPlan {
-  if (!repos || !sub) return { keep: false, before: [], why: "BossMox couldn't read this node's update sources or subscription, so it won't change its sources after the upgrade." };
+  if (!repos || !sub?.status) return { keep: false, before: [], why: "BossMox couldn't read this node's update sources or subscription, so it won't change its sources after the upgrade." };
   if (sub.status?.toLowerCase() === "active") return { keep: false, before: [], why: "This node has a subscription, so the paid source stays as Proxmox sets it." };
   if (!onFreeChannel(repos)) return { keep: false, before: [], why: "This node isn't on the free channel, so its sources stay as they are." };
   return { keep: true, before: paidOn(repos).map(key), why: "" };

@@ -22,8 +22,9 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
    * A channel switch or an update check rewrites or reads a node's package lists, which a run's install or an upgrade
    * is using: refuse with the reason rather than collide (design rule R5, 2026-11-19).
    */
+  let switching = 0;
   const notWhileChanging = () => {
-    if (jobs.currentRun?.running) throw new HttpError(409, "A run is going. Wait for it to finish, or stop it first.");
+    if (jobs.currentRun?.running || jobs.runState.starting) throw new HttpError(409, "A run is going. Wait for it to finish, or stop it first.");
     const node = c.nodeUpgrade.running();
     if (node) throw new HttpError(409, `${node} is being upgraded. Wait for that to finish.`);
     if (c.upgradeSources.busy()) throw new HttpError(409, "BossMox is changing a node's update sources. Wait for that to finish.");
@@ -147,6 +148,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       const target = body.channel;
       if (target !== "free" && target !== "enterprise") throw new HttpError(400, "That request isn't valid.");
       notWhileChanging();
+      switching++;
       try {
         return await applyChannel(
           {
@@ -160,6 +162,8 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       } catch (err) {
         if (err instanceof ChannelError) throw new HttpError(400, err.message);
         throw err;
+      } finally {
+        switching--;
       }
     },
     "restart-server": async (name, who, body) => {
@@ -196,7 +200,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
           );
         const moves = self ? [...plan.moves.filter((m) => m.id !== self.id), self] : plan.moves;
         const batch = await jobs.batchFor(who.ticket);
-        return (deps) => runMoveOff(jobs.moveRecord, deps, name, who.username, moves, batch);
+        return (deps) => runMoveOff(jobs.moveRecord, deps, name, who.username, moves, batch, self?.id);
       });
     },
     "move-home": async (name, who, body) => {
@@ -218,9 +222,11 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       if (kind === "restart" && !NODE_NAME.test(server)) throw new HttpError(400, "That server name isn't valid.");
       const choices = (body.choices && typeof body.choices === "object" ? body.choices : {}) as Record<string, unknown>;
       // Upgrade this node (ADR 0044): the node comes from its own field, never from `server`, and the confirm is its name.
+      if (body.only !== undefined && (typeof body.only !== "string" || (body.only !== "" && !NODE_NAME.test(body.only)))) throw new HttpError(400, "That request isn't valid.");
       const only = text(body.only, 64);
-      if (only && (kind !== "upgrade" || !NODE_NAME.test(only))) throw new HttpError(400, "That request isn't valid.");
+      if (only && kind !== "upgrade") throw new HttpError(400, "That request isn't valid.");
       // A node's name confirms without regard to case, as for every other node action.
+      if (switching) throw new HttpError(409, "BossMox is switching a node's update channel. Wait a moment, then start it.");
       const confirmed = only ? text(body.confirm, 64).toLowerCase() === only.toLowerCase() : body.confirm === (kind === "restart" ? "reboot" : "confirm");
       // Keep free for this run only (ADR 0044): one of the setting's own choices, and the same permission as the setting.
       let keep: number | undefined;
