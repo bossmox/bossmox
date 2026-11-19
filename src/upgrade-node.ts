@@ -27,6 +27,8 @@ export const UPGRADE_LIMIT_MS = 2 * 60 * 60 * 1000;
  * time for the checks around them. BossMox keeps the Proxmox login fresh while the upgrade runs, browser open or not.
  */
 export const UPGRADE_NEEDS_MS = 3 * 60 * 60 * 1000;
+/** How often the package job is checked: each check is one short console line (ADR 0044: progress, no faster than 5 s). */
+export const FOLLOW_EVERY_MS = 15_000;
 
 /** Failures alone don't stop it: only what the explainer says blocks (ADR 0042; the 9 checker fails on no microcode). */
 export interface CheckerCounts {
@@ -43,7 +45,13 @@ const asCommand = (script: string) => `printf '%s' '${Buffer.from(script, "utf8"
  * apt's errors. Its own command, so BossMox can ask again after the console drops (apt restarts pveproxy, which carries
  * the console) or after BossMox itself restarts.
  */
-export const FOLLOW_SCRIPT = `if systemctl is-active --quiet ${UNIT}; then echo "BMXUP running"; exit 0; fi
+export const FOLLOW_SCRIPT = `if [ -f ${UPGRADE_LOG} ]; then
+t=$(grep -oE "^[0-9]+ upgraded, [0-9]+ newly installed" ${UPGRADE_LOG} | head -n 1 | awk '{print $1 + $3}')
+d=$(grep -c "^Setting up " ${UPGRADE_LOG})
+q=$(( $(date +%s) - $(stat -c %Y ${UPGRADE_LOG}) ))
+echo "BMXPROG \${t:-0} \${d:-0} \${q:-0}"
+fi
+if systemctl is-active --quiet ${UNIT}; then echo "BMXUP running"; exit 0; fi
 if [ -f ${EXIT_FILE} ]; then echo "BMXUP exit $(cat ${EXIT_FILE})"; else echo "BMXUP noexit"; fi
 grep -o "Configuration file '[^']*'" ${UPGRADE_LOG} 2>/dev/null | sort -u
 grep -E "^(E: |dpkg: error|Errors were encountered)" ${UPGRADE_LOG} 2>/dev/null | tail -n 10 | sed 's/^/BMXERR /'
@@ -61,16 +69,31 @@ grep -E "^(E: |dpkg: error|Errors were encountered)" ${UPGRADE_LOG} 2>/dev/null 
 export const APT_LOCK_WAIT = "-o DPkg::Lock::Timeout=600";
 export const UPGRADE_SCRIPT = `if ! systemctl is-active --quiet ${UNIT}; then
 rm -f ${EXIT_FILE}
-systemd-run --quiet --wait --collect --unit=${UNIT} --setenv=DEBIAN_FRONTEND=noninteractive --setenv=UCF_FORCE_CONFFOLD=1 --setenv=APT_LISTCHANGES_FRONTEND=none /bin/bash -c 'exec >${UPGRADE_LOG} 2>&1; apt-get ${APT_LOCK_WAIT} update -q || { echo 100 >${EXIT_FILE}; exit 100; }; apt-get ${APT_LOCK_WAIT} -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade; c=$?; echo $c >${EXIT_FILE}; exit $c'
+systemd-run --quiet --collect --unit=${UNIT} --setenv=DEBIAN_FRONTEND=noninteractive --setenv=UCF_FORCE_CONFFOLD=1 --setenv=APT_LISTCHANGES_FRONTEND=none /bin/bash -c 'exec >${UPGRADE_LOG} 2>&1; apt-get ${APT_LOCK_WAIT} update -q || { echo 100 >${EXIT_FILE}; exit 100; }; apt-get ${APT_LOCK_WAIT} -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade; c=$?; echo $c >${EXIT_FILE}; exit $c'
 fi
 ${FOLLOW_SCRIPT}`;
 
 export const upgradeCommand = () => asCommand(UPGRADE_SCRIPT);
 export const followCommand = () => asCommand(FOLLOW_SCRIPT);
 
+/**
+ * How far the packages are, read from the job's own log (ADR 0044): how many apt said it would install, how many it
+ * has set up, and how many seconds since the log last changed. Numbers only; the log's lines are never shown.
+ */
+export interface UpgradeProgress {
+  total: number;
+  done: number;
+  quietSeconds: number;
+}
+export function readProgress(output: string): UpgradeProgress | null {
+  const m = /^BMXPROG (\d{1,6}) (\d{1,6}) (-?\d{1,9})\s*$/m.exec(output);
+  return m ? { total: Number(m[1]), done: Number(m[2]), quietSeconds: Math.max(0, Number(m[3])) } : null;
+}
+
 export interface UpgradeRead {
   /** dpkg has packages it didn't finish installing: the node must not restart like that. */
   unfinished?: boolean;
+  progress?: UpgradeProgress | null;
   state: "running" | "ended" | "unknown";
   /** apt's exit code; null when the job ended without writing one (killed). */
   exitCode: number | null;
@@ -78,6 +101,10 @@ export interface UpgradeRead {
   errors: string[];
 }
 export function readUpgrade(output: string): UpgradeRead {
+  const progress = readProgress(output);
+  return progress ? { ...readState(output), progress } : readState(output);
+}
+function readState(output: string): UpgradeRead {
   const keptConfig = keptConfigFiles(output);
   const errors = [...output.matchAll(/^BMXERR (.*)$/gm)].map((m) => (m[1] as string).trim());
   if (/^BMXUP unfinished-packages\s*$/m.test(output)) {
@@ -123,6 +150,8 @@ export interface NodeUpgrade {
   /** What it runs once it's back. */
   version: string | null;
   kernel: string | null;
+  /** While the packages install: how far, and when that was read (ADR 0044). */
+  progress?: (UpgradeProgress & { at: number }) | null;
 }
 
 export interface NodeUpgradeDeps {
@@ -171,28 +200,33 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
     return { warnings: s.warnings, failures: s.failures, blocking: blockers(run) };
   }
 
-  /** Runs the upgrade, then follows it until it ends, through a dropped console or a restart of Proxmox's API. */
-  async function upgrade(session: Session, node: string): Promise<UpgradeRead> {
+  /**
+   * Starts the upgrade as its own job and returns, then follows it with a short check until it ends, through a dropped
+   * console or a restart of Proxmox's API. Each check also reads how far the packages are (ADR 0044).
+   */
+  async function upgrade(session: Session, node: string, seen?: (read: UpgradeRead) => void): Promise<UpgradeRead> {
     let read: UpgradeRead | null = null;
     try {
-      read = readUpgrade((await deps.console(node, session, upgradeCommand(), UPGRADE_LIMIT_MS)).output);
+      read = readUpgrade((await deps.console(node, session, upgradeCommand())).output);
     } catch {
       // The console went (pveproxy restarts mid-upgrade). The job carries on; ask it below.
     }
-    return untilEnded(session, node, read);
+    if (read) seen?.(read);
+    return untilEnded(session, node, read, seen);
   }
   const ask = (session: Session, node: string) =>
     deps.console(node, session, followCommand()).then(
       (r) => readUpgrade(r.output),
       () => null,
     );
-  async function untilEnded(session: Session, node: string, first: UpgradeRead | null): Promise<UpgradeRead> {
+  async function untilEnded(session: Session, node: string, first: UpgradeRead | null, seen?: (read: UpgradeRead) => void): Promise<UpgradeRead> {
     const until = now() + UPGRADE_LIMIT_MS;
     let read = first;
     while (read?.state !== "ended") {
       if (now() > until) throw new Error(`The upgrade on ${node} hasn't finished after ${UPGRADE_LIMIT_MS / 3600000} hours. It carries on there by itself; its log is ${UPGRADE_LOG}.`);
-      await pause(30_000);
+      await pause(FOLLOW_EVERY_MS);
       read = await ask(session, node);
+      if (read) seen?.(read);
     }
     return read as UpgradeRead;
   }
@@ -241,7 +275,10 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
         // From here the old sources must never go back.
         deps.sources.forget(node);
         deps.audit("upgrade-node-start", session.username, { node, to: job.to });
-        const r = await upgrade(session, node);
+        const r = await upgrade(session, node, (read) => {
+          if (read.progress) job.progress = { ...read.progress, at: now() };
+        });
+        job.progress = null;
         job.keptConfig = r.keptConfig;
         if (r.exitCode !== 0) throw packagesFailed(node, r);
         if (r.unfinished) throw unfinishedPackages(node);

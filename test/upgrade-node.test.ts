@@ -12,6 +12,7 @@ import {
   onRelease,
   READY_FOR_MS,
   readUpgrade,
+  readProgress,
   followCommand,
   UPGRADE_NEEDS_MS,
   UPGRADE_SCRIPT,
@@ -492,4 +493,40 @@ test("a run that switched a node's sources and then stopped before its packages 
   assert.deepEqual(log.splice(0), ["switch a", "undo a"]);
   await ru(true).run(root(), "a");
   assert.deepEqual(log.splice(0), ["switch a"], "a node that restarted keeps its new sources");
+});
+
+test("the package job reports how far it is, from its own log, numbers only (ADR 0044)", () => {
+  assert.match(FOLLOW_SCRIPT, /BMXPROG/);
+  assert.doesNotMatch(UPGRADE_SCRIPT, /--wait/, "the job starts and the console returns; short checks follow it");
+  assert.deepEqual(readProgress("BMXPROG 168 40 12\nBMXUP running\n"), { total: 168, done: 40, quietSeconds: 12 });
+  assert.deepEqual(readProgress("BMXPROG 0 0 -3\n"), { total: 0, done: 0, quietSeconds: 0 }, "a clock a little off isn't negative");
+  for (const bad of ["BMXPROG 1 2", "BMXPROG a b c", "BMXPROG 1 2 3 <script>", "xBMXPROG 1 2 3"]) assert.equal(readProgress(bad), null, bad);
+  assert.deepEqual(readUpgrade("BMXPROG 10 4 2\nBMXUP running\n").progress, { total: 10, done: 4, quietSeconds: 2 });
+});
+
+test("while the packages install, the node's upgrade carries their progress, and drops it once they're in", async () => {
+  const seen: unknown[] = [];
+  const { deps } = lab({ follow: ["BMXPROG 168 40 3\nBMXUP running\n", "BMXPROG 168 168 1\nBMXUP exit 0\n"] });
+  let job: ReturnType<typeof createNodeUpgrade> | null = null;
+  deps.pause = async () => {
+    const p = job?.view().n2?.progress;
+    seen.push(p ? { ...p, at: 0 } : null);
+  };
+  deps.console = ((orig) => async (n: string, sess: never, line: string, t?: number) => {
+    // The upgrade's first answer: started, still running.
+    if (line !== followCommand() && !line.startsWith("pve8to9")) {
+      await orig(n, sess, line, t);
+      return out("BMXPROG 168 0 0\nBMXUP running\n");
+    }
+    return orig(n, sess, line, t);
+  })(deps.console) as never;
+  job = createNodeUpgrade(deps);
+  await job.start(root(), "n2", "n2");
+  const r = await finish(job, "n2");
+  assert.equal(r?.phase, "done", r?.error ?? "");
+  assert.deepEqual(seen.slice(0, 2), [
+    { total: 168, done: 0, quietSeconds: 0, at: 0 },
+    { total: 168, done: 40, quietSeconds: 3, at: 0 },
+  ]);
+  assert.equal(r?.progress, null, "gone once the packages are in");
 });
