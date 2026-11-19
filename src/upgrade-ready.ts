@@ -49,7 +49,16 @@ const GB = 1024 ** 3;
 export function ownChecks(input: { rootFreeGb: number | null; passthrough: string[]; plugins: string[] }): Explained[] {
   const out: Explained[] = [];
   const own = (e: Omit<Explained, "original">): Explained => ({ ...e, original: "" });
-  if (input.rootFreeGb === null) out.push(own({ level: "WARN", title: "BossMox couldn't read the free space on root", detail: "", handling: "blocks" }));
+  if (input.rootFreeGb === null)
+    out.push(
+      own({
+        level: "WARN",
+        title: "BossMox couldn't read the free space on root",
+        detail: "Without it BossMox can't tell whether the upgrade has room, so it waits rather than guess. Run the checker again; a node that's very busy can miss the question.",
+        handling: "blocks",
+        help: "upgrade-root-space",
+      }),
+    );
   else if (input.rootFreeGb < ROOT_MIN_GB)
     out.push(
       own({
@@ -57,10 +66,19 @@ export function ownChecks(input: { rootFreeGb: number | null; passthrough: strin
         title: `Only ${input.rootFreeGb.toFixed(1)} GB free on root`,
         detail: `The upgrade needs at least ${ROOT_MIN_GB} GB. Remove old ISO images, backups or kernels kept on root first.`,
         handling: "blocks",
+        help: "upgrade-root-space",
       }),
     );
   else if (input.rootFreeGb < ROOT_GOOD_GB)
-    out.push(own({ level: "NOTICE", title: `${input.rootFreeGb.toFixed(1)} GB free on root`, detail: `Enough, but Proxmox suggests more than ${ROOT_GOOD_GB} GB.`, handling: "advice" }));
+    out.push(
+      own({
+        level: "NOTICE",
+        title: `${input.rootFreeGb.toFixed(1)} GB free on root`,
+        detail: `Enough, but Proxmox suggests more than ${ROOT_GOOD_GB} GB.`,
+        handling: "advice",
+        help: "upgrade-root-space",
+      }),
+    );
   if (input.passthrough.length)
     out.push(
       own({
@@ -68,6 +86,7 @@ export function ownChecks(input: { rootFreeGb: number | null; passthrough: strin
         title: `Passthrough: ${input.passthrough.join(", ")}`,
         detail: "VMs with hardware passed through may not start on the new kernel (6.14). Proxmox's workaround is to keep using the older kernel on this node until it's fixed.",
         handling: "advice",
+        help: "upgrade-passthrough",
       }),
     );
   if (input.plugins.length)
@@ -77,6 +96,7 @@ export function ownChecks(input: { rootFreeGb: number | null; passthrough: strin
         title: `Storage from outside Proxmox: ${input.plugins.join(", ")}`,
         detail: "Third-party storage plugins need their own update for the new version. Check with whoever makes it before upgrading.",
         handling: "advice",
+        help: "upgrade-storage-plugins",
       }),
     );
   return out;
@@ -120,7 +140,14 @@ export function createUpgradeReady(deps: ReadyDeps) {
     const major = Number.parseInt(v, 10);
     const left = versions ? unfinishedUpgrade(versions) : null;
     const item: Explained = !versions
-      ? { level: "WARN", title: "BossMox couldn't read this node's kernels", detail: "", handling: "blocks", original: "" }
+      ? {
+          level: "WARN",
+          title: "BossMox couldn't read this node's kernels",
+          detail: "BossMox reads them to tell whether this node finished its upgrade or still needs a restart. Without them it waits rather than guess. Run the checker again.",
+          handling: "blocks",
+          original: "",
+          help: "upgrade-checker",
+        }
       : left
         ? {
             level: "NOTICE",
@@ -128,8 +155,9 @@ export function createUpgradeReady(deps: ReadyDeps) {
             detail: `Its packages are on ${major}, but it still runs the old kernel (${left.running}). Upgrade all nodes finishes it: Proxmox's checker, the port names pinned, a restart onto ${left.waiting}.`,
             handling: "bossmox",
             original: "",
+            help: "upgrade-checker",
           }
-        : { level: "INFO", title: `Already on Proxmox VE ${major}`, detail: "", handling: "advice", original: "" };
+        : { level: "INFO", title: `Already on Proxmox VE ${major}`, detail: "", handling: "advice", original: "", help: "upgrade-checker" };
     return { node, version: v, counts: null, items: [item], error: null };
   }
 
