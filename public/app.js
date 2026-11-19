@@ -4283,14 +4283,29 @@ function saveSettings() {
       `<h3>That's more than ${esc(v.node)} has</h3><p>${wanted} processor cores were asked for, and ${esc(v.node)} has ${has}. Proxmox wouldn't be able to start ${esc(v.name)}.</p>${closeRow}`,
     );
   const risky = ["bios", "machine", "scsihw"].filter((k) => k in changes);
-  if (risky.length && !v.template)
+  if (risky.length && !v.template) {
+    // Say exactly which setting changes, from what to what, so "change it back" is something the person can do (ADR 0044).
+    const LISTS = {
+      bios: [
+        "Starts with",
+        [
+          ["seabios", "BIOS"],
+          ["ovmf", "UEFI"],
+        ],
+      ],
+      machine: ["Machine type", MACHINE_WORDS],
+      scsihw: ["Disk controller", CONTROLLER_WORDS],
+    };
+    const word = (k, value) => (LISTS[k][1].find(([x]) => x === (value ?? "")) ?? [value, value || "the default"])[1];
+    const what = risky.map((k) => `${LISTS[k][0]}: ${word(k, v.settings[k])} to ${word(k, changes[k])}`).join(". ");
     return confirmAction(
       `Change how ${v.name} starts?`,
-      "Changing the firmware, machine type or disk controller can stop an installed system from starting. If it does, change it back.",
+      `${what}. An installed system can stop starting after this, because it was set up for the old one. If it does, change it back to ${risky.map((k) => word(k, v.settings[k])).join(" and ")}.`,
       "Save changes",
       go,
       true,
     );
+  }
   go();
 }
 async function loadWaiting(v) {
