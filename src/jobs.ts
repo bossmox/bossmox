@@ -79,9 +79,11 @@ export function createJobs(ctx: JobsContext) {
    * Fresh numbers from Proxmox, and where each guest of `from` would go (ADR 0025). Without `ids` it plans every
    * running guest. With `only`, that node is the one target allowed (sending guests home).
    */
-  /** Keep free while a run with its own value is going, otherwise the saved setting (ADR 0044). */
-  let runKeep: number | null = null;
-  const keepNow = () => runKeep ?? ctx.preferences().keepFreePct;
+  /**
+   * The saved Keep free. A run with its own value passes it explicitly to its own planning only: nothing else that
+   * plans while it runs (HA protect, Empty this node, another plan screen) ever sees it (review 0.3.2, Gemini H2).
+   */
+  const keepNow = () => ctx.preferences().keepFreePct;
 
   async function planEvacuation(ticket: string, from: string, ids?: number[], only?: string, pending: Pending = {}, assumeEjected: number[] = [], keepFreePct: number = keepNow()) {
     const resources = await pve.get<RawResource[]>("/cluster/resources", ticket);
@@ -181,9 +183,9 @@ export function createJobs(ctx: JobsContext) {
   }
 
   /** How a move job reaches Proxmox: always with the person's current login, which renewals replace. */
-  function moveDeps(session: Session): MoveDeps {
+  function moveDeps(session: Session, keepFreePct?: number): MoveDeps {
     return {
-      plan: (from, ids, only, pending) => planEvacuation(session.ticket, from, ids, only, pending),
+      plan: (from, ids, only, pending) => planEvacuation(session.ticket, from, ids, only, pending, [], keepFreePct ?? keepNow()),
       migrate: async (move, from) => {
         const base = `/nodes/${enc(from)}/${move.type}/${move.id}`;
         const now = await pve.get<{ status?: string }>(`${base}/status/current`, session.ticket);
@@ -474,7 +476,9 @@ export function createJobs(ctx: JobsContext) {
   /** How a run reaches Proxmox and the move job, always with the starting person's current login. */
   function runDeps(session: Session, run: Run): RunDeps {
     const t = () => session.ticket;
-    const moves: MoveDeps = { ...moveDeps(session), stopped: () => run.stop ?? moveJob.stop };
+    // This run's own Keep free, for its moves and its planning only (ADR 0044).
+    const keep = run.keepFreePct ?? keepNow();
+    const moves: MoveDeps = { ...moveDeps(session, keep), stopped: () => run.stop ?? moveJob.stop };
     return {
       stopped: () => run.stop,
       save: saveRun,
@@ -501,7 +505,7 @@ export function createJobs(ctx: JobsContext) {
         await waitTask(node, upid, t(), 5 * 60 * 1000);
       },
       moveOff: async (node, ids) => {
-        const plan = await planEvacuation(t(), node, ids);
+        const plan = await planEvacuation(t(), node, ids, undefined, {}, [], keep);
         if (plan.problems.length) throw new Error(plan.problems.join(" "));
         await runMoveOff(moveRecord, moves, node, session.username, plan.moves, await batchFor(t()));
         // Where each one is now, read from Proxmox: one may already have gone, moved home to another node earlier in the run.
@@ -543,7 +547,7 @@ export function createJobs(ctx: JobsContext) {
         const notes = new Map<number, string>();
         if (moveRecord.away[node]?.guests.length) {
           // A node just back from a restart is busy for a while. Give it up to 5 minutes to drop under the processor cap.
-          const cap = 100 - keepNow();
+          const cap = 100 - keep;
           const until = Date.now() + RETURN_SETTLE_MS;
           for (; Date.now() < until; await new Promise((r) => setTimeout(r, 10_000))) {
             const s = await pve.get<RawStatus>(`/nodes/${enc(node)}/status`, t()).catch(() => null);
@@ -639,14 +643,12 @@ export function createJobs(ctx: JobsContext) {
       };
       const run = currentRun;
       runState.session = session;
-      // The run's own Keep free holds for its moves and its guests coming home, and only while it runs.
-      runKeep = keepFreePct ?? null;
+
       moveJob.stop = null;
       saveRun(run);
       void drive(run, runDeps(session, run))
         .catch((err: Error) => console.error("Run failed:", err.message))
         .finally(() => {
-          runKeep = null;
           runState.session = null;
           ctx.jobEnded(session);
         });

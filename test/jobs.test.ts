@@ -327,3 +327,19 @@ test("a run's own Keep free plans its moves, and the saved setting stays as it w
     c.done();
   }
 });
+
+test("while a run with its own Keep free goes, other planning still uses the saved setting (review 0.3.2, Gemini H2)", async () => {
+  const c = cluster();
+  try {
+    const jobs = createJobs(c.ctx);
+    const release = c.hold();
+    const started = jobs.startRun(person, "restart", "n1", true, {}, "", 25);
+    release();
+    await started;
+    assert.equal(jobs.currentRun?.keepFreePct, 25, "the run carries its own value");
+    assert.equal((await jobs.runPlan("t", "restart", "n2")).keepFreePct, 10, "another plan, during the run, gets the saved setting");
+    assert.equal((await jobs.planEvacuation("t", "n2")).keepFreePct, 10, "and so does a move or HA's check");
+  } finally {
+    c.done();
+  }
+});
