@@ -42,3 +42,32 @@ test("one node only for an upgrade, and only a valid node name", async () => {
   await assert.rejects(start({ kind: "upgrade", only: "n2; reboot", confirm: "n2; reboot" }).done, /isn't valid/);
   await assert.rejects(start({ kind: "upgrade", only: "../n2", confirm: "../n2" }).done, /isn't valid/);
 });
+
+test("a channel switch or update check waits for a run, an upgrade or a sources change (design rule R5)", async () => {
+  const posts: string[] = [];
+  const make = (state: { run?: boolean; upgrading?: string | null; sources?: boolean }) =>
+    clusterActions({
+      jobs: { currentRun: state.run ? { running: true } : null },
+      nodeUpgrade: { running: () => state.upgrading ?? null },
+      upgradeSources: { busy: () => state.sources ?? false },
+      pve: {
+        post: async (p: string) => {
+          posts.push(p);
+          return "UPID:n1:x";
+        },
+      },
+    } as never);
+  const who = { username: "root@pam", ticket: "t" } as unknown as Session;
+  const call = (a: ReturnType<typeof make>, name: string, body: Record<string, unknown> = {}) => Promise.resolve().then(() => a[name]?.("n1", who, body));
+  for (const [state, why] of [
+    [{ run: true }, /A run is going/],
+    [{ upgrading: "n2" }, /n2 is being upgraded/],
+    [{ sources: true }, /changing a node's update sources/],
+  ] as const) {
+    await assert.rejects(call(make(state), "check-updates"), why);
+    await assert.rejects(call(make(state), "update-channel", { channel: "free" }), why);
+  }
+  assert.deepEqual(posts, [], "nothing reached Proxmox");
+  await call(make({}), "check-updates");
+  assert.deepEqual(posts, ["/nodes/n1/apt/update"], "with nothing going on, the check runs");
+});

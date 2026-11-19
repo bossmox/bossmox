@@ -1901,6 +1901,49 @@ function pickServer(name) {
   renderServerDetail();
   loadServer();
 }
+/**
+ * The free channel on every node that needs it (ADR 0044). Each node is asked for the same advice its own page shows,
+ * so a node with a subscription, or already on the free channel, is never offered; then one switch after another.
+ */
+async function freeChannelEverywhere() {
+  dialog(`<h3>Checking every node's update channel</h3><p>This only reads.</p>`);
+  let need;
+  try {
+    const all = await Promise.all(onlineNodes().map((n) => signal(`api/server?name=${encodeURIComponent(n)}`).then((d) => ({ n, offer: d.channel?.offer ?? null }))));
+    need = all.filter((x) => x.offer === "free").map((x) => x.n);
+  } catch (err) {
+    if (err.message === "signed out") return closeDialog();
+    return dialog(`<h3>Couldn't read every node</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  if (!need.length) return dialog(`<h3>Nothing to switch</h3><p>No node needs the free channel.</p>${closeRow}`);
+  confirmAction(
+    `Use the free channel on ${need.length === 1 ? need[0] : `${need.length} nodes`}?`,
+    `${need.join(", ")}. Proxmox's free channel gets the same software as the paid one, sooner and with less testing. On each, BossMox turns the paid sources off without deleting them, then checks for updates. Nodes with a subscription aren't listed.`,
+    "Use the free channel",
+    () => switchChannels(need),
+  );
+}
+async function switchChannels(nodes) {
+  const done = [];
+  for (const n of nodes) {
+    dialog(`<h3>Switching ${esc(n)} to the free channel</h3><p>${done.length} of ${nodes.length} done.</p>`);
+    try {
+      const res = await post("api/action/update-channel", { server: n, channel: "free" });
+      if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error);
+      if (body.task) await followTask(n, body.task);
+      done.push(n);
+    } catch (err) {
+      return dialog(
+        `<h3>${esc(n)} wasn't switched</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><p>${done.length ? `Switched: ${esc(done.join(", "))}.` : "Nothing was switched."} The rest weren't touched.</p>${closeRow}`,
+      );
+    }
+  }
+  await refresh();
+  if (S.server) loadServer();
+  dialog(`<h3>On the free channel</h3><p>${esc(done.join(", "))}.</p>${closeRow}`);
+}
 function renderServers() {
   const list = $("#srvlist");
   if (!list) return;
@@ -1912,17 +1955,25 @@ function renderServers() {
     pickServer(S.data.nodes[0].name);
     return;
   }
-  list.innerHTML =
-    S.data.nodes
-      .map(
-        (n) => `<button class="row ${n.name === S.server ? "on" : ""}" data-server="${esc(n.name)}">
+  // A one-node install gets the same guided update (ADR 0044); it used to find it only through the header's notice.
+  const rolling = `<button class="btn rollbtn" data-rolling="1">${S.data.nodes.length > 1 ? "Update all nodes" : `Update ${esc(S.data.nodes[0]?.name ?? "")}`}</button>`;
+  const rows = S.data.nodes
+    .map(
+      (n) => `<button class="row ${n.name === S.server ? "on" : ""}" data-server="${esc(n.name)}">
     <span class="dot ${n.online ? "running" : "warn"}"></span><b>${esc(n.name)}</b><small>${n.online ? `${n.cpuPct}% busy, ${n.memPct}% memory` : "Offline"}</small></button>`,
-      )
-      .join("") + (S.data.nodes.length > 1 ? `<button class="btn rollbtn" data-rolling="1">Update all nodes</button>` : "");
+    )
+    .join("");
+  list.innerHTML = rows + rolling;
   if (S.serverTab === "overview") renderServerDetail();
 }
 const CHANNEL_WORDS = { free: "Use the free channel", enterprise: "Use the enterprise channel" };
-const channelButton = (d) => (d.channel?.offer ? `<button class="btn" data-channel="${d.channel.offer}" data-channelserver="${esc(d.name)}">${CHANNEL_WORDS[d.channel.offer]}</button>` : "");
+const channelButton = (d) =>
+  d.channel?.offer
+    ? `<button class="btn" data-channel="${d.channel.offer}" data-channelserver="${esc(d.name)}">${CHANNEL_WORDS[d.channel.offer]}</button>${
+        // Every option (ADR 0044): the same switch for every node that needs it, not one confirm per node.
+        d.channel.offer === "free" && (S.data?.nodes?.length ?? 0) > 1 ? `<button class="btn" data-channelall="free">On every node</button>` : ""
+      }`
+    : "";
 const noAccess = (what, perm) => `<p class="empty">Your Proxmox account can't see ${what}. It needs ${perm} on this node.</p>`;
 const SERVER_TAB = {
   overview: (d, node) => {
@@ -4883,6 +4934,7 @@ document.addEventListener("click", (e) => {
       runAction("update-channel", server, `Switching ${server} to the ${d.channel} channel`, { channel: d.channel }),
     );
   }
+  if (d.channelall === "free") return freeChannelEverywhere();
   if (d.check) {
     const server = d.check;
     return confirmAction(`Check ${server} for updates?`, "This only looks for new updates. It doesn't install anything.", `Check ${server}`, () =>

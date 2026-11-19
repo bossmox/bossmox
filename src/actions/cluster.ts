@@ -18,6 +18,16 @@ const guestId = (v: unknown) => {
 
 export function clusterActions(c: ActionContext): Record<string, Action> {
   const { audit, readOptions, pve, jobs, updates } = c;
+  /**
+   * A channel switch or an update check rewrites or reads a node's package lists, which a run's install or an upgrade
+   * is using: refuse with the reason rather than collide (design rule R5, 2026-11-19).
+   */
+  const notWhileChanging = () => {
+    if (jobs.currentRun?.running) throw new HttpError(409, "A run is going. Wait for it to finish, or stop it first.");
+    const node = c.nodeUpgrade.running();
+    if (node) throw new HttpError(409, `${node} is being upgraded. Wait for that to finish.`);
+    if (c.upgradeSources.busy()) throw new HttpError(409, "BossMox is changing a node's update sources. Wait for that to finish.");
+  };
   return {
     "ha-protect": async (_name, who, body) => {
       await c.ha.protect(who, guestId(body.id));
@@ -129,10 +139,14 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       await c.heartbeat.start(who, text(body.network, 32), text(body.confirm, 64));
       return null;
     },
-    "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
+    "check-updates": (name, who) => {
+      notWhileChanging();
+      return pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who);
+    },
     "update-channel": async (name, who, body) => {
       const target = body.channel;
       if (target !== "free" && target !== "enterprise") throw new HttpError(400, "That request isn't valid.");
+      notWhileChanging();
       try {
         return await applyChannel(
           {

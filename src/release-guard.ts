@@ -35,6 +35,6 @@ export function releaseMismatch(node: string, repos: RawRepositories | null): st
   if (!found.length) return null;
   return (
     `The update sources on ${node} point at a different release than the Proxmox it runs. A normal update would turn into an upgrade to another major version, so BossMox won't run it. ` +
-    `Use Proxmox's upgrade steps for that, or set the sources back to the installed release. Proxmox says: ${found.join("; ")}`
+    `To upgrade, use Get ready to upgrade in BossMox. If BossMox switched these sources, Put the old sources back is there too; if they were changed by hand, set them back to the installed release in Proxmox. Proxmox says: ${found.join("; ")}`
   );
 }
