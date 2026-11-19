@@ -98,3 +98,12 @@ test("Empty this node: typed name, every guest visible, never BossMox's own cont
   await assert.rejects(call(make({ self: { id: 101, name: "bossmox", type: "lxc", target: "n2" } }).actions, { confirm: "N1" }), /BossMox runs in the container bossmox on n1/);
   assert.equal(await call(make({}).actions, { confirm: "N1" }), "job", "the name confirms in any case");
 });
+
+test("Move everything back needs an account that sees every guest, so it can't drop others from the record", async () => {
+  const actions = clusterActions({ seesAllGuests: async () => false, jobs: { startMoveJob: async () => assert.fail("nothing starts") } } as never);
+  const who = { username: "limited@pve", ticket: "t" } as unknown as Session;
+  await assert.rejects(
+    Promise.resolve().then(() => actions["move-home"]?.("n1", who, { confirm: "n1" })),
+    /can't see every guest/,
+  );
+});

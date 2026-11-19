@@ -200,7 +200,11 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       });
     },
     "move-home": async (name, who, body) => {
-      if (body.confirm !== name) throw new HttpError(400, "The move wasn't confirmed.");
+      if (text(body.confirm, 64).toLowerCase() !== name.toLowerCase()) throw new HttpError(400, "The move wasn't confirmed.");
+      // The record of what's away is rewritten from what this account can see: one that can't see every guest would
+      // drop the others from it, and they'd never come home (design review, Gemini M4).
+      if (!(await c.seesAllGuests(who.ticket)))
+        throw new HttpError(403, `Your Proxmox account can't see every guest, so BossMox can't bring ${name}'s guests home for you. Sign in with an account that can see the whole cluster.`);
       return jobs.startMoveJob(who, async () => {
         if (!jobs.moveRecord.away[name]?.guests.length) throw new HttpError(400, `BossMox has nothing recorded as moved off ${name}.`);
         const batch = await jobs.batchFor(who.ticket);
