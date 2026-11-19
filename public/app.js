@@ -848,8 +848,10 @@ async function helpArticles() {
   if (!S.help) {
     try {
       S.help = (await signal("api/help")).articles ?? {};
+      S.helpFailed = false;
     } catch (err) {
       if (err.message === "signed out") throw err;
+      S.helpFailed = true;
       return {};
     }
   }
@@ -863,7 +865,7 @@ function helpButton(key, at, title) {
 }
 function helpBox(key) {
   const md = S.help?.[key];
-  if (!S.help) return `<div class="helpbox"><p class="meta">Loading.</p></div>`;
+  if (!S.help) return `<div class="helpbox"><p class="meta">${S.helpFailed ? "BossMox couldn't load the help. Press the ? again to try again." : "Loading."}</p></div>`;
   if (!md) return `<div class="helpbox"><p class="meta">This article isn't available in this copy of BossMox.</p></div>`;
   return `<div class="helpbox">${helpHtml(md)}<p class="meta"><button class="linkbtn" data-helpapp="${esc(key)}">Open in Help</button></p></div>`;
 }
@@ -1921,9 +1923,22 @@ function pickServer(name) {
 async function freeChannelEverywhere() {
   dialog(`<h3>Checking every node's update channel</h3><p>This only reads.</p>`);
   let need;
+  let unread = [];
   try {
-    const all = await Promise.all(onlineNodes().map((n) => signal(`api/server?name=${encodeURIComponent(n)}`).then((d) => ({ n, offer: d.channel?.offer ?? null }))));
+    // A node that can't be read is named, never quietly left out (rule R10).
+    const all = await Promise.all(
+      onlineNodes().map((n) =>
+        signal(`api/server?name=${encodeURIComponent(n)}`).then(
+          (d) => ({ n, offer: d.channel?.offer ?? null }),
+          (err) => {
+            if (err.message === "signed out") throw err;
+            return { n, offer: null, unread: true };
+          },
+        ),
+      ),
+    );
     need = all.filter((x) => x.offer === "free").map((x) => x.n);
+    unread = [...all.filter((x) => x.unread).map((x) => x.n), ...(S.data?.nodes ?? []).filter((x) => !x.online).map((x) => x.name)];
   } catch (err) {
     if (err.message === "signed out") return closeDialog();
     return dialog(`<h3>Couldn't read every node</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
@@ -1933,11 +1948,12 @@ async function freeChannelEverywhere() {
     `Use the free channel on ${need.length === 1 ? need[0] : `${need.length} nodes`}?`,
     `${need.join(", ")}. Proxmox's free channel gets the same software as the paid one, sooner and with less testing. On each, BossMox turns the paid sources off without deleting them, then checks for updates. Nodes with a subscription aren't listed.`,
     "Use the free channel",
-    () => switchChannels(need),
+    () => switchChannels(need, unread),
   );
 }
-async function switchChannels(nodes) {
+async function switchChannels(nodes, unread = []) {
   const done = [];
+  const checkFailed = [];
   for (const n of nodes) {
     dialog(`<h3>Switching ${esc(n)} to the free channel</h3><p>${done.length} of ${nodes.length} done.</p>`);
     try {
@@ -1945,8 +1961,9 @@ async function switchChannels(nodes) {
       if (res.status === 401) return showLogin("You've been signed out. Sign in again to continue.");
       const body = await res.json();
       if (!res.ok) throw new Error(body.error);
-      if (body.task) await followTask(n, body.task);
+      const check = body.task ? await followTask(n, body.task) : null;
       done.push(n);
+      if (check && check.result === "failed") checkFailed.push(n);
     } catch (err) {
       return dialog(
         `<h3>${esc(n)} wasn't switched</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p><p>${done.length ? `Switched: ${esc(done.join(", "))}.` : "Nothing was switched."} The rest weren't touched.</p>${closeRow}`,
@@ -1955,7 +1972,9 @@ async function switchChannels(nodes) {
   }
   await refresh();
   if (S.server) loadServer();
-  dialog(`<h3>On the free channel</h3><p>${esc(done.join(", "))}.</p>${closeRow}`);
+  dialog(
+    `<h3>On the free channel</h3><p>${esc(done.join(", "))}.</p>${checkFailed.length ? `<p class="loginerr">The check for updates after switching failed on ${esc(checkFailed.join(", "))}. Open that node's Updates tab to see why.</p>` : ""}${unread.length ? `<p class="meta">Not checked, BossMox couldn't read ${esc(unread.join(", "))}.</p>` : ""}${closeRow}`,
+  );
 }
 function renderServers() {
   const list = $("#srvlist");
@@ -3041,7 +3060,7 @@ function upSteps(job) {
   const quiet = p ? Math.max(0, Math.round(p.quietSeconds + (Date.now() - p.at) / 1000)) : 0;
   const packages =
     p && job.phase === "upgrading"
-      ? `<small>${p.total ? `${Math.min(p.done, p.total)} of about ${p.total} packages set up` : "Downloading and unpacking"}. Last activity ${quiet < 90 ? `${quiet} ${quiet === 1 ? "second" : "seconds"}` : `${Math.round(quiet / 60)} minutes`} ago.</small>`
+      ? `<small>${Number(p.total) ? `${Math.min(Number(p.done), Number(p.total))} of about ${Number(p.total)} packages set up` : "Downloading and unpacking"}. Last activity ${quiet < 90 ? `${quiet} ${quiet === 1 ? "second" : "seconds"}` : `${Math.round(quiet / 60)} minutes`} ago.</small>`
       : "";
   const row = ([, words], i) => {
     const state = failed ? "" : i < at ? "done" : i === at ? "now" : "";
@@ -3098,7 +3117,7 @@ function drawRun(run) {
     ${stayed.map((v) => `<p class="meta">${esc(v.name)} stays on ${esc(v.on ?? "another node")}, running: ${esc((v.note ?? "its home had no room").replace(/\.$/, ""))}.</p>`).join("")}
     ${stayed.length ? `<p class="meta">Move everything back on a node's Overview tries again later.</p>` : ""}
     ${kept.length ? `<p class="meta">Config files you'd changed kept your version. The new one from the update sits beside each as .dpkg-dist: ${esc(kept.join(", "))}.</p>` : ""}
-    <div class="row-end">${run.running && !run.stop ? `<button class="btn" data-runstop="1">Stop after this step</button>` : run.running ? `<button class="btn" disabled>Stopping after this step</button>` : ""}${!run.running && run.kind !== "restart" && run.nodes.some((n) => n.phase === "waiting") ? `<button class="btn primary" data-runagain="run:${esc(run.kind)}::">Start again with the nodes not done</button>` : ""}<button class="btn" data-runclose="1">Close</button></div>`);
+    <div class="row-end">${run.running && !run.stop ? `<button class="btn" data-runstop="1">Stop after this step</button>` : run.running ? `<button class="btn" disabled>Stopping after this step</button>` : ""}${!run.running && run.kind !== "restart" && run.nodes.some((n) => n.phase === "waiting") ? `<button class="btn primary" data-runagain="run:${esc(run.kind)}::${run.kind === "upgrade" && run.nodes.length === 1 ? esc(run.nodes[0].name) : ""}:${run.keepFreePct ?? ""}">Start again with the nodes not done</button>` : ""}<button class="btn" data-runclose="1">Close</button></div>`);
 }
 /** A line on the desktop while a run is going, for any browser. */
 function runLine() {
@@ -5034,8 +5053,8 @@ document.addEventListener("click", (e) => {
     return startRun();
   }
   if (d.runagain) {
-    const [, kind, server, only] = d.runagain.split(":");
-    return openRunStart(kind, server, only);
+    const [, kind, server, only, keep] = d.runagain.split(":");
+    return openRunStart(kind, server, only, keep ? Number(keep) : undefined);
   }
   if (d.runopen) return openRun();
   if (d.runclose) {
