@@ -4,12 +4,6 @@ What's coming to BossMox, in plain words. Each theme is a [GitHub milestone](htt
 
 Version numbers: fixes to a released version bump the last number; new features bump the middle one (0.2.x to 0.3.0). 1.0 is the first release called stable.
 
-## Next: [Help and every option](https://github.com/bossmox/bossmox/milestone/10) (0.3.2)
-
-Proxmox is powerful and confusing. BossMox explains what each upgrade warning means before you act on it, offers one-node versions of what it does to the whole cluster, shows each step of a run as it happens, and sends you to Proxmox's own interface less often.
-
-- [Help, every option in BossMox, and runs that show their progress](https://github.com/bossmox/bossmox/issues/110)
-
 ## Later, in no particular order
 
 ### [Addresses](https://github.com/bossmox/bossmox/milestone/2)
@@ -41,4 +35,4 @@ How BossMox is delivered and supported.
 
 Upgrading Ceph isn't on the roadmap at this time. A cluster that uses Ceph needs Ceph Squid (19.2) before it can upgrade to Proxmox VE 9; BossMox says so and stops, and Ceph is upgraded in Proxmox's own interface.
 
-VMs and containers side by side shipped in [0.3.1](https://github.com/bossmox/bossmox/releases/tag/v0.3.1-preview), Proxmox upgrades (8 to 9) in [0.3.0](https://github.com/bossmox/bossmox/releases/tag/v0.3.0-preview), email alerts, the update guard and the sponsor link in [0.2.1](https://github.com/bossmox/bossmox/releases/tag/v0.2.1-preview), and cluster resilience in [0.2.0](https://github.com/bossmox/bossmox/releases/tag/v0.2.0-preview). Released work is in the [release notes](https://github.com/bossmox/bossmox/releases), and the reasoning behind each decision is in [docs/adr](docs/adr).
+Help, every option in BossMox and runs that show their progress shipped in [0.3.2](https://github.com/bossmox/bossmox/releases/tag/v0.3.2-preview), VMs and containers side by side in [0.3.1](https://github.com/bossmox/bossmox/releases/tag/v0.3.1-preview), Proxmox upgrades (8 to 9) in [0.3.0](https://github.com/bossmox/bossmox/releases/tag/v0.3.0-preview), email alerts, the update guard and the sponsor link in [0.2.1](https://github.com/bossmox/bossmox/releases/tag/v0.2.1-preview), and cluster resilience in [0.2.0](https://github.com/bossmox/bossmox/releases/tag/v0.2.0-preview). Released work is in the [release notes](https://github.com/bossmox/bossmox/releases), and the reasoning behind each decision is in [docs/adr](docs/adr).
