@@ -772,14 +772,6 @@ const UP_HANDLING = {
   bossmox: ["ok", "BossMox takes care of it"],
   advice: ["off", "Good to know"],
 };
-const UP_PHASE = {
-  checking: "Running Proxmox's checker",
-  upgrading: "Installing the new version. This usually takes 10 to 30 minutes",
-  rechecking: "Checking the new packages",
-  pinning: "Pinning the port names",
-  restarting: "Restarting",
-  verifying: "Checking it came back on the new version",
-};
 const upgrading = (u) => Object.values(u?.upgrades ?? {}).some((j) => !j.finishedAt);
 /** What a node runs now: an upgrade since the check (one node, or a cluster run) beats what the check read. */
 function nowOn(n, up, checkedAt) {
@@ -825,7 +817,7 @@ function upgradeBody(u) {
         ? `<div class="snap"><div><span class="dot ok"></span><b>Upgraded to Proxmox VE ${esc(up.version ?? String(up.to))}</b><small>Running kernel ${esc(up.kernel ?? "unknown")}.${up.keptConfig?.length ? ` These config files had been changed, so they were kept, with the new version beside each as .dpkg-dist: ${esc(up.keptConfig.join(", "))}.` : ""}</small></div></div>`
         : up.phase === "failed"
           ? `<div class="snap"><div><span class="dot bad"></span><b>The upgrade stopped</b><small>${esc(up.error ?? "")}</small></div></div>`
-          : `<div class="snap"><div><span class="dot warn"></span><b>Upgrading to Proxmox VE ${esc(String(up.to))}</b><small>${esc(UP_PHASE[up.phase] ?? up.phase)}. You can close this window; the upgrade carries on.</small></div></div>`
+          : `<div class="snap"><div><span class="dot warn"></span><b>Upgrading to Proxmox VE ${esc(String(up.to))}</b><small>You can close this window; the upgrade carries on.</small>${upSteps(up)}</div></div>`
       : "";
     const src = u.sources?.[n.node];
     const srcErr = src?.error ? `<p class="loginerr">${esc(src.error)}</p>` : "";
@@ -2971,6 +2963,8 @@ async function openRun() {
   for (;;) {
     try {
       S.run = (await signal("api/run")).run;
+      // An upgrade run's node under way: its steps and package count come from the upgrade's own view (ADR 0044).
+      S.upgradeLive = S.run?.kind === "upgrade" && S.run.running ? await signal("api/upgrade").catch(() => null) : null;
     } catch (err) {
       if (err.message === "signed out") return;
     }
@@ -2983,6 +2977,46 @@ async function openRun() {
     }
     await wait(3000);
   }
+}
+/**
+ * The steps of one node's upgrade with check marks (ADR 0044: "step X of X with check marks"), and while the packages
+ * install, how many are set up and how long since the node last reported. Numbers only, from the server.
+ */
+const UP_STEPS = [
+  ["checking", "Proxmox's checker"],
+  ["upgrading", "Installing the new version"],
+  ["rechecking", "Checking the new packages"],
+  ["pinning", "Pinning the port names"],
+  ["restarting", "Restarting"],
+  ["verifying", "Checking it came back on the new version"],
+];
+function upSteps(job) {
+  if (!job) return "";
+  const steps = job.finishing ? UP_STEPS.slice(2) : UP_STEPS;
+  const at = job.phase === "done" ? steps.length : steps.findIndex(([k]) => k === job.phase);
+  const failed = job.phase === "failed";
+  const p = job.progress;
+  const quiet = p ? Math.max(0, Math.round(p.quietSeconds + (Date.now() - p.at) / 1000)) : 0;
+  const packages =
+    p && job.phase === "upgrading"
+      ? `<small>${p.total ? `${Math.min(p.done, p.total)} of about ${p.total} packages set up` : "Downloading and unpacking"}. Last activity ${quiet < 90 ? `${quiet} seconds` : `${Math.round(quiet / 60)} minutes`} ago.</small>`
+      : "";
+  const row = ([, words], i) => {
+    const state = failed ? "" : i < at ? "done" : i === at ? "now" : "";
+    const mark = state === "done" ? "✓" : state === "now" ? "•" : "";
+    return `<li class="upstep ${state}"><span class="upmark" aria-hidden="true">${mark}</span>${esc(words)}${state === "now" ? `<span class="visually-hidden"> (now)</span>${packages}` : ""}</li>`;
+  };
+  const counter = !failed && at >= 0 && at < steps.length ? `<small>Step ${at + 1} of ${steps.length}</small>` : "";
+  return `${counter}<ol class="upsteps">${steps.map(row).join("")}</ol>`;
+}
+/** What Stop will do from where the run is now (design review M9): built from the step, not one fixed sentence. */
+function stopWords(run) {
+  const n = run.nodes[run.current];
+  if (!n) return "Stop was pressed. Nothing new starts.";
+  const step = (PHASE_WORDS[n.phase] ?? n.phase).toLowerCase();
+  if (n.phase === "waiting" || n.phase === "checking") return `Stop was pressed: the run stops before ${n.name} is touched.`;
+  if (n.phase === "upgrading") return `Stop was pressed: ${n.name} finishes its upgrade, restart included, then the run stops. Nothing else starts.`;
+  return `Stop was pressed: ${n.name} finishes ${step}, then the run stops. Guests that were moved stay where they are; Move everything back brings them home.`;
 }
 function drawRun(run) {
   if (!run) return dialog(`<h3>Nothing is running</h3>${closeRow}`);
@@ -3012,14 +3046,17 @@ function drawRun(run) {
     n,
     i,
   ) => `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${n.upgrade?.version && n.upgrade?.kernel ? `<small>Now on Proxmox VE ${esc(n.upgrade.version)}, kernel ${esc(n.upgrade.kernel)}</small>` : ""}${n.note ? `<small>${esc(n.note)}</small>` : ""}</div><span class="state"><span class="dot ${n.phase === "done" ? "running" : n.phase === "failed" || halted(n, i) ? "warn" : i === run.current && run.running ? "busy" : ""}"></span>${esc(halted(n, i) ? `Stopped after ${(PHASE_WORDS[n.phase] ?? n.phase).toLowerCase()}` : (PHASE_WORDS[n.phase] ?? n.phase))}</span></div>
+    ${run.kind === "upgrade" && run.running && i === run.current && n.phase === "upgrading" ? `<div class="snap"><div>${upSteps(S.upgradeLive?.upgrades?.[n.name])}</div></div>` : ""}
     ${n.restart ? n.vms.map((v) => `<div class="snap"><div>${esc(v.name)}${v.note && !["failed", "stayed"].includes(v.state) ? `<small>${esc(v.note)}</small>` : ""}</div><span class="state"><span class="dot ${vmDot(v)}"></span>${esc(vmWords(v, run.running))}</span></div>`).join("") : ""}</div>`;
   dialog(`<h3>${esc(title)}</h3>
     ${run.error ? `<p class="loginerr">${esc(run.error)}</p>` : run.running ? `<p>Started by ${esc(run.by)}. It runs on the BossMox server, so this window can be closed; open it again from the desktop.</p>` : `<p>Everything that was planned is done.</p>`}
+    ${run.running && run.stop ? `<p class="okline" role="status">${esc(stopWords(run))}</p>` : ""}
+    ${run.running && run.nodes.length > 1 ? `<p class="meta">Node ${Math.min(run.current + 1, run.nodes.length)} of ${run.nodes.length}. ${run.nodes.filter((n) => n.phase === "done").length} done.</p>` : ""}
     ${run.nodes.map(nodeBlock).join("")}
     ${stayed.map((v) => `<p class="meta">${esc(v.name)} stays on ${esc(v.on ?? "another node")}, running: ${esc((v.note ?? "its home had no room").replace(/\.$/, ""))}.</p>`).join("")}
     ${stayed.length ? `<p class="meta">Move everything back on a node's Overview tries again later.</p>` : ""}
     ${kept.length ? `<p class="meta">Config files you'd changed kept your version. The new one from the update sits beside each as .dpkg-dist: ${esc(kept.join(", "))}.</p>` : ""}
-    <div class="row-end">${run.running ? `<button class="btn" data-runstop="1">Stop after this step</button>` : ""}<button class="btn" data-runclose="1">Close</button></div>`);
+    <div class="row-end">${run.running && !run.stop ? `<button class="btn" data-runstop="1">Stop after this step</button>` : run.running ? `<button class="btn" disabled>Stopping after this step</button>` : ""}<button class="btn" data-runclose="1">Close</button></div>`);
 }
 /** A line on the desktop while a run is going, for any browser. */
 function runLine() {
@@ -4965,7 +5002,8 @@ document.addEventListener("click", (e) => {
   }
   if (d.runstop) {
     t.disabled = true;
-    return post("api/action/run-stop", { server: onlineNodes()[0] })
+    // Any node's name will do: while every node restarts there may be no online one (design review M6).
+    return post("api/action/run-stop", { server: onlineNodes()[0] ?? S.data?.nodes?.[0]?.name ?? "" })
       .then(async (res) => (res.ok ? null : Promise.reject(new Error((await res.json()).error))))
       .catch((err) => dialog(`<h3>It didn't stop</h3><p class="loginerr">${esc(err.message)}</p>${closeRow}`));
   }

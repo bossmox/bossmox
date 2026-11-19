@@ -124,7 +124,11 @@ const terminals = new Terminals({
 sessions.onEnd = (session) => {
   terminals.closeSession(session);
   if (session === jobs.moveJob.session) jobs.moveJob.stop = `${session.username} signed out.`;
-  if (session === jobs.runState.session && jobs.currentRun?.running) jobs.currentRun.stop = `${session.username} signed out.`;
+  if (session === jobs.runState.session && jobs.currentRun?.running) {
+    jobs.currentRun.stop = `${session.username} signed out.`;
+    // Written down like a pressed Stop, so a BossMox restart right after still knows why it stopped (design review L3).
+    jobs.saveRun(jobs.currentRun);
+  }
 };
 // A move job keeps its person's Proxmox login renewed, like an open console does.
 // So does a one-node upgrade: it carries on after its person signs out, like a run's node under way, and must not fail
