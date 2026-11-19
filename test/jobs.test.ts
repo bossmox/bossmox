@@ -259,3 +259,35 @@ test("runs and moves wait while a node is upgrading on its own (review 2026-11-1
     c.done();
   }
 });
+
+test("Upgrade this node plans the same run cut to that node, and refuses a node not waiting for it (ADR 0044)", async () => {
+  const c = cluster();
+  c.ctx.upgrade = {
+    plan: async () => [
+      { name: "n1", version: "8.4.21", to: 9, finishing: false },
+      { name: "n2", version: "8.4.21", to: 9, finishing: false },
+    ],
+    run: async () => {
+      throw new Error("not in this test");
+    },
+  } as never;
+  try {
+    const jobs = createJobs(c.ctx);
+    const all = await jobs.runPlan(person, "upgrade", "");
+    assert.deepEqual(
+      all.nodes.map((n) => n.name),
+      ["n1", "n2"],
+    );
+    const one = await jobs.runPlan(person, "upgrade", "", [], "n2");
+    assert.deepEqual(
+      one.nodes.map((n) => [n.name, n.restart, n.upgrade?.to]),
+      [["n2", true, 9]],
+    );
+    assert.deepEqual(one.blocked, [], "the same checks ran and passed");
+    await assert.rejects(jobs.runPlan(person, "upgrade", "", [], "n3"), /n3 isn't waiting for the upgrade/);
+    await assert.rejects(jobs.runPlan(person, "restart", "n1", [], "n1"), /Only an upgrade can be run for one node/);
+    await assert.rejects(jobs.startRun(person, "upgrade", "", true, {}, "n3"), /n3 isn't waiting for the upgrade/);
+  } finally {
+    c.done();
+  }
+});

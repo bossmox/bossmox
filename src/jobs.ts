@@ -336,14 +336,18 @@ export function createJobs(ctx: JobsContext) {
     choice: "move" | "shutdown";
   }
   /** What a run would do on each node, with a choice per running VM: what it can do, and the safe default. */
-  async function runPlan(who: string | Pick<Session, "username" | "ticket">, kind: RunKind, server: string, assumeEjected: number[] = []) {
+  async function runPlan(who: string | Pick<Session, "username" | "ticket">, kind: RunKind, server: string, assumeEjected: number[] = [], only = "") {
     // A ticket alone is enough for updates and restarts; an upgrade also needs to know it's root@pam.
     const session = typeof who === "string" ? { username: "", ticket: who } : who;
     const ticket = session.ticket;
     const macs = (ctx.macs ?? ownMacs)();
     const rolling = kind === "update" ? await loadRollingPlan(ticket, assumeEjected) : null;
     // An upgrade empties and restarts every node still to go, one at a time, oldest first (ADR 0042).
-    const upgrades = kind === "upgrade" ? await upgradePlan(session) : [];
+    // Upgrade this node (ADR 0044): the same plan, cut to one node, so it gets every check the cluster run has.
+    const planned = kind === "upgrade" ? await upgradePlan(session) : [];
+    if (only && kind !== "upgrade") throw new HttpError(400, "Only an upgrade can be run for one node.");
+    const upgrades = only ? planned.filter((u) => u.name === only) : planned;
+    if (only && !upgrades.length) throw new HttpError(400, `${only} isn't waiting for the upgrade: it's on the new version already, or it isn't in this cluster.`);
     const nodes: { name: string; version: string | null; updates: number; restart: boolean; install: boolean; upgrade?: { to: number; finishing: boolean } }[] =
       kind === "update"
         ? (rolling?.servers ?? []).map((s) => ({ name: s.name, version: s.version, updates: s.updates ?? 0, restart: s.rebootNeeded, install: true }))
@@ -560,7 +564,7 @@ export function createJobs(ctx: JobsContext) {
   }
 
   /** Starts a run with the person's choices. Everything is checked again here; the page's copy is only a request. */
-  async function startRun(session: Session, kind: RunKind, server: string, confirmed: boolean, choices: Record<string, unknown>): Promise<string> {
+  async function startRun(session: Session, kind: RunKind, server: string, confirmed: boolean, choices: Record<string, unknown>, only = ""): Promise<string> {
     if (!confirmed) throw new HttpError(400, "It wasn't confirmed.");
     // A run stops when the sign-in that started it ends. One that won't last a long update is refused up front (#59).
     const left = session.expiresAt - Date.now();
@@ -575,7 +579,7 @@ export function createJobs(ctx: JobsContext) {
       const eject = Object.entries(choices)
         .filter(([, c]) => c === "eject")
         .map(([id]) => Number(id));
-      const plan = await runPlan(session, kind, server, eject);
+      const plan = await runPlan(session, kind, server, eject, only);
       if (plan.blocked.length) throw new HttpError(400, plan.blocked.join(" "));
       if (kind === "update" && !plan.nodes.length) throw new HttpError(400, "Every node is up to date.");
       if (kind === "upgrade" && !plan.nodes.length) throw new HttpError(400, "Every node is on the new version already.");

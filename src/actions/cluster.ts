@@ -96,10 +96,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       if (r.error) throw new HttpError(400, r.error);
       return null;
     },
-    "upgrade-node": async (name, who, body) => {
-      await c.nodeUpgrade.start(who, name, text(body.confirm, 64));
-      return null;
-    },
+    // No "upgrade-node" here: one node is upgraded by a run of one node, with the run's checks (ADR 0044).
     "upgrade-pin": async (name, who, body) => {
       await c.upgradeFixes.pin(who, name, text(body.confirm, 64));
       return null;
@@ -190,7 +187,12 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       const server = text(body.server, 64);
       if (kind === "restart" && !NODE_NAME.test(server)) throw new HttpError(400, "That server name isn't valid.");
       const choices = (body.choices && typeof body.choices === "object" ? body.choices : {}) as Record<string, unknown>;
-      return jobs.startRun(who, kind, server, body.confirm === (kind === "restart" ? "reboot" : "confirm"), choices);
+      // Upgrade this node (ADR 0044): the node comes from its own field, never from `server`, and the confirm is its name.
+      const only = text(body.only, 64);
+      if (only && (kind !== "upgrade" || !NODE_NAME.test(only))) throw new HttpError(400, "That request isn't valid.");
+      // A node's name confirms without regard to case, as for every other node action.
+      const confirmed = only ? text(body.confirm, 64).toLowerCase() === only.toLowerCase() : body.confirm === (kind === "restart" ? "reboot" : "confirm");
+      return jobs.startRun(who, kind, server, confirmed, choices, only);
     },
     "run-stop": async (_name, who) => {
       if (!jobs.currentRun?.running) return null;
