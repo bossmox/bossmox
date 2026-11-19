@@ -67,13 +67,32 @@ const HIDDEN = "Someone else";
  */
 export function runFor(run: Run | null, who: Viewer): Run | null {
   if (!run || who.full) return run;
+  // An allowed list, field by field (rule R11): anything added to a run later stays hidden here until chosen on purpose.
+  const shown = run.nodes.filter((n) => who.nodes.has(n.name));
   return {
-    ...run,
+    id: run.id,
+    kind: run.kind,
     by: HIDDEN,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    running: run.running,
     // Who pressed Stop is a username too (review 2, S6).
     stop: run.stop ? "Someone pressed Stop." : null,
     error: run.error ? "It stopped before finishing." : null,
-    nodes: run.nodes.filter((n) => who.nodes.has(n.name)).map((n) => ({ ...n, note: null, vms: n.vms.filter((v) => who.guests.has(v.id)) })),
+    // Counted against the nodes this person sees, so "node X of Y", the steps and the Stop words name the right one.
+    current: run.nodes.slice(0, run.current).filter((n) => who.nodes.has(n.name)).length,
+    nodes: shown.map((n) => ({
+      name: n.name,
+      install: n.install,
+      restart: n.restart,
+      updates: n.updates,
+      phase: n.phase,
+      note: null,
+      keptConfig: n.keptConfig,
+      ...(n.upgrade ? { upgrade: { to: n.upgrade.to, finishing: n.upgrade.finishing, version: n.upgrade.version, kernel: n.upgrade.kernel } } : {}),
+      // Where a guest went can be a node this person can't see; its note can name one.
+      vms: n.vms.filter((v) => who.guests.has(v.id)).map((v) => ({ id: v.id, name: v.name, type: v.type, choice: v.choice, state: v.state, ...(v.on && who.nodes.has(v.on) ? { on: v.on } : {}) })),
+    })),
   };
 }
 

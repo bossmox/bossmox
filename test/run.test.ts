@@ -513,3 +513,23 @@ test("a guest that lands on the node during its moves is moved off before the up
   await drive(r, deps);
   assert.deepEqual(log.slice(0, 4), ["check n1", "moveOff n1 1", "moveOff n1 9", "upgrade n1"]);
 });
+
+test("a limited account gets an allowed list of a run's fields, counted against the nodes it sees (rule R11)", () => {
+  const away = { ...vm(1, "web"), state: "moved" as const, on: "secret-node" };
+  const r = {
+    ...run([node("secret-node", [vm(9, "hidden")]), node("n1", [away, vm(2, "app")]), node("n2", [])]),
+    running: true,
+    current: 1,
+    keepFreePct: 5,
+    somethingAddedLater: "a name nobody chose to show",
+  } as Run & { somethingAddedLater: string };
+  const seen = runFor(r, { full: false, nodes: new Set(["n1", "n2"]), guests: new Set([1, 2]) }) as Run & Record<string, unknown>;
+  assert.deepEqual(
+    seen.nodes.map((n) => n.name),
+    ["n1", "n2"],
+  );
+  assert.equal(seen.current, 0, "n1 is the first node this person sees, and it's the one under way");
+  assert.equal(seen.keepFreePct, undefined, "not chosen to show");
+  assert.equal(seen.somethingAddedLater, undefined, "a new field stays hidden until it's added on purpose");
+  assert.equal(seen.nodes[0]?.vms.find((v) => v.id === 1)?.on, undefined, "a node it can't see isn't named as where a guest went");
+});
