@@ -103,9 +103,13 @@ function lab(
     follow?: string[];
     /** A guest starts on n2 once its packages are in, before the restart. */
     arrive?: boolean;
+    /** The node's sources once its packages are in, and its subscription (keeping the free channel, ADR 0044). */
+    reposAfter?: RawRepositories;
+    sub?: { status: string };
   } = {},
 ) {
   const calls: string[] = [];
+  const off = new Set<string>();
   const follow = [...(over.follow ?? [])];
   let upgraded = over.stuck ?? false;
   let rebooted = false;
@@ -127,14 +131,26 @@ function lab(
               ...(over.guests ?? [{ node: "n1", vmid: 100, name: "bossmox", status: "running" }]),
               ...(over.arrive && upgraded ? [{ node: "n2", vmid: 105, name: "late", status: "running" }] : []),
             ];
-          if (path.endsWith("/apt/repositories")) return over.repos ?? ON_TRIXIE;
+          if (path.endsWith("/apt/repositories")) {
+            const r = upgraded && over.reposAfter ? over.reposAfter : (over.repos ?? ON_TRIXIE);
+            // What BossMox turned off reads back as off, as Proxmox would show it.
+            return { ...r, files: (r.files ?? []).map((f) => ({ ...f, repositories: (f.repositories ?? []).map((x, i) => (off.has(`${f.path}#${i}`) ? { ...x, Enabled: 0 } : x)) })) };
+          }
+          if (path.endsWith("/subscription")) {
+            if (!over.sub) throw new Error("no subscription answer");
+            return over.sub;
+          }
           if (path.endsWith("/apt/update")) return over.apt ?? [];
           if (path.endsWith("/apt/versions")) return upgraded ? kernels(rebooted ? (over.kernelAfter ?? "6.17.2-1-pve") : "6.8.12-43-pve") : [];
           throw new Error(`unexpected ${path}`);
         })();
         return r as T;
       },
-      async post<T>(): Promise<T> {
+      async post<T>(path: string, _who: unknown, form?: Record<string, string>): Promise<T> {
+        if (path.endsWith("/apt/repositories") && form?.enabled === "0") {
+          calls.push(`off ${form.path}`);
+          off.add(`${form.path}#${form.index}`);
+        }
         return null as T;
       },
     },
@@ -529,4 +545,38 @@ test("while the packages install, the node's upgrade carries their progress, and
     { total: 168, done: 40, quietSeconds: 3, at: 0 },
   ]);
   assert.equal(r?.progress, null, "gone once the packages are in");
+});
+
+test("the upgrade keeps a free-channel node on the free channel: the paid source the packages add is turned off (ADR 0044)", async () => {
+  const before: RawRepositories = {
+    files: [
+      { path: "/etc/apt/sources.list.d/proxmox.sources", repositories: [{ Enabled: 1, URIs: ["http://download.proxmox.com/debian/pve"], Suites: ["trixie"], Components: ["pve-no-subscription"] }] },
+    ],
+    infos: [],
+  };
+  const after: RawRepositories = {
+    files: [
+      ...(before.files ?? []),
+      {
+        path: "/etc/apt/sources.list.d/pve-enterprise.sources",
+        repositories: [{ Enabled: 1, URIs: ["https://enterprise.proxmox.com/debian/pve"], Suites: ["trixie"], Components: ["pve-enterprise"] }],
+      },
+    ],
+    infos: [],
+  };
+  const { deps, calls } = lab({ repos: before, reposAfter: after, sub: { status: "notfound" } });
+  const job = createNodeUpgrade(deps);
+  await job.start(root(), "n2", "n2");
+  const r = await finish(job, "n2");
+  assert.equal(r?.phase, "done", r?.error ?? "");
+  assert.deepEqual(r?.freeChannel, { planned: true, why: "", turnedOff: ["/etc/apt/sources.list.d/pve-enterprise.sources"], note: null });
+  assert.ok(calls.indexOf("off /etc/apt/sources.list.d/pve-enterprise.sources") < calls.indexOf("reboot"), "before the restart");
+
+  const subscribed = lab({ repos: before, reposAfter: after, sub: { status: "Active" } });
+  const j2 = createNodeUpgrade(subscribed.deps);
+  await j2.start(root(), "n2", "n2");
+  const r2 = await finish(j2, "n2");
+  assert.equal(r2?.phase, "done");
+  assert.equal(r2?.freeChannel?.planned, false);
+  assert.ok(!subscribed.calls.some((c) => c.startsWith("off ")), "a subscribed node's sources are left as Proxmox sets them");
 });

@@ -180,3 +180,13 @@ test("every node on 9 but one stuck: the stuck one still counts as 8, so nothing
   assert.equal(r.view().from, 8);
   assert.equal(r.view().nodes[0]?.items[0]?.handling, "bossmox");
 });
+
+test("Get ready to upgrade says up front when BossMox will keep a node on the free channel (ADR 0044)", () => {
+  const kept = ownChecks({ rootFreeGb: 26, passthrough: [], plugins: [], keepsFreeChannel: true });
+  assert.deepEqual(
+    kept.map((e) => [e.level, e.handling, e.help]),
+    [["NOTICE", "bossmox", "upgrade-free-channel"]],
+  );
+  assert.match(kept[0]?.detail ?? "", /turns off any paid source the upgrade added, and nothing else/);
+  assert.deepEqual(ownChecks({ rootFreeGb: 26, passthrough: [], plugins: [], keepsFreeChannel: false }), []);
+});

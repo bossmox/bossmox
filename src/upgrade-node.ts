@@ -14,6 +14,8 @@ import type { RawRepositories, RawStatus } from "./server-detail.js";
 import { blockers, parseChecker } from "./upgrade-check.js";
 import type { PinResult } from "./upgrade-fixes.js";
 import type { UpgradeResult } from "./run.js";
+import { paidAdded, paidOn, planFreeChannel, type FreeChannelPlan } from "./keep-free-channel.js";
+import type { RawSubscription } from "./server-detail.js";
 import { ROOT_MIN_GB, unfinishedUpgrade, type RawVersion, type Readiness } from "./upgrade-ready.js";
 import { PROXMOX_URI, switched, type UpgradeSources } from "./upgrade-sources.js";
 
@@ -152,6 +154,8 @@ export interface NodeUpgrade {
   kernel: string | null;
   /** While the packages install: how far, and when that was read (ADR 0044). */
   progress?: (UpgradeProgress & { at: number }) | null;
+  /** The free channel kept through the upgrade (ADR 0044): planned before the packages, done right after them. */
+  freeChannel?: { planned: boolean; why: string; turnedOff: string[]; note: string | null } | null;
 }
 
 export interface NodeUpgradeDeps {
@@ -259,6 +263,38 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
       );
   }
 
+  async function readFreePlan(session: Session, node: string): Promise<FreeChannelPlan> {
+    const base = `/nodes/${enc(node)}`;
+    const [repos, sub] = await Promise.all([
+      deps.pve.get<RawRepositories>(`${base}/apt/repositories`, session.ticket).catch(() => null),
+      deps.pve.get<RawSubscription>(`${base}/subscription`, session.ticket).catch(() => null),
+    ]);
+    return planFreeChannel(repos, sub);
+  }
+
+  /**
+   * Turns off the paid entries the new packages added, one at a time through Proxmox's own call with its digest, and
+   * reads each back before saying so (rules R4, R8). Never stops the upgrade: what didn't work is said on the node.
+   */
+  async function keepFreeChannel(session: Session, node: string, plan: FreeChannelPlan, job: NodeUpgrade) {
+    const base = `/nodes/${enc(node)}`;
+    const state = job.freeChannel as NonNullable<NodeUpgrade["freeChannel"]>;
+    try {
+      const read = () => settled(() => deps.pve.get<RawRepositories>(`${base}/apt/repositories`, session.ticket));
+      let repos = await read();
+      const added = paidAdded(plan, repos);
+      for (const e of added) {
+        await deps.pve.post(`${base}/apt/repositories`, session, { path: e.path, index: String(e.index), enabled: "0", ...(repos.digest ? { digest: repos.digest } : {}) });
+        repos = await read();
+        if (paidOn(repos).some((x) => x.path === e.path && x.index === e.index)) throw new Error(`Proxmox still has ${e.path} switched on.`);
+        state.turnedOff.push(e.path);
+      }
+      deps.audit("upgrade-free-channel", session.username, { node, off: state.turnedOff.length });
+    } catch (err) {
+      state.note = `BossMox couldn't turn off the paid update source the upgrade added (${(err as Error).message || "no answer"}). Use the free channel on the node's Updates tab.`;
+    }
+  }
+
   async function drive(session: Session, job: NodeUpgrade, major: number) {
     const node = job.node;
     const t = () => session.ticket;
@@ -269,6 +305,10 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
       if (!job.finishing) {
         job.before = await checker(session, node, major);
         if (job.before.blocking.length) throw new Error(`Proxmox's checker found ${listed(job.before.blocking)} on ${node}. Nothing was changed; fix them first.`);
+
+        // Decided before anything changes: does this node keep the free channel, and which paid entries were on already.
+        const freePlan = await readFreePlan(session, node);
+        job.freeChannel = { planned: freePlan.keep, why: freePlan.why, turnedOff: [], note: null };
 
         phase("upgrading");
         job.packagesTouched = true;
@@ -282,6 +322,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
         job.keptConfig = r.keptConfig;
         if (r.exitCode !== 0) throw packagesFailed(node, r);
         if (r.unfinished) throw unfinishedPackages(node);
+        if (freePlan.keep) await keepFreeChannel(session, node, freePlan, job);
       } else {
         deps.audit("upgrade-node-finish", session.username, { node, to: job.to });
         // BossMox's own package job may still be going there (BossMox restarted part way): wait for it, and never

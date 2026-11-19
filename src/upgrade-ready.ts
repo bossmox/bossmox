@@ -10,6 +10,8 @@ import type { ShellResult } from "./node-shell.js";
 import type { PveClient } from "./pve.js";
 import { attention, parseChecker, type Explained } from "./upgrade-check.js";
 import { compareVersions } from "./placement.js";
+import { planFreeChannel } from "./keep-free-channel.js";
+import type { RawRepositories, RawSubscription } from "./server-detail.js";
 
 /** Proxmox's guide: at least 5 GB free on root, better more than 10. */
 export const ROOT_MIN_GB = 5;
@@ -46,7 +48,7 @@ export interface ReadyDeps {
 const GB = 1024 ** 3;
 
 /** BossMox's own findings for one node, in the same shape as the checker's. Pure, for tests. */
-export function ownChecks(input: { rootFreeGb: number | null; passthrough: string[]; plugins: string[] }): Explained[] {
+export function ownChecks(input: { rootFreeGb: number | null; passthrough: string[]; plugins: string[]; keepsFreeChannel?: boolean }): Explained[] {
   const out: Explained[] = [];
   const own = (e: Omit<Explained, "original">): Explained => ({ ...e, original: "" });
   if (input.rootFreeGb === null)
@@ -97,6 +99,17 @@ export function ownChecks(input: { rootFreeGb: number | null; passthrough: strin
         detail: "Third-party storage plugins need their own update for the new version. Check with whoever makes it before upgrading.",
         handling: "advice",
         help: "upgrade-storage-plugins",
+      }),
+    );
+  if (input.keepsFreeChannel)
+    out.push(
+      own({
+        level: "NOTICE",
+        title: "BossMox keeps this node on the free update channel",
+        detail:
+          "Proxmox VE 9's packages add Proxmox's paid update source, switched on. This node uses the free channel without a subscription, so right after installing, BossMox turns off any paid source the upgrade added, and nothing else.",
+        handling: "bossmox",
+        help: "upgrade-free-channel",
       }),
     );
   return out;
@@ -178,10 +191,12 @@ export function createUpgradeReady(deps: ReadyDeps) {
     const base = `/nodes/${encodeURIComponent(node)}`;
     const reported = s.reported;
     if (reported?.version && (s.stuck || (oldest !== null && s.major > oldest))) return aheadNode(node, reported.version, s.versions);
-    const [version, status, vms] = await Promise.all([
+    const [version, status, vms, repos, sub] = await Promise.all([
       Promise.resolve(reported),
       deps.pve.get<{ rootfs?: { used?: number; total?: number; avail?: number } }>(`${base}/status`, t).catch(() => null),
       deps.pve.get<{ vmid?: number; name?: string }[]>(`${base}/qemu`, t).catch(() => []),
+      deps.pve.get<RawRepositories>(`${base}/apt/repositories`, t).catch(() => null),
+      deps.pve.get<RawSubscription>(`${base}/subscription`, t).catch(() => null),
     ]);
     const v = version?.version ?? null;
     const major = v ? Number.parseInt(v, 10) : Number.NaN;
@@ -192,7 +207,8 @@ export function createUpgradeReady(deps: ReadyDeps) {
     }
     const rootfs = status?.rootfs;
     const rootFreeGb = rootfs ? (rootfs.avail ?? (rootfs.total ?? 0) - (rootfs.used ?? 0)) / GB : null;
-    const own = ownChecks({ rootFreeGb, passthrough, plugins });
+    // Said up front, the same decision the upgrade makes right before its packages (ADR 0044).
+    const own = ownChecks({ rootFreeGb, passthrough, plugins, keepsFreeChannel: planFreeChannel(repos, sub).keep });
     if (!Number.isInteger(major)) return { node, version: v, counts: null, items: own, error: "BossMox couldn't read this node's Proxmox version." };
     try {
       // The checker for this version, pve8to9 on 8. It only reads.

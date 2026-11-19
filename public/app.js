@@ -814,7 +814,7 @@ function upgradeBody(u) {
     const up = u.upgrades?.[n.node];
     const upWords = up
       ? up.phase === "done"
-        ? `<div class="snap"><div><span class="dot ok"></span><b>Upgraded to Proxmox VE ${esc(up.version ?? String(up.to))}</b><small>Running kernel ${esc(up.kernel ?? "unknown")}.${up.keptConfig?.length ? ` These config files had been changed, so they were kept, with the new version beside each as .dpkg-dist: ${esc(up.keptConfig.join(", "))}.` : ""}</small></div></div>`
+        ? `<div class="snap"><div><span class="dot ok"></span><b>Upgraded to Proxmox VE ${esc(up.version ?? String(up.to))}</b><small>Running kernel ${esc(up.kernel ?? "unknown")}.${up.keptConfig?.length ? ` These config files had been changed, so they were kept, with the new version beside each as .dpkg-dist: ${esc(up.keptConfig.join(", "))}.` : ""}${up.freeChannel?.turnedOff?.length ? ` It stays on the free update channel: BossMox turned off the paid source the upgrade added (${esc(up.freeChannel.turnedOff.join(", "))}).` : ""}${up.freeChannel?.note ? ` ${esc(up.freeChannel.note)}` : ""}</small></div></div>`
         : up.phase === "failed"
           ? `<div class="snap"><div><span class="dot bad"></span><b>The upgrade stopped</b><small>${esc(up.error ?? "")}</small></div></div>`
           : `<div class="snap"><div><span class="dot warn"></span><b>Upgrading to Proxmox VE ${esc(String(up.to))}</b><small>You can close this window; the upgrade carries on.</small>${upSteps(up)}</div></div>`

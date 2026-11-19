@@ -80,6 +80,7 @@ export const UPGRADE_HELP = [
   "upgrade-passthrough",
   "upgrade-storage-plugins",
   "upgrade-port-names",
+  "upgrade-free-channel",
 ] as const;
 export type HelpKey = (typeof UPGRADE_HELP)[number];
 
