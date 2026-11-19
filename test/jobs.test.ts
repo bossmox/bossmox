@@ -291,3 +291,27 @@ test("Upgrade this node plans the same run cut to that node, and refuses a node 
     c.done();
   }
 });
+
+test("BossMox's own guest is found among a node's moves by its network card; an unreadable one refuses (Empty this node)", async () => {
+  const c = cluster({
+    guests: [
+      { id: 100, name: "web", node: "n1" },
+      { id: 101, name: "bossmox", node: "n1", type: "lxc" },
+    ],
+  });
+  c.ctx.macs = () => new Set(["bc:24:11:00:00:101"]);
+  const real = c.ctx.pve.get;
+  c.ctx.pve.get = ((p: string, t: string) => (p.includes("/999/") ? Promise.reject(new Error("403")) : real(p, t))) as never;
+  try {
+    const jobs = createJobs(c.ctx);
+    const moves = [
+      { id: 100, name: "web", type: "qemu" as const, target: "n2" },
+      { id: 101, name: "bossmox", type: "lxc" as const, target: "n2" },
+    ];
+    assert.equal((await jobs.selfGuest("t", "n1", moves))?.name, "bossmox");
+    assert.equal(await jobs.selfGuest("t", "n1", moves.slice(0, 1)), null);
+    await assert.rejects(jobs.selfGuest("t", "n1", [{ id: 999, name: "ghost", type: "qemu", target: "n2" }]), /couldn't read ghost's settings/);
+  } finally {
+    c.done();
+  }
+});

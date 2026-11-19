@@ -71,3 +71,30 @@ test("a channel switch or update check waits for a run, an upgrade or a sources 
   await call(make({}), "check-updates");
   assert.deepEqual(posts, ["/nodes/n1/apt/update"], "with nothing going on, the check runs");
 });
+
+test("Empty this node: typed name, every guest visible, never BossMox's own container, and BossMox's VM last (ADR 0044)", async () => {
+  type M = { id: number; name: string; type: "qemu" | "lxc"; target: string };
+  const web: M = { id: 100, name: "web", type: "qemu", target: "n2" };
+  const make = (opts: { seesAll?: boolean; self?: M | null }) => {
+    const actions = clusterActions({
+      seesAllGuests: async () => opts.seesAll ?? true,
+      jobs: {
+        planEvacuation: async () => ({ problems: [], moves: [opts.self ?? web, web].filter((m, i, a) => a.indexOf(m) === i) }),
+        selfGuest: async () => opts.self ?? null,
+        batchFor: async () => 2,
+        moveRecord: {},
+        startMoveJob: async (_who: unknown, prepare: () => Promise<unknown>) => {
+          await prepare();
+          return "job";
+        },
+      },
+    } as never);
+    return { actions };
+  };
+  const who = { username: "root@pam", ticket: "t" } as unknown as Session;
+  const call = (a: ReturnType<typeof make>["actions"], body: Record<string, unknown>) => Promise.resolve().then(() => a["move-off"]?.("n1", who, body));
+  await assert.rejects(call(make({}).actions, { confirm: "n2" }), /wasn't confirmed/);
+  await assert.rejects(call(make({ seesAll: false }).actions, { confirm: "n1" }), /can't see every guest/);
+  await assert.rejects(call(make({ self: { id: 101, name: "bossmox", type: "lxc", target: "n2" } }).actions, { confirm: "N1" }), /BossMox runs in the container bossmox on n1/);
+  assert.equal(await call(make({}).actions, { confirm: "N1" }), "job", "the name confirms in any case");
+});

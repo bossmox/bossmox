@@ -1983,7 +1983,7 @@ const SERVER_TAB = {
     ${(() => {
       const m = movedGuests(d.name);
       return m
-        ? `<div class="advice"><div><b>${m.guests.length} moved off for a restart</b>${esc(awayWords(m))}</div><button class="btn" data-moveback="${esc(d.name)}">Move everything back</button></div>`
+        ? `<div class="advice"><div><b>${m.guests.length} moved off this node</b>${esc(awayWords(m))}</div><button class="btn" data-moveback="${esc(d.name)}">Move everything back</button></div>`
         : "";
     })()}
     ${d.channel && !d.channel.ok ? `<div class="advice"><div><b>${esc(d.channel.headline)}</b>${esc(d.channel.note)}</div>${channelButton(d)}</div>` : ""}
@@ -2054,7 +2054,7 @@ function renderServerDetail() {
   box.innerHTML = `
     <div class="head"><div><h2>${esc(S.server)}</h2>
       <div class="state"><span class="dot ${node?.online ? "running" : "warn"}"></span>${node?.online ? "Online" : "Offline"}${d?.summary ? `, running for ${esc(d.summary.uptime)}` : ""}</div></div>
-      <div class="actions"><button class="btn" data-nodeconsole="${esc(S.server)}" ${node?.online ? "" : "disabled"}>Console</button><button class="btn danger" data-restartserver="${esc(S.server)}">Restart</button></div></div>
+      <div class="actions"><button class="btn" data-nodeconsole="${esc(S.server)}" ${node?.online ? "" : "disabled"}>Console</button><button class="btn" data-emptynode="${esc(S.server)}" ${node?.online ? "" : "disabled"}>Empty this node</button><button class="btn danger" data-restartserver="${esc(S.server)}">Restart</button></div></div>
     <div class="tabs" role="tablist">${[
       ["overview", "Overview"],
       ["updates", d?.updates?.total ? `Updates (${d.updates.total})` : "Updates"],
@@ -2772,6 +2772,43 @@ async function followMoves(id, title) {
     }
     await wait(2000);
   }
+}
+/**
+ * Empty this node (ADR 0044): every running guest moved to other nodes, nothing restarted, for maintenance. The plan
+ * comes from the run planner, so it's the same room rules and the same answer about BossMox itself.
+ */
+async function openEmptyNode(server) {
+  dialog(`<h3>Planning how to empty ${esc(server)}</h3><p>Reading what runs there and where it can go. This only reads.</p>`);
+  let plan;
+  try {
+    plan = await signal(`api/run-plan?kind=restart&server=${encodeURIComponent(server)}`);
+  } catch (err) {
+    if (err.message === "signed out") return closeDialog();
+    return dialog(`<h3>Couldn't plan it</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
+  }
+  const vms = plan.nodes?.[0]?.vms ?? [];
+  if (!vms.length) return dialog(`<h3>Nothing is running on ${esc(server)}</h3><p>There's nothing to move.</p>${closeRow}`);
+  const blocked = vms.filter((v) => !v.canMove || (v.self && v.type === "lxc"));
+  const row = (v) => {
+    const words =
+      v.self && v.type === "lxc"
+        ? "BossMox itself, in a container: it can't move without stopping"
+        : !v.canMove
+          ? `Can't move: ${v.why}`
+          : v.type === "lxc"
+            ? `Restarts on ${v.to}: a container can't move while it runs`
+            : `Moves to ${v.to}, keeps running${v.self ? " (BossMox itself, moved last)" : ""}`;
+    return `<div class="snap"><div>${esc(v.name)}</div><span class="state"><span class="dot ${blocked.includes(v) ? "warn" : v.type === "lxc" ? "busy" : "running"}"></span>${esc(words)}</span></div>`;
+  };
+  const list = `<div class="restartlist">${vms.map(row).join("")}</div>`;
+  if (blocked.length)
+    return dialog(`<h3>${esc(server)} can't be emptied as it is</h3><p>${blocked.length === 1 ? "One guest" : `${blocked.length} guests`} can't move. Nothing has been moved.</p>${list}${closeRow}`);
+  dialog(`<h3>Empty ${esc(server)}?</h3>
+    <p>BossMox moves each running guest to another node, one at a time, checking for room first and keeping ${keepFree()}% free. ${esc(server)} isn't restarted; use Move everything back when you're done with it.</p>
+    ${list}
+    <label class="field restartname"><span>Type ${esc(server)} to start</span><input id="rname" data-word="${esc(server.toLowerCase())}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
+    <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" id="rgo" data-emptygo="${esc(server)}" disabled>Empty ${esc(server)}</button></div>`);
+  $("#rname").focus();
 }
 function askMoveBack(server) {
   const m = movedGuests(server);
@@ -4448,6 +4485,14 @@ document.addEventListener("click", (e) => {
   if (d.moveback) {
     closeDialog();
     return askMoveBack(d.moveback);
+  }
+  if (d.emptynode) return openEmptyNode(d.emptynode);
+  if (d.emptygo) {
+    t.disabled = true;
+    const server = d.emptygo;
+    return startMoves("move-off", server)
+      .then((id) => followMoves(id, `Emptying ${server}`))
+      .catch((err) => dialog(`<h3>Nothing moved</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`));
   }
   if (d.taskleave || d.forceoff) {
     // Whatever is running carries on in Proxmox. BossMox just stops following it.

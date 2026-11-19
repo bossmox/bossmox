@@ -12,7 +12,7 @@ import { readMoves, runMoveHome, runMoveOff, writeMoves, type MoveDeps } from ".
 import { INSTALL_COMMAND, runOnNode, STILL_RUNNING, type ShellConfig } from "./node-shell.js";
 import { rebootAndWait } from "./reboot.js";
 import { releaseMismatch } from "./release-guard.js";
-import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type Pending, type RawPrecondition } from "./placement.js";
+import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type Move, type MovePlan, type NodeRoom, type Pending, type RawPrecondition } from "./placement.js";
 import type { Preferences } from "./preferences.js";
 import { PveError, type PveClient } from "./pve.js";
 import { drive, readRun, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
@@ -631,6 +631,20 @@ export function createJobs(ctx: JobsContext) {
     }
   }
 
+  /**
+   * BossMox's own guest among these moves, if it's one of them (Empty this node, ADR 0044, design review M7). A guest
+   * whose settings can't be read is a refusal, not a pass: it could be BossMox (rule R12).
+   */
+  async function selfGuest(ticket: string, node: string, moves: Move[]): Promise<Move | null> {
+    const macs = (ctx.macs ?? ownMacs)();
+    for (const m of moves) {
+      const config = await pve.get<RawConfig>(`/nodes/${enc(node)}/${m.type}/${m.id}/config`, ticket).catch(() => null);
+      if (!config) throw new HttpError(400, `BossMox couldn't read ${m.name}'s settings, so it can't tell whether that's BossMox itself. Try again.`);
+      if (isSelf(config, macs)) return m;
+    }
+    return null;
+  }
+
   return {
     moveRecord,
     moveJob,
@@ -640,6 +654,7 @@ export function createJobs(ctx: JobsContext) {
     },
     saveRun,
     planEvacuation,
+    selfGuest,
     runPlan,
     startRun,
     startMoveJob,

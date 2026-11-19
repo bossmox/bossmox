@@ -177,14 +177,26 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${type}/${id}/migrate`, who, form);
     },
     "move-off": async (name, who, body) => {
-      // The browser sends this after the person has seen the plan and confirmed it for this node.
-      if (body.confirm !== name) throw new HttpError(400, "The move wasn't confirmed.");
+      // Empty this node (ADR 0044): the browser sends this after the person has seen the plan and typed the node's name.
+      if (text(body.confirm, 64).toLowerCase() !== name.toLowerCase()) throw new HttpError(400, "The move wasn't confirmed.");
+      // "Empty" has to mean empty: an account that can't see every guest would leave some behind without knowing.
+      if (!(await c.seesAllGuests(who.ticket)))
+        throw new HttpError(403, `Your Proxmox account can't see every guest, so BossMox can't empty ${name} for you. Sign in with an account that can see the whole cluster.`);
       return jobs.startMoveJob(who, async () => {
         const plan = await jobs.planEvacuation(who.ticket, name);
         if (plan.problems.length) throw new HttpError(400, plan.problems.join(" "));
         if (!plan.moves.length) return null;
+        // BossMox's own guest, as in a run (#46): a container can only move by stopping, which would stop BossMox part way;
+        // its VM moves live, last, so everything else is already moving when BossMox's own address changes.
+        const self = await jobs.selfGuest(who.ticket, name, plan.moves);
+        if (self?.type === "lxc")
+          throw new HttpError(
+            400,
+            `BossMox runs in the container ${self.name} on ${name}. A container can't move without stopping, and that would stop BossMox part way. Move the other guests one at a time instead.`,
+          );
+        const moves = self ? [...plan.moves.filter((m) => m.id !== self.id), self] : plan.moves;
         const batch = await jobs.batchFor(who.ticket);
-        return (deps) => runMoveOff(jobs.moveRecord, deps, name, who.username, plan.moves, batch);
+        return (deps) => runMoveOff(jobs.moveRecord, deps, name, who.username, moves, batch);
       });
     },
     "move-home": async (name, who, body) => {
