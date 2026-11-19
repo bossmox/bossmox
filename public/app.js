@@ -2858,7 +2858,8 @@ const PHASE_WORDS = {
   emptying: "Moving and shutting down",
   installing: "Installing updates",
   restarting: "Restarting",
-  upgrading: "Upgrading Proxmox VE and restarting",
+  // The steps under the node say which part (ADR 0044); this word only names the stage.
+  upgrading: "Upgrading",
   starting: "Starting guests again",
   returning: "Bringing guests home",
   done: "Done",
@@ -2953,7 +2954,7 @@ function drawRunStart(kind, server, plan, reboot, only = "", keep = undefined) {
     `<div class="restartlist"><div class="snap"><div><b>${esc(n.name)}</b>${kind === "update" ? `<small>${n.updates} ${n.updates === 1 ? "update" : "updates"}${n.version ? `, version ${esc(n.version)}` : ""}</small>` : kind === "upgrade" ? `<small>${n.upgrade?.finishing ? `Packages on Proxmox VE ${esc(n.version ?? "")} already, not restarted yet: BossMox finishes it` : `Proxmox VE ${esc(n.version ?? "")} to ${esc(String(n.upgrade?.to ?? ""))}`}</small>` : ""}</div><span class="state">${kind === "upgrade" ? (n.vms.length ? "Upgrades and restarts" : "Upgrades and restarts, nothing running") : n.restart ? (n.vms.length ? "Restarts" : "Restarts, nothing running") : "No restart needed"}</span></div>${n.vms.map(row).join("")}</div>`;
   const how =
     kind === "upgrade"
-      ? `BossMox upgrades one node at a time, in this order. For each node it moves or shuts down each running VM and container as chosen below, switches the node's update sources, runs Proxmox's checker, installs Proxmox VE ${esc(String(to ?? ""))}, checks again, pins the port names and restarts it. Once it's back on the new version, it starts what it shut down and brings the rest home. Guests never move from a node on the new version to one on the old. Each node takes 10 to 30 minutes. Stop lets the node under way finish its upgrade and start what it shut down, then ends the run. Guests it moved stay where they are: Move everything back on a node's Overview brings them home. It runs on the BossMox server: you can close this window, and follow it from any browser.`
+      ? `${plan.nodes.length === 1 ? `BossMox upgrades ${esc(plan.nodes[0].name)} on its own.` : "BossMox upgrades one node at a time, in this order."} For each node it moves or shuts down each running VM and container as chosen below, switches the node's update sources, runs Proxmox's checker, installs Proxmox VE ${esc(String(to ?? ""))}, checks again, pins the port names and restarts it. Once it's back on the new version, it starts what it shut down and brings the rest home. Guests never move from a node on the new version to one on the old. Each node takes 10 to 30 minutes. Stop lets the node under way finish its upgrade and start what it shut down, then ends the run. Guests it moved stay where they are: Move everything back on a node's Overview brings them home. It runs on the BossMox server: you can close this window, and follow it from any browser.`
       : kind === "update"
         ? "BossMox updates one node at a time, in this order. For a node that restarts, it moves or shuts down each running VM and container as chosen below, installs, restarts, starts what it shut down and brings the rest home. Config files you've changed keep your version. It runs on the BossMox server: you can close this window, and follow it from any browser."
         : "BossMox moves or shuts down each running VM and container as chosen below, restarts the node, then starts what it shut down and brings the rest home. It runs on the BossMox server: you can close this window, and follow it from any browser.";
@@ -3040,7 +3041,7 @@ function upSteps(job) {
   const quiet = p ? Math.max(0, Math.round(p.quietSeconds + (Date.now() - p.at) / 1000)) : 0;
   const packages =
     p && job.phase === "upgrading"
-      ? `<small>${p.total ? `${Math.min(p.done, p.total)} of about ${p.total} packages set up` : "Downloading and unpacking"}. Last activity ${quiet < 90 ? `${quiet} seconds` : `${Math.round(quiet / 60)} minutes`} ago.</small>`
+      ? `<small>${p.total ? `${Math.min(p.done, p.total)} of about ${p.total} packages set up` : "Downloading and unpacking"}. Last activity ${quiet < 90 ? `${quiet} ${quiet === 1 ? "second" : "seconds"}` : `${Math.round(quiet / 60)} minutes`} ago.</small>`
       : "";
   const row = ([, words], i) => {
     const state = failed ? "" : i < at ? "done" : i === at ? "now" : "";
