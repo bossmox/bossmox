@@ -68,9 +68,12 @@ import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
 import { createHeartbeat, nodeConsole } from "./heartbeat.js";
 import { getRoutes, type GetRoute } from "./routes/get.js";
+import { loadHelp } from "./help.js";
 import { HttpError } from "./http-error.js";
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public");
+/** Help articles, read once at startup (ADR 0044). The release carries docs/help beside public/. */
+const HELP = loadHelp(path.resolve(PUBLIC, "../docs/help"));
 /** Written into a release. A copy run from the repo has none, and the page then shows nothing. */
 const VERSION = (() => {
   try {
@@ -84,6 +87,7 @@ const STATIC: Record<string, [string, string]> = {
   "/style.css": ["style.css", "text/css; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/guest-list.js": ["guest-list.js", "text/javascript; charset=utf-8"],
+  "/help.js": ["help.js", "text/javascript; charset=utf-8"],
   "/vendor/xterm.js": ["vendor/xterm.js", "text/javascript; charset=utf-8"],
   "/vendor/addon-fit.js": ["vendor/addon-fit.js", "text/javascript; charset=utf-8"],
   "/vendor/xterm.css": ["vendor/xterm.css", "text/css; charset=utf-8"],
@@ -1016,6 +1020,7 @@ const routeContext = {
   upgradeSources,
   nodeUpgrade,
   viewerOf,
+  help: HELP,
   epoch: () => preferencesEpoch,
 };
 export type RouteContext = typeof routeContext;

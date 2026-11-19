@@ -28,7 +28,7 @@ mkdir -p "$OUT"
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 echo "$VERSION" > "$WORK/VERSION"
-tar -czf "$OUT/bossmox.tgz" dist/src public deploy package.json node_modules/ws LICENSE -C "$WORK" VERSION
+tar -czf "$OUT/bossmox.tgz" dist/src public docs/help deploy package.json node_modules/ws LICENSE -C "$WORK" VERSION
 cp deploy/install.sh deploy/update-bossmox.sh "$OUT/"
 (cd "$OUT" && sha256sum bossmox.tgz > bossmox.tgz.sha256)
 

@@ -41,8 +41,11 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
     snapshotFixFor,
     updateView,
     viewerOf,
+    help,
   } = c;
   const routes: Record<string, GetRoute> = {
+    // Every article at once: the page never names a file, so nothing in a request reaches the disk (ADR 0044).
+    "/api/help": async (_route, _session, _params, _req, res) => json(res, 200, { articles: help }),
     "/api/task": async (_route, session, params, _req, res) => {
       const name = params.get("server") ?? "";
       const upid = params.get("task") ?? "";

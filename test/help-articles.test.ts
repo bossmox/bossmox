@@ -47,3 +47,13 @@ test("articles are public: no real cluster, company, node name or address in the
     assert.doesNotMatch(text, /<[a-z!/]/i, `${f}: no raw HTML`);
   }
 });
+
+test("both ways BossMox is packed carry the articles beside public/, where the server reads them", () => {
+  for (const script of ["make-release.sh", "update-alpine.sh"]) {
+    const text = readFileSync(new URL(`../../deploy/${script}`, import.meta.url), "utf8");
+    const pack = text.split("\n").find((l) => /^tar -czf .*bossmox\.tgz/.test(l.trim()));
+    assert.ok(pack, `${script}: packs bossmox.tgz`);
+    const parts = pack.trim().split(/\s+/);
+    assert.ok(parts.includes("public") && parts.includes("docs/help"), `${script}: ${pack}`);
+  }
+});

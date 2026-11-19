@@ -12,7 +12,7 @@ TLS_NAME=${5:-}
 npm test >/dev/null
 TMPFILE=$(mktemp -d)
 echo "dev-$(git rev-parse --short HEAD)" > "$TMPFILE/VERSION"
-tar -czf "$TMPFILE/bossmox.tgz" dist/src public deploy package.json node_modules/ws -C "$TMPFILE" VERSION
+tar -czf "$TMPFILE/bossmox.tgz" dist/src public docs/help deploy package.json node_modules/ws -C "$TMPFILE" VERSION
 rm "$TMPFILE/VERSION"
 [ "$CA" = "-" ] || cp "$CA" "$TMPFILE/pve-root-ca.pem"
 # A private folder, because these run as root and /tmp is shared with the service account.
