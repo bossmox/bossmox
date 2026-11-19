@@ -112,6 +112,11 @@ export interface MoveOffResult {
 export interface UpgradeResult {
   /** The node was asked to restart. Before that, a failure leaves it running as it was. */
   restarted: boolean;
+  /**
+   * The new version's packages began installing (or a node was being finished). From then the node is part way between
+   * versions even if it never restarted, so what was shut down for it stays off (design review 2026-11-19).
+   */
+  packagesTouched: boolean;
   error: string | null;
   keptConfig: string[];
   version: string | null;
@@ -194,6 +199,7 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
       const node = run.nodes[run.current] as RunNode;
       // Set the moment the reboot is asked for. Before that, ending the node starts again what was shut down (review 2).
       let rebootAsked = false;
+      let packagesTouched = false;
       try {
         await step(run, deps, node, "checking", async () => {
           // A node that just came back can look busy or absent for a moment.
@@ -266,6 +272,7 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
             if (!deps.upgrade) throw new Error("This BossMox can't upgrade nodes.");
             const r = await deps.upgrade(node.name);
             rebootAsked = r.restarted;
+            packagesTouched = r.packagesTouched;
             node.keptConfig = r.keptConfig;
             up.version = r.version;
             up.kernel = r.kernel;
@@ -346,7 +353,11 @@ export async function drive(run: Run, deps: RunDeps): Promise<void> {
         // looked at the node, and each says so.
         if (node.phase === "upgrading" && rebootAsked)
           for (const vm of node.vms.filter((v) => v.state === "off")) vm.note = `still off: ${node.name} restarted but didn't pass its checks; start it once the node looks right`;
-        if (node.phase === "emptying" || node.phase === "installing" || ((node.phase === "restarting" || node.phase === "upgrading") && !rebootAsked)) {
+        // Packages part way to the new version, no restart: the node isn't as it was, so nothing starts on it by itself.
+        else if (node.phase === "upgrading" && packagesTouched)
+          for (const vm of node.vms.filter((v) => v.state === "off"))
+            vm.note = `still off: the upgrade of ${node.name} stopped after its packages began installing; start it once the node looks right`;
+        if (node.phase === "emptying" || node.phase === "installing" || (node.phase === "restarting" && !rebootAsked) || (node.phase === "upgrading" && !rebootAsked && !packagesTouched)) {
           for (const vm of node.vms.filter((v) => v.state === "off")) {
             try {
               await deps.start(node.name, vm);

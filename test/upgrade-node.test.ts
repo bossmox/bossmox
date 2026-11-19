@@ -201,6 +201,7 @@ test("a checker failure before the packages changes nothing, not even the way ba
   const r = await finish(job, "n2");
   assert.equal(r?.phase, "failed");
   assert.match(r?.error ?? "", /Nothing was changed/);
+  assert.equal(r?.packagesTouched, false, "the run may start its guests again: the node is as it was");
   assert.deepEqual(calls, ["checker"]);
 });
 
@@ -359,7 +360,7 @@ test("the run's plan is refused without a fresh, clear readiness check, for anyo
 
 test("one node in a run: sources switched first when they aren't, then the whole upgrade", async () => {
   const log: string[] = [];
-  const done = { restarted: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve" } as unknown as NodeUpgrade;
+  const done = { restarted: true, packagesTouched: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve" } as unknown as NodeUpgrade;
   const ru = (repos: RawRepositories, stuck = false, switchError: string | null = null) =>
     createRunUpgrade({
       pve: planPve({ a: { v: stuck ? "9.2.28" : "8.4.21", stuck } }, repos),
@@ -379,7 +380,7 @@ test("one node in a run: sources switched first when they aren't, then the whole
       },
       ready: () => readyNow(),
     });
-  assert.deepEqual(await ru(ON_BOOKWORM).run(root(), "a"), { restarted: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve" });
+  assert.deepEqual(await ru(ON_BOOKWORM).run(root(), "a"), { restarted: true, packagesTouched: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve" });
   assert.deepEqual(log.splice(0), ["switch a a bookworm->trixie", "upgrade a"]);
   await ru(ON_TRIXIE).run(root(), "a");
   assert.deepEqual(log.splice(0), ["upgrade a"], "already switched: not again");
@@ -387,6 +388,7 @@ test("one node in a run: sources switched first when they aren't, then the whole
   assert.deepEqual(log.splice(0), ["upgrade a"], "a stuck node is finished without touching its sources");
   const bad = await ru(ON_BOOKWORM, false, "apt couldn't use the new sources, so the old ones were put back.").run(root(), "a");
   assert.equal(bad.restarted, false);
+  assert.equal(bad.packagesTouched, false, "a failed switch never touched the packages");
   assert.match(bad.error ?? "", /a's update sources weren't switched: apt couldn't/);
   assert.deepEqual(log.splice(0), ["switch a a bookworm->trixie"], "no upgrade after a failed switch");
 });
@@ -429,6 +431,7 @@ test("packages left half in after the upgrade's own job also stop the restart (r
   const r = await finish(job, "n2");
   assert.equal(r?.phase, "failed");
   assert.match(r?.error ?? "", /didn't finish installing/);
+  assert.equal(r?.packagesTouched, true, "part way between versions: the run must not start its guests here");
 });
 
 test("a guest that starts on the node during the upgrade stops it before the pins and the restart (review 2026-11-16)", async () => {

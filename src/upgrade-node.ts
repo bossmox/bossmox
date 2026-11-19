@@ -118,6 +118,8 @@ export interface NodeUpgrade {
   kernelBefore: string | null;
   /** The restart was asked for. A failure before it leaves the node running as it was. */
   restarted: boolean;
+  /** The new version's packages began installing, or the node was being finished: it isn't as it was. */
+  packagesTouched: boolean;
   /** What it runs once it's back. */
   version: string | null;
   kernel: string | null;
@@ -235,6 +237,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
         if (job.before.blocking.length) throw new Error(`Proxmox's checker found ${listed(job.before.blocking)} on ${node}. Nothing was changed; fix them first.`);
 
         phase("upgrading");
+        job.packagesTouched = true;
         // From here the old sources must never go back.
         deps.sources.forget(node);
         deps.audit("upgrade-node-start", session.username, { node, to: job.to });
@@ -363,6 +366,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
           pins: null,
           kernelBefore: status["current-kernel"]?.release ?? null,
           restarted: false,
+          packagesTouched: finishing,
           version: null,
           kernel: null,
         };
@@ -448,7 +452,7 @@ export function createRunUpgrade(deps: RunUpgradeDeps) {
 
     /** One node: its sources switched if they aren't yet, then the one-node upgrade to its end. Never throws. */
     async run(session: Session, node: string): Promise<UpgradeResult> {
-      const fail = (error: string): UpgradeResult => ({ restarted: false, error, keptConfig: [], version: null, kernel: null });
+      const fail = (error: string): UpgradeResult => ({ restarted: false, packagesTouched: false, error, keptConfig: [], version: null, kernel: null });
       let switchedNow = false;
       /** The sources backup is forgotten once the packages start: while it's still there, nothing else changed. */
       const putBack = async (error: string): Promise<string> => {
@@ -475,7 +479,7 @@ export function createRunUpgrade(deps: RunUpgradeDeps) {
         }
         const job = await deps.nodes.runOne(session, node);
         const error = job.error && !job.restarted ? await putBack(job.error) : job.error;
-        return { restarted: job.restarted, error, keptConfig: job.keptConfig, version: job.version, kernel: job.kernel };
+        return { restarted: job.restarted, packagesTouched: job.packagesTouched, error, keptConfig: job.keptConfig, version: job.version, kernel: job.kernel };
       } catch (err) {
         return fail(await putBack((err as Error).message || "BossMox lost contact with Proxmox."));
       }
