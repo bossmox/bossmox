@@ -315,3 +315,15 @@ test("BossMox's own guest is found among a node's moves by its network card; an 
     c.done();
   }
 });
+
+test("a run's own Keep free plans its moves, and the saved setting stays as it was (ADR 0044)", async () => {
+  const c = cluster();
+  try {
+    const jobs = createJobs(c.ctx);
+    assert.equal((await jobs.runPlan("t", "restart", "n1")).keepFreePct, 10, "the saved setting by default");
+    assert.equal((await jobs.runPlan("t", "restart", "n1", [], "", 25)).keepFreePct, 25, "this run's own value");
+    assert.equal(c.ctx.preferences().keepFreePct, 10, "nothing saved");
+  } finally {
+    c.done();
+  }
+});

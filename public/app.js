@@ -2720,9 +2720,12 @@ function stayedWords(job) {
 }
 const keepFree = () => S.data?.preferences?.keepFreePct ?? 10;
 const KEEP_CHOICES = [5, 10, 15, 20, 25, 30];
-/** The cluster-wide room to keep on each node when BossMox moves guests. `again` redraws the window it's in. */
-const keepFreeField = (again) =>
-  `<label class="field restartname"><span>Keep free on each node</span><select id="keepfree" data-keepagain="${esc(again)}">${KEEP_CHOICES.map((n) => `<option value="${n}" ${n === keepFree() ? "selected" : ""}>${n}% of memory, storage and processor</option>`).join("")}</select></label>`;
+/**
+ * The room to keep on each node for this run only (ADR 0044): changing it plans again with it and saves nothing; the
+ * setting for every run is in Settings. `again` redraws the window it's in.
+ */
+const keepFreeField = (again, current = keepFree()) =>
+  `<label class="field restartname"><span>Keep free on each node, for this run</span><select id="keepfree" data-keepagain="${esc(again)}">${KEEP_CHOICES.map((n) => `<option value="${n}" ${n === current ? "selected" : ""}>${n}% of memory, storage and processor${n === keepFree() ? " (your setting)" : ""}</option>`).join("")}</select></label>`;
 const jobOf = (m, id) => (m?.job && id && `job:${m.job.startedAt}` === id ? m.job : null);
 function jobRows(job, home) {
   const word = (g) =>
@@ -2858,7 +2861,7 @@ function vmWords(v, running = true) {
 const vmDot = (v) => (["home", "started", "moved"].includes(v.state) ? "running" : ["failed", "stayed"].includes(v.state) ? "warn" : v.state === "waiting" || v.state === "off" ? "" : "busy");
 
 /** Opens the start window: what will happen to each running VM, with a choice for each. */
-async function openRunStart(kind, server = "", only = "") {
+async function openRunStart(kind, server = "", only = "", keep = undefined) {
   S.taskRunning = true;
   try {
     if (kind === "update") {
@@ -2876,19 +2879,21 @@ async function openRunStart(kind, server = "", only = "") {
     } else if (kind === "upgrade") dialog(`<h3>Planning the upgrade</h3><p>Reading each node's version and what runs on it.</p>`);
     else dialog(`<h3>Planning the restart of ${esc(server)}</h3><p>Reading what runs there and where it can go.</p>`);
     const [plan, reboot] = await Promise.all([
-      signal(`api/run-plan?kind=${kind}${kind === "restart" ? `&server=${encodeURIComponent(server)}` : ""}${only ? `&only=${encodeURIComponent(only)}` : ""}`),
+      signal(
+        `api/run-plan?kind=${kind}${kind === "restart" ? `&server=${encodeURIComponent(server)}` : ""}${only ? `&only=${encodeURIComponent(only)}` : ""}${keep !== undefined ? `&keep=${keep}` : ""}`,
+      ),
       kind === "restart" ? signal(`api/reboot-plan?server=${encodeURIComponent(server)}`).catch(() => null) : null,
     ]);
     S.taskRunning = false;
-    drawRunStart(kind, server, plan, reboot, only);
+    drawRunStart(kind, server, plan, reboot, only, keep);
   } catch (err) {
     S.taskRunning = false;
     if (err.message === "signed out") return closeDialog();
     dialog(`<h3>Couldn't prepare it</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`);
   }
 }
-function drawRunStart(kind, server, plan, reboot, only = "") {
-  S.runStart = { kind, server, plan, reboot, only };
+function drawRunStart(kind, server, plan, reboot, only = "", keep = undefined) {
+  S.runStart = { kind, server, plan, reboot, only, keep };
   const again = `run:${kind}:${server}:${only}`;
   const busy = reboot?.busy?.length ? [`Wait for this to finish first: ${reboot.busy.join(", ")}.`] : [];
   const blocked = [...plan.blocked, ...busy];
@@ -2931,7 +2936,7 @@ function drawRunStart(kind, server, plan, reboot, only = "") {
     <p>${how}</p>${skipped}
     ${restarts.some((n) => n.vms.length) ? `<p class="meta">${plan.moveBatch > 1 ? `Moves run up to ${plan.moveBatch} at a time.` : plan.moveShared ? "Moves run one at a time: they share the cluster heartbeat's only network. Health check says how to give them their own." : "Moves run one at a time."}</p>` : ""}
     ${plan.nodes.map(nodeBlock).join("")}
-    ${restarts.some((n) => n.vms.length) ? keepFreeField(again) : ""}
+    ${restarts.some((n) => n.vms.length) ? keepFreeField(again, keep ?? keepFree()) : ""}
     ${kind !== "restart" && !plan.keepsMajority && restarts.length ? `<div class="advice" style="margin-top:12px"><div><b>This cluster has only ${plan.votes} votes</b>Everything keeps running, but nothing can be started, stopped or changed while a node restarts.</div></div>` : ""}
     ${kind === "restart" && reboot?.backupStorages?.length && restarts[0]?.vms.length ? `<div class="restartbackup"><select id="rstore" aria-label="Backup storage" data-bkwarn="${esc(server)}">${reboot.backupStorages.map((s) => poolOption(server, s)).join("")}</select><button class="btn" data-backup="${esc(server)}">Back up first</button></div>${backupWarnLine(server, reboot.backupStorages[0].name)}` : ""}
     <label class="field restartname"><span>Type ${esc(only || word)} to start</span><input id="rname" data-word="${esc(word)}" autocomplete="off" autocapitalize="none" spellcheck="false"></label>
@@ -2940,13 +2945,20 @@ function drawRunStart(kind, server, plan, reboot, only = "") {
   $("#rname").focus();
 }
 async function startRun() {
-  const { kind, server, only } = S.runStart ?? {};
+  const { kind, server, only, keep } = S.runStart ?? {};
   if (!kind) return;
   const choices = Object.fromEntries([...document.querySelectorAll("[data-vmchoice]")].map((s) => [s.dataset.vmchoice, s.value]));
   const confirm = $("#rname").value;
   dialog(`<h3>Starting</h3><p>${Object.values(choices).includes("eject") ? "Taking the chosen discs out, then checking" : "Checking"} the plan once more.</p>`);
   try {
-    const res = await post("api/action/run-start", { server: kind === "restart" ? server : onlineNodes()[0], kind, choices, confirm, ...(only ? { only } : {}) });
+    const res = await post("api/action/run-start", {
+      server: kind === "restart" ? server : onlineNodes()[0],
+      kind,
+      choices,
+      confirm,
+      ...(only ? { only } : {}),
+      ...(keep !== undefined && keep !== keepFree() ? { keepFreePct: keep } : {}),
+    });
     const body = await res.json();
     if (!res.ok) throw new Error(body.error);
     openRun();
@@ -3056,7 +3068,7 @@ function drawRun(run) {
     ${stayed.map((v) => `<p class="meta">${esc(v.name)} stays on ${esc(v.on ?? "another node")}, running: ${esc((v.note ?? "its home had no room").replace(/\.$/, ""))}.</p>`).join("")}
     ${stayed.length ? `<p class="meta">Move everything back on a node's Overview tries again later.</p>` : ""}
     ${kept.length ? `<p class="meta">Config files you'd changed kept your version. The new one from the update sits beside each as .dpkg-dist: ${esc(kept.join(", "))}.</p>` : ""}
-    <div class="row-end">${run.running && !run.stop ? `<button class="btn" data-runstop="1">Stop after this step</button>` : run.running ? `<button class="btn" disabled>Stopping after this step</button>` : ""}<button class="btn" data-runclose="1">Close</button></div>`);
+    <div class="row-end">${run.running && !run.stop ? `<button class="btn" data-runstop="1">Stop after this step</button>` : run.running ? `<button class="btn" disabled>Stopping after this step</button>` : ""}${!run.running && run.kind !== "restart" && run.nodes.some((n) => n.phase === "waiting") ? `<button class="btn primary" data-runagain="run:${esc(run.kind)}::">Start again with the nodes not done</button>` : ""}<button class="btn" data-runclose="1">Close</button></div>`);
 }
 /** A line on the desktop while a run is going, for any browser. */
 function runLine() {
@@ -5120,32 +5132,17 @@ document.addEventListener("change", (e) => {
   }
   if (e.target.id === "alkind") return openAlertsSetup(e.target.value);
   if (e.target.dataset?.keepagain) {
-    const again = e.target.dataset.keepagain;
+    // For this run only (ADR 0044): plan again with it, nothing saved, so nothing to ask first.
+    const [, kind, server, only] = e.target.dataset.keepagain.split(":");
     const keepFreePct = Number(e.target.value);
-    const [, kind, server, only] = again.split(":");
-    // Saved for the whole cluster, so it asks first (#55). Cancel goes back to the same plan, unchanged.
-    const shown = S.runStart;
-    // Each guest's choice is only in the window, so it's kept and put back too (#74).
-    const picked = [...document.querySelectorAll("[data-vmchoice]")].map((s) => [s.dataset.vmchoice, s.value]);
-    S.afterTask = () => {
-      drawRunStart(shown.kind, shown.server, shown.plan, shown.reboot, shown.only);
+    // Each guest's choice is only in the window, so it's kept and put back (#74).
+    const picked = [...document.querySelectorAll("[data-vmchoice]")].map((x) => [x.dataset.vmchoice, x.value]);
+    return openRunStart(kind, server, only, keepFreePct).then(() => {
       for (const [id, value] of picked) {
-        const s = document.querySelector(`[data-vmchoice="${id}"]`);
-        if (s) s.value = value;
+        const x = document.querySelector(`[data-vmchoice="${id}"]`);
+        if (x) x.value = value;
       }
-    };
-    return confirmAction(
-      `Keep ${keepFreePct}% free on every node?`,
-      `This is a cluster-wide setting, not just for this ${kind === "update" ? "update" : "restart"}. From now on BossMox keeps ${keepFreePct}% of each node's memory, storage and processor free when it moves guests, here and in Move off and Move back.`,
-      "Save for every node",
-      () =>
-        (async () => {
-          const res = await post("api/action/preferences-set", { server: onlineNodes()[0], keepFreePct });
-          if (!res.ok) return dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc((await res.json()).error)}</p>${closeRow}`);
-          await refresh();
-          openRunStart(kind, server, only);
-        })().catch((err) => dialog(`<h3>That wasn't saved</h3><p class="loginerr">${esc(err.message || "BossMox lost contact with Proxmox.")}</p>${closeRow}`)),
-    );
+    });
   }
   if (e.target.dataset?.bkwarn) {
     const line = e.target.closest("#dialog")?.querySelector(".warnline");

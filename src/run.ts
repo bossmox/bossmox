@@ -48,6 +48,8 @@ export interface Run {
   error: string | null;
   current: number;
   nodes: RunNode[];
+  /** Keep free for this run only, when the person chose one on its plan (ADR 0044); the saved setting is unchanged. */
+  keepFreePct?: number;
 }
 
 /** What one person may see of the cluster: everything, or only the nodes and guests Proxmox shows them. */

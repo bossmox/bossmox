@@ -107,3 +107,25 @@ test("Move everything back needs an account that sees every guest, so it can't d
     /can't see every guest/,
   );
 });
+
+test("Start again with a lower Keep free: one of the choices, the setting's own permission, for that run only (ADR 0044)", async () => {
+  const seen: (number | undefined)[] = [];
+  const make = (canChange: boolean) =>
+    clusterActions({
+      pve: { get: async () => (canChange ? { "/": { "Sys.Modify": 1 } } : { "/": {} }) },
+      jobs: {
+        startRun: async (_s: Session, _k: string, _sv: string, _c: boolean, _ch: unknown, _o: string, keep?: number) => {
+          seen.push(keep);
+          return "run:1";
+        },
+      },
+    } as never);
+  const who = { username: "root@pam", ticket: "t" } as unknown as Session;
+  const go = (canChange: boolean, body: Record<string, unknown>) => Promise.resolve().then(() => make(canChange)["run-start"]?.("n1", who, body));
+  await assert.rejects(go(true, { kind: "upgrade", confirm: "confirm", keepFreePct: 7 }), /isn't one of the choices/);
+  await assert.rejects(go(true, { kind: "upgrade", confirm: "confirm", keepFreePct: "5; rm" }), /isn't one of the choices/);
+  await assert.rejects(go(false, { kind: "upgrade", confirm: "confirm", keepFreePct: 5 }), /Sys.Modify/);
+  await go(true, { kind: "upgrade", confirm: "confirm", keepFreePct: 5 });
+  await go(false, { kind: "upgrade", confirm: "confirm" });
+  assert.deepEqual(seen, [5, undefined], "without a value the run uses the saved setting, and needs no extra permission");
+});

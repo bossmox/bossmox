@@ -211,7 +211,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
         return (deps) => runMoveHome(jobs.moveRecord, deps, name, who.username, batch);
       });
     },
-    "run-start": (_name, who, body) => {
+    "run-start": async (_name, who, body) => {
       const kind = body.kind === "restart" ? "restart" : body.kind === "update" ? "update" : body.kind === "upgrade" ? "upgrade" : null;
       if (!kind) throw new HttpError(400, "That request isn't valid.");
       const server = text(body.server, 64);
@@ -222,7 +222,15 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       if (only && (kind !== "upgrade" || !NODE_NAME.test(only))) throw new HttpError(400, "That request isn't valid.");
       // A node's name confirms without regard to case, as for every other node action.
       const confirmed = only ? text(body.confirm, 64).toLowerCase() === only.toLowerCase() : body.confirm === (kind === "restart" ? "reboot" : "confirm");
-      return jobs.startRun(who, kind, server, confirmed, choices, only);
+      // Keep free for this run only (ADR 0044): one of the setting's own choices, and the same permission as the setting.
+      let keep: number | undefined;
+      if (body.keepFreePct !== undefined) {
+        keep = Number(body.keepFreePct);
+        if (!KEEP_FREE_CHOICES.includes(keep)) throw new HttpError(400, "That Keep free value isn't one of the choices.");
+        const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", who.ticket).catch((): Record<string, Record<string, number>> => ({}));
+        if (!canChangeCluster(perms)) throw new AuthError(403, "Changing Keep free needs the Sys.Modify permission on the whole cluster (/).");
+      }
+      return jobs.startRun(who, kind, server, confirmed, choices, only, keep);
     },
     "run-stop": async (_name, who) => {
       if (!jobs.currentRun?.running) return null;
