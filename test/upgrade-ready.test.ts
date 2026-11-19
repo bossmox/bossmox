@@ -18,6 +18,7 @@ test("BossMox's own checks: too little root space blocks, passthrough and plugin
     ["Passthrough: gpu-box", "Storage from outside Proxmox: fast (purestorage)"],
   );
   assert.equal(ownChecks({ rootFreeGb: null, passthrough: [], plugins: [] })[0]?.handling, "blocks", "unknown space isn't assumed fine");
+  assert.match(ownChecks({ rootFreeGb: null, passthrough: [], plugins: [] })[0]?.detail ?? "", /checker again/, "a block always says why and what to do");
 });
 
 function fakePve(): PveClient {
@@ -65,7 +66,7 @@ test("every online node gets the checker for its own version; an offline one blo
   assert.equal(v.from, 8);
   assert.equal(v.to, 9);
   assert.deepEqual(v.nodes[0]?.counts, { passed: 37, warnings: 3, failures: 0 });
-  assert.ok(v.nodes[0]?.items.some((i) => i.handling === "fix" && i.title.startsWith("Shared LVM")));
+  assert.ok(v.nodes[0]?.items.some((i) => i.handling === "fix" && i.fixId === "lvm-autoactivation" && i.title.startsWith("Shared storage")));
   assert.equal(v.nodes[2]?.error, "This node is offline, so it couldn't be checked.");
   assert.equal(v.ready, false, "an unchecked node means not ready");
 });
@@ -178,4 +179,14 @@ test("every node on 9 but one stuck: the stuck one still counts as 8, so nothing
   assert.deepEqual(typed, []);
   assert.equal(r.view().from, 8);
   assert.equal(r.view().nodes[0]?.items[0]?.handling, "bossmox");
+});
+
+test("Get ready to upgrade says up front when BossMox will keep a node on the free channel (ADR 0044)", () => {
+  const kept = ownChecks({ rootFreeGb: 26, passthrough: [], plugins: [], keepsFreeChannel: true });
+  assert.deepEqual(
+    kept.map((e) => [e.level, e.handling, e.help]),
+    [["NOTICE", "bossmox", "upgrade-free-channel"]],
+  );
+  assert.match(kept[0]?.detail ?? "", /turns off any paid source the upgrade added, and nothing else/);
+  assert.deepEqual(ownChecks({ rootFreeGb: 26, passthrough: [], plugins: [], keepsFreeChannel: false }), []);
 });

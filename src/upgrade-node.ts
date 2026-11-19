@@ -4,6 +4,7 @@
  * again, port names pinned, a restart, and a check that it came back on the new version with a new kernel. Anything
  * that goes wrong stops it there and says where; the node is never restarted after a step that didn't finish.
  */
+import { randomBytes } from "node:crypto";
 import type { Session } from "./auth.js";
 import { HttpError } from "./http-error.js";
 import { RELEASES } from "./lifecycle.js";
@@ -14,11 +15,15 @@ import type { RawRepositories, RawStatus } from "./server-detail.js";
 import { blockers, parseChecker } from "./upgrade-check.js";
 import type { PinResult } from "./upgrade-fixes.js";
 import type { UpgradeResult } from "./run.js";
+import { paidAdded, paidOn, planFreeChannel, type FreeChannelPlan } from "./keep-free-channel.js";
+import type { RawSubscription } from "./server-detail.js";
 import { ROOT_MIN_GB, unfinishedUpgrade, type RawVersion, type Readiness } from "./upgrade-ready.js";
 import { PROXMOX_URI, switched, type UpgradeSources } from "./upgrade-sources.js";
 
 export const UPGRADE_LOG = "/root/bossmox-upgrade.log";
 const EXIT_FILE = "/root/bossmox-upgrade.exit";
+/** Which upgrade started the job there: a random id BossMox makes for each upgrade (review 0.3.2, Gemini H3, M1). */
+const ID_FILE = "/root/bossmox-upgrade.id";
 const UNIT = "bossmox-upgrade";
 /** A whole major upgrade, from the first package to the last, on a slow mirror. */
 export const UPGRADE_LIMIT_MS = 2 * 60 * 60 * 1000;
@@ -27,6 +32,8 @@ export const UPGRADE_LIMIT_MS = 2 * 60 * 60 * 1000;
  * time for the checks around them. BossMox keeps the Proxmox login fresh while the upgrade runs, browser open or not.
  */
 export const UPGRADE_NEEDS_MS = 3 * 60 * 60 * 1000;
+/** How often the package job is checked: each check is one short console line (ADR 0044: progress, no faster than 5 s). */
+export const FOLLOW_EVERY_MS = 15_000;
 
 /** Failures alone don't stop it: only what the explainer says blocks (ADR 0042; the 9 checker fails on no microcode). */
 export interface CheckerCounts {
@@ -43,7 +50,14 @@ const asCommand = (script: string) => `printf '%s' '${Buffer.from(script, "utf8"
  * apt's errors. Its own command, so BossMox can ask again after the console drops (apt restarts pveproxy, which carries
  * the console) or after BossMox itself restarts.
  */
-export const FOLLOW_SCRIPT = `if systemctl is-active --quiet ${UNIT}; then echo "BMXUP running"; exit 0; fi
+export const FOLLOW_SCRIPT = `if [ -f ${UPGRADE_LOG} ]; then
+t=$(grep -oE "^[0-9]+ upgraded, [0-9]+ newly installed" ${UPGRADE_LOG} | head -n 1 | awk '{print $1 + $3}')
+d=$(grep -c "^Setting up " ${UPGRADE_LOG})
+q=$(( $(date +%s) - $(stat -c %Y ${UPGRADE_LOG}) ))
+echo "BMXPROG \${t:-0} \${d:-0} \${q:-0}"
+fi
+[ -f ${ID_FILE} ] && echo "BMXID $(head -c 32 ${ID_FILE})"
+if systemctl is-active --quiet ${UNIT}; then echo "BMXUP running"; exit 0; fi
 if [ -f ${EXIT_FILE} ]; then echo "BMXUP exit $(cat ${EXIT_FILE})"; else echo "BMXUP noexit"; fi
 grep -o "Configuration file '[^']*'" ${UPGRADE_LOG} 2>/dev/null | sort -u
 grep -E "^(E: |dpkg: error|Errors were encountered)" ${UPGRADE_LOG} 2>/dev/null | tail -n 10 | sed 's/^/BMXERR /'
@@ -59,18 +73,43 @@ grep -E "^(E: |dpkg: error|Errors were encountered)" ${UPGRADE_LOG} 2>/dev/null 
  * Debian's unattended-upgrades held it on the lab just after a node started (2026-11-16).
  */
 export const APT_LOCK_WAIT = "-o DPkg::Lock::Timeout=600";
-export const UPGRADE_SCRIPT = `if ! systemctl is-active --quiet ${UNIT}; then
+/** The id is 16 hex characters BossMox made itself; nothing else reaches the line (rule R2). */
+const UPGRADE_ID = /^[0-9a-f]{16}$/;
+export const upgradeScript = (id: string) => {
+  if (!UPGRADE_ID.test(id)) throw new Error("That upgrade id isn't valid.");
+  return `if ! systemctl is-active --quiet ${UNIT}; then
 rm -f ${EXIT_FILE}
-systemd-run --quiet --wait --collect --unit=${UNIT} --setenv=DEBIAN_FRONTEND=noninteractive --setenv=UCF_FORCE_CONFFOLD=1 --setenv=APT_LISTCHANGES_FRONTEND=none /bin/bash -c 'exec >${UPGRADE_LOG} 2>&1; apt-get ${APT_LOCK_WAIT} update -q || { echo 100 >${EXIT_FILE}; exit 100; }; apt-get ${APT_LOCK_WAIT} -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade; c=$?; echo $c >${EXIT_FILE}; exit $c'
+echo ${id} >${ID_FILE}
+systemd-run --quiet --collect --unit=${UNIT} --setenv=DEBIAN_FRONTEND=noninteractive --setenv=UCF_FORCE_CONFFOLD=1 --setenv=APT_LISTCHANGES_FRONTEND=none /bin/bash -c 'exec >${UPGRADE_LOG} 2>&1; apt-get ${APT_LOCK_WAIT} update -q || { echo 100 >${EXIT_FILE}; exit 100; }; apt-get ${APT_LOCK_WAIT} -y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade; c=$?; echo $c >${EXIT_FILE}; exit $c'
 fi
 ${FOLLOW_SCRIPT}`;
+};
+/** The script as it reads with a placeholder id, for the tests that read its steps. */
+export const UPGRADE_SCRIPT = upgradeScript("0000000000000000");
 
-export const upgradeCommand = () => asCommand(UPGRADE_SCRIPT);
+export const upgradeCommand = (id: string) => asCommand(upgradeScript(id));
 export const followCommand = () => asCommand(FOLLOW_SCRIPT);
+
+/**
+ * How far the packages are, read from the job's own log (ADR 0044): how many apt said it would install, how many it
+ * has set up, and how many seconds since the log last changed. Numbers only; the log's lines are never shown.
+ */
+export interface UpgradeProgress {
+  total: number;
+  done: number;
+  quietSeconds: number;
+}
+export function readProgress(output: string): UpgradeProgress | null {
+  const m = /^BMXPROG (\d{1,6}) (\d{1,6}) (-?\d{1,9})\s*$/m.exec(output);
+  return m ? { total: Number(m[1]), done: Number(m[2]), quietSeconds: Math.max(0, Number(m[3])) } : null;
+}
 
 export interface UpgradeRead {
   /** dpkg has packages it didn't finish installing: the node must not restart like that. */
   unfinished?: boolean;
+  progress?: UpgradeProgress | null;
+  /** The id of the upgrade that started the job there, if one did. */
+  id?: string | null;
   state: "running" | "ended" | "unknown";
   /** apt's exit code; null when the job ended without writing one (killed). */
   exitCode: number | null;
@@ -78,6 +117,12 @@ export interface UpgradeRead {
   errors: string[];
 }
 export function readUpgrade(output: string): UpgradeRead {
+  const progress = readProgress(output);
+  const id = /^BMXID ([0-9a-f]{16})\s*$/m.exec(output)?.[1] ?? null;
+  const read = progress ? { ...readState(output), progress } : readState(output);
+  return id ? { ...read, id } : read;
+}
+function readState(output: string): UpgradeRead {
   const keptConfig = keptConfigFiles(output);
   const errors = [...output.matchAll(/^BMXERR (.*)$/gm)].map((m) => (m[1] as string).trim());
   if (/^BMXUP unfinished-packages\s*$/m.test(output)) {
@@ -118,9 +163,15 @@ export interface NodeUpgrade {
   kernelBefore: string | null;
   /** The restart was asked for. A failure before it leaves the node running as it was. */
   restarted: boolean;
+  /** The new version's packages began installing, or the node was being finished: it isn't as it was. */
+  packagesTouched: boolean;
   /** What it runs once it's back. */
   version: string | null;
   kernel: string | null;
+  /** While the packages install: how far, and when that was read (ADR 0044). */
+  progress?: (UpgradeProgress & { at: number }) | null;
+  /** The free channel kept through the upgrade (ADR 0044): planned before the packages, done right after them. */
+  freeChannel?: { planned: boolean; why: string; turnedOff: string[]; note: string | null } | null;
 }
 
 export interface NodeUpgradeDeps {
@@ -169,28 +220,36 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
     return { warnings: s.warnings, failures: s.failures, blocking: blockers(run) };
   }
 
-  /** Runs the upgrade, then follows it until it ends, through a dropped console or a restart of Proxmox's API. */
-  async function upgrade(session: Session, node: string): Promise<UpgradeRead> {
+  /**
+   * Starts the upgrade as its own job and returns, then follows it with a short check until it ends, through a dropped
+   * console or a restart of Proxmox's API. Each check also reads how far the packages are (ADR 0044).
+   */
+  async function upgrade(session: Session, node: string, id: string, seen?: (read: UpgradeRead) => void): Promise<UpgradeRead> {
     let read: UpgradeRead | null = null;
     try {
-      read = readUpgrade((await deps.console(node, session, upgradeCommand(), UPGRADE_LIMIT_MS)).output);
+      read = readUpgrade((await deps.console(node, session, upgradeCommand(id))).output);
     } catch {
-      // The console went (pveproxy restarts mid-upgrade). The job carries on; ask it below.
+      // The console went (pveproxy restarts mid-upgrade), or it never reached the node. The checks below tell which.
     }
-    return untilEnded(session, node, read);
+    if (read) seen?.(read);
+    const end = await untilEnded(session, node, read, seen);
+    // Only this upgrade's own job counts: none there, or an older one's exit file, means nothing was installed now.
+    if (end.id !== id) throw new Error(`The package upgrade on ${node} didn't start, so nothing was installed and it wasn't restarted. Try again.`);
+    return end;
   }
   const ask = (session: Session, node: string) =>
     deps.console(node, session, followCommand()).then(
       (r) => readUpgrade(r.output),
       () => null,
     );
-  async function untilEnded(session: Session, node: string, first: UpgradeRead | null): Promise<UpgradeRead> {
+  async function untilEnded(session: Session, node: string, first: UpgradeRead | null, seen?: (read: UpgradeRead) => void): Promise<UpgradeRead> {
     const until = now() + UPGRADE_LIMIT_MS;
     let read = first;
     while (read?.state !== "ended") {
       if (now() > until) throw new Error(`The upgrade on ${node} hasn't finished after ${UPGRADE_LIMIT_MS / 3600000} hours. It carries on there by itself; its log is ${UPGRADE_LOG}.`);
-      await pause(30_000);
+      await pause(FOLLOW_EVERY_MS);
       read = await ask(session, node);
+      if (read) seen?.(read);
     }
     return read as UpgradeRead;
   }
@@ -223,6 +282,38 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
       );
   }
 
+  async function readFreePlan(session: Session, node: string): Promise<FreeChannelPlan> {
+    const base = `/nodes/${enc(node)}`;
+    const [repos, sub] = await Promise.all([
+      deps.pve.get<RawRepositories>(`${base}/apt/repositories`, session.ticket).catch(() => null),
+      deps.pve.get<RawSubscription>(`${base}/subscription`, session.ticket).catch(() => null),
+    ]);
+    return planFreeChannel(repos, sub);
+  }
+
+  /**
+   * Turns off the paid entries the new packages added, one at a time through Proxmox's own call with its digest, and
+   * reads each back before saying so (rules R4, R8). Never stops the upgrade: what didn't work is said on the node.
+   */
+  async function keepFreeChannel(session: Session, node: string, plan: FreeChannelPlan, job: NodeUpgrade) {
+    const base = `/nodes/${enc(node)}`;
+    const state = job.freeChannel as NonNullable<NodeUpgrade["freeChannel"]>;
+    try {
+      const read = () => settled(() => deps.pve.get<RawRepositories>(`${base}/apt/repositories`, session.ticket));
+      let repos = await read();
+      const added = paidAdded(plan, repos);
+      for (const e of added) {
+        await deps.pve.post(`${base}/apt/repositories`, session, { path: e.path, index: String(e.index), enabled: "0", ...(repos.digest ? { digest: repos.digest } : {}) });
+        repos = await read();
+        if (paidOn(repos).some((x) => x.path === e.path && x.index === e.index)) throw new Error(`Proxmox still has ${e.path} switched on.`);
+        state.turnedOff.push(e.path);
+      }
+      deps.audit("upgrade-free-channel", session.username, { node, off: state.turnedOff.length });
+    } catch (err) {
+      state.note = `BossMox couldn't turn off the paid update source the upgrade added (${(err as Error).message || "no answer"}). Use the free channel on the node's Updates tab.`;
+    }
+  }
+
   async function drive(session: Session, job: NodeUpgrade, major: number) {
     const node = job.node;
     const t = () => session.ticket;
@@ -234,15 +325,34 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
         job.before = await checker(session, node, major);
         if (job.before.blocking.length) throw new Error(`Proxmox's checker found ${listed(job.before.blocking)} on ${node}. Nothing was changed; fix them first.`);
 
+        // Decided before anything changes: does this node keep the free channel, and which paid entries were on already.
+        const freePlan = await readFreePlan(session, node);
+        job.freeChannel = { planned: freePlan.keep, why: freePlan.why, turnedOff: [], note: null };
+
         phase("upgrading");
-        // From here the old sources must never go back.
-        deps.sources.forget(node);
+        const id = randomBytes(8).toString("hex");
         deps.audit("upgrade-node-start", session.username, { node, to: job.to });
-        const r = await upgrade(session, node);
+        const r = await upgrade(session, node, id, (read) => {
+          // Only once the node shows this upgrade's own job is it changed: until then the old sources may still go back.
+          if (read.id === id && !job.packagesTouched) {
+            job.packagesTouched = true;
+            deps.sources.forget(node);
+          }
+          if (read.progress) job.progress = { ...read.progress, at: now() };
+        });
+        job.progress = null;
         job.keptConfig = r.keptConfig;
         if (r.exitCode !== 0) throw packagesFailed(node, r);
         if (r.unfinished) throw unfinishedPackages(node);
+        if (freePlan.keep) await keepFreeChannel(session, node, freePlan, job);
       } else {
+        // Its packages went in earlier, so which paid source they added can't be told now; said, not guessed (review 0.3.2).
+        job.freeChannel = {
+          planned: false,
+          why: "",
+          turnedOff: [],
+          note: "Its packages went in earlier, so BossMox can't tell which paid update source they added. If its Updates tab says checks end in an error, use the free channel there.",
+        };
         deps.audit("upgrade-node-finish", session.username, { node, to: job.to });
         // BossMox's own package job may still be going there (BossMox restarted part way): wait for it, and never
         // finish over one that failed or left packages half in. No job there (upgraded by hand) reads as ended.
@@ -363,6 +473,7 @@ export function createNodeUpgrade(deps: NodeUpgradeDeps) {
           pins: null,
           kernelBefore: status["current-kernel"]?.release ?? null,
           restarted: false,
+          packagesTouched: finishing,
           version: null,
           kernel: null,
         };
@@ -448,7 +559,7 @@ export function createRunUpgrade(deps: RunUpgradeDeps) {
 
     /** One node: its sources switched if they aren't yet, then the one-node upgrade to its end. Never throws. */
     async run(session: Session, node: string): Promise<UpgradeResult> {
-      const fail = (error: string): UpgradeResult => ({ restarted: false, error, keptConfig: [], version: null, kernel: null });
+      const fail = (error: string): UpgradeResult => ({ restarted: false, packagesTouched: false, error, keptConfig: [], version: null, kernel: null });
       let switchedNow = false;
       /** The sources backup is forgotten once the packages start: while it's still there, nothing else changed. */
       const putBack = async (error: string): Promise<string> => {
@@ -475,7 +586,7 @@ export function createRunUpgrade(deps: RunUpgradeDeps) {
         }
         const job = await deps.nodes.runOne(session, node);
         const error = job.error && !job.restarted ? await putBack(job.error) : job.error;
-        return { restarted: job.restarted, error, keptConfig: job.keptConfig, version: job.version, kernel: job.kernel };
+        return { restarted: job.restarted, packagesTouched: job.packagesTouched, error, keptConfig: job.keptConfig, version: job.version, kernel: job.kernel };
       } catch (err) {
         return fail(await putBack((err as Error).message || "BossMox lost contact with Proxmox."));
       }

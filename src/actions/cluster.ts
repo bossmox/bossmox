@@ -18,6 +18,17 @@ const guestId = (v: unknown) => {
 
 export function clusterActions(c: ActionContext): Record<string, Action> {
   const { audit, readOptions, pve, jobs, updates } = c;
+  /**
+   * A channel switch or an update check rewrites or reads a node's package lists, which a run's install or an upgrade
+   * is using: refuse with the reason rather than collide (design rule R5, 2026-11-19).
+   */
+  let switching = 0;
+  const notWhileChanging = () => {
+    if (jobs.currentRun?.running || jobs.runState.starting) throw new HttpError(409, "A run is going. Wait for it to finish, or stop it first.");
+    const node = c.nodeUpgrade.running();
+    if (node) throw new HttpError(409, `${node} is being upgraded. Wait for that to finish.`);
+    if (c.upgradeSources.busy()) throw new HttpError(409, "BossMox is changing a node's update sources. Wait for that to finish.");
+  };
   return {
     "ha-protect": async (_name, who, body) => {
       await c.ha.protect(who, guestId(body.id));
@@ -28,7 +39,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       return null;
     },
     "ha-recover": async (_name, who, body) => {
-      await c.ha.recover(who, guestId(body.id));
+      await c.ha.recover(who, guestId(body.id), text(body.lock, 32));
       return null;
     },
     "alerts-save": async (_name, who, body) => {
@@ -96,10 +107,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       if (r.error) throw new HttpError(400, r.error);
       return null;
     },
-    "upgrade-node": async (name, who, body) => {
-      await c.nodeUpgrade.start(who, name, text(body.confirm, 64));
-      return null;
-    },
+    // No "upgrade-node" here: one node is upgraded by a run of one node, with the run's checks (ADR 0044).
     "upgrade-pin": async (name, who, body) => {
       await c.upgradeFixes.pin(who, name, text(body.confirm, 64));
       return null;
@@ -132,10 +140,15 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       await c.heartbeat.start(who, text(body.network, 32), text(body.confirm, 64));
       return null;
     },
-    "check-updates": (name, who) => pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who),
+    "check-updates": (name, who) => {
+      notWhileChanging();
+      return pve.post<string>(`/nodes/${encodeURIComponent(name)}/apt/update`, who);
+    },
     "update-channel": async (name, who, body) => {
       const target = body.channel;
       if (target !== "free" && target !== "enterprise") throw new HttpError(400, "That request isn't valid.");
+      notWhileChanging();
+      switching++;
       try {
         return await applyChannel(
           {
@@ -149,6 +162,8 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       } catch (err) {
         if (err instanceof ChannelError) throw new HttpError(400, err.message);
         throw err;
+      } finally {
+        switching--;
       }
     },
     "restart-server": async (name, who, body) => {
@@ -166,31 +181,62 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       return pve.post<string>(`/nodes/${encodeURIComponent(name)}/${type}/${id}/migrate`, who, form);
     },
     "move-off": async (name, who, body) => {
-      // The browser sends this after the person has seen the plan and confirmed it for this node.
-      if (body.confirm !== name) throw new HttpError(400, "The move wasn't confirmed.");
+      // Empty this node (ADR 0044): the browser sends this after the person has seen the plan and typed the node's name.
+      if (text(body.confirm, 64).toLowerCase() !== name.toLowerCase()) throw new HttpError(400, "The move wasn't confirmed.");
+      // "Empty" has to mean empty: an account that can't see every guest would leave some behind without knowing.
+      if (!(await c.seesAllGuests(who.ticket)))
+        throw new HttpError(403, `Your Proxmox account can't see every guest, so BossMox can't empty ${name} for you. Sign in with an account that can see the whole cluster.`);
       return jobs.startMoveJob(who, async () => {
         const plan = await jobs.planEvacuation(who.ticket, name);
         if (plan.problems.length) throw new HttpError(400, plan.problems.join(" "));
         if (!plan.moves.length) return null;
+        // BossMox's own guest, as in a run (#46): a container can only move by stopping, which would stop BossMox part way;
+        // its VM moves live, last, so everything else is already moving when BossMox's own address changes.
+        const self = await jobs.selfGuest(who.ticket, name, plan.moves);
+        if (self?.type === "lxc")
+          throw new HttpError(
+            400,
+            `BossMox runs in the container ${self.name} on ${name}. A container can't move without stopping, and that would stop BossMox part way. Move the other guests one at a time instead.`,
+          );
+        const moves = self ? [...plan.moves.filter((m) => m.id !== self.id), self] : plan.moves;
         const batch = await jobs.batchFor(who.ticket);
-        return (deps) => runMoveOff(jobs.moveRecord, deps, name, who.username, plan.moves, batch);
+        return (deps) => runMoveOff(jobs.moveRecord, deps, name, who.username, moves, batch, self?.id);
       });
     },
     "move-home": async (name, who, body) => {
-      if (body.confirm !== name) throw new HttpError(400, "The move wasn't confirmed.");
+      if (text(body.confirm, 64).toLowerCase() !== name.toLowerCase()) throw new HttpError(400, "The move wasn't confirmed.");
+      // The record of what's away is rewritten from what this account can see: one that can't see every guest would
+      // drop the others from it, and they'd never come home (design review, Gemini M4).
+      if (!(await c.seesAllGuests(who.ticket)))
+        throw new HttpError(403, `Your Proxmox account can't see every guest, so BossMox can't bring ${name}'s guests home for you. Sign in with an account that can see the whole cluster.`);
       return jobs.startMoveJob(who, async () => {
         if (!jobs.moveRecord.away[name]?.guests.length) throw new HttpError(400, `BossMox has nothing recorded as moved off ${name}.`);
         const batch = await jobs.batchFor(who.ticket);
         return (deps) => runMoveHome(jobs.moveRecord, deps, name, who.username, batch);
       });
     },
-    "run-start": (_name, who, body) => {
+    "run-start": async (_name, who, body) => {
       const kind = body.kind === "restart" ? "restart" : body.kind === "update" ? "update" : body.kind === "upgrade" ? "upgrade" : null;
       if (!kind) throw new HttpError(400, "That request isn't valid.");
       const server = text(body.server, 64);
       if (kind === "restart" && !NODE_NAME.test(server)) throw new HttpError(400, "That server name isn't valid.");
       const choices = (body.choices && typeof body.choices === "object" ? body.choices : {}) as Record<string, unknown>;
-      return jobs.startRun(who, kind, server, body.confirm === (kind === "restart" ? "reboot" : "confirm"), choices);
+      // Upgrade this node (ADR 0044): the node comes from its own field, never from `server`, and the confirm is its name.
+      if (body.only !== undefined && (typeof body.only !== "string" || (body.only !== "" && !NODE_NAME.test(body.only)))) throw new HttpError(400, "That request isn't valid.");
+      const only = text(body.only, 64);
+      if (only && kind !== "upgrade") throw new HttpError(400, "That request isn't valid.");
+      // A node's name confirms without regard to case, as for every other node action.
+      if (switching) throw new HttpError(409, "BossMox is switching a node's update channel. Wait a moment, then start it.");
+      const confirmed = only ? text(body.confirm, 64).toLowerCase() === only.toLowerCase() : body.confirm === (kind === "restart" ? "reboot" : "confirm");
+      // Keep free for this run only (ADR 0044): one of the setting's own choices, and the same permission as the setting.
+      let keep: number | undefined;
+      if (body.keepFreePct !== undefined) {
+        keep = Number(body.keepFreePct);
+        if (!KEEP_FREE_CHOICES.includes(keep)) throw new HttpError(400, "That Keep free value isn't one of the choices.");
+        const perms = await pve.get<Record<string, Record<string, number>>>("/access/permissions?path=%2F", who.ticket).catch((): Record<string, Record<string, number>> => ({}));
+        if (!canChangeCluster(perms)) throw new AuthError(403, "Changing Keep free needs the Sys.Modify permission on the whole cluster (/).");
+      }
+      return jobs.startRun(who, kind, server, confirmed, choices, only, keep);
     },
     "run-stop": async (_name, who) => {
       if (!jobs.currentRun?.running) return null;

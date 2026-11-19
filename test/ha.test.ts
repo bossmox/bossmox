@@ -34,18 +34,44 @@ test("the fencing warning names what this cluster has against restarts that were
   assert.match(fencingWarnings({ state: "no-port", nodes: ["c"] }, null).lines[0]!, /not every node has a second port/);
 });
 
-function fake(opts: { disk?: string; lock?: string; hastate?: string; votes?: number; cantMove?: string | null; haGuests?: number; stuck?: boolean } = {}) {
+function fake(
+  opts: {
+    disk?: string;
+    lock?: string;
+    hastate?: string;
+    votes?: number;
+    cantMove?: string | null;
+    haGuests?: number;
+    stuck?: boolean;
+    type?: "qemu" | "lxc";
+    /** Proxmox's cluster task list; null when it can't be read. */
+    tasks?: { upid: string; type?: string; id?: string; endtime?: number }[] | null;
+    /** What the guest's node itself says runs now. */
+    active?: { upid: string; type?: string; id?: string }[];
+    offline?: string[];
+    busy?: string | null;
+  } = {},
+) {
   const calls: string[] = [];
   let hastate = opts.hastate;
+  let lock = opts.lock;
+  const type = opts.type ?? "qemu";
   const pve = {
     get: async (path: string) => {
-      if (path === "/cluster/resources?type=vm") return [{ type: "qemu", vmid: 101, name: "web", node: "n3", status: "running", ...(hastate ? { hastate } : {}) }];
+      if (path === "/cluster/resources?type=vm") return [{ type, vmid: 101, name: "web", node: "n3", status: "running", ...(hastate ? { hastate } : {}) }];
+      if (path === "/cluster/tasks") {
+        if (opts.tasks === null) throw new Error("403");
+        return opts.tasks ?? [];
+      }
+      if (path === "/nodes/n3/tasks?source=active") return opts.active ?? [];
+      if (path === "/cluster/resources?type=node") return ["n1", "n2", "n3"].map((n) => ({ node: n, status: opts.offline?.includes(n) ? "offline" : "online" }));
+      if (path === "/nodes/n3/lxc/101/config") return { rootfs: "ISCSI_SHARE:vm-101-disk-0", ...(lock ? { lock } : {}) };
       if (path === "/cluster/resources?type=storage")
         return [
           { type: "storage", storage: "ISCSI_SHARE", node: "n3", shared: 1 },
           { type: "storage", storage: "local-lvm", node: "n3", shared: 0 },
         ];
-      if (path === "/nodes/n3/qemu/101/config") return { scsi0: opts.disk ?? "ISCSI_SHARE:vm-101-disk-0", ...(opts.lock ? { lock: opts.lock } : {}) };
+      if (path === "/nodes/n3/qemu/101/config") return { scsi0: opts.disk ?? "ISCSI_SHARE:vm-101-disk-0", ...(lock ? { lock } : {}) };
       if (path === "/cluster/config/nodes") return Array(opts.votes ?? 3).fill({ quorum_votes: 1 });
       if (path === "/cluster/config/qdevice") return {};
       if (path === "/cluster/ha/resources") return Array(opts.haGuests ?? 0).fill({ sid: "vm:102" });
@@ -57,6 +83,7 @@ function fake(opts: { disk?: string; lock?: string; hastate?: string; votes?: nu
     },
     put: async (path: string, _w: unknown, form: Record<string, string>) => {
       calls.push(`PUT ${path} ${JSON.stringify(form)}`);
+      if (form.delete === "lock") lock = undefined;
       // HA takes the new state on its next cycle, and reports disabled as its own state, stopped. A stuck one stays in error.
       if (path.startsWith("/cluster/ha/resources/") && !opts.stuck) hastate = form.state === "disabled" ? "stopped" : form.state;
       return null;
@@ -73,6 +100,12 @@ function fake(opts: { disk?: string; lock?: string; hastate?: string; votes?: nu
     netCheck: async () => null,
     audit: () => {},
     wait: async () => {},
+    console: async (node, _s, line) => {
+      calls.push(`CONSOLE ${node} ${line}`);
+      if (line === "pct unlock 101") lock = undefined;
+      return { exitCode: 0, output: "" };
+    },
+    busy: () => opts.busy ?? null,
   });
   return { ha, calls };
 }
@@ -97,18 +130,51 @@ test("protect is refused, with nothing sent, for a local disk, two votes, or now
   assert.equal((await ha.check(root, 101)).firstTime, false, "another guest is already protected, so fencing is armed");
 });
 
-test("recover: unlocks a locked guest as root, then disabled and started under HA; others are told how", async () => {
+test("recover: unlocks a locked guest as root, once the lock seen is confirmed, then disabled and started under HA", async () => {
   const { ha, calls } = fake({ hastate: "error", lock: "migrate" });
-  await ha.recover(root, 101);
+  await ha.recover(root, 101, "migrate");
   assert.deepEqual(calls, [
     'PUT /nodes/n3/qemu/101/config {"delete":"lock","skiplock":"1"}',
     'PUT /cluster/ha/resources/vm%3A101 {"state":"disabled"}',
     'PUT /cluster/ha/resources/vm%3A101 {"state":"started"}',
   ]);
   const other = fake({ hastate: "error", lock: "migrate" });
-  await assert.rejects(other.ha.recover({ ...root, username: "admin@pve" } as Session, 101), (e: { status: number; message: string }) => e.status === 403 && /qm unlock 101/.test(e.message));
+  await assert.rejects(other.ha.recover({ ...root, username: "admin@pve" } as Session, 101, "migrate"), (e: { status: number; message: string }) => e.status === 403 && /root@pam/.test(e.message));
   assert.deepEqual(other.calls, []);
   await assert.rejects(fake({ hastate: "started" }).ha.recover(root, 101), (e: { status: number }) => e.status === 400);
+});
+
+test("a container is unlocked with Proxmox's own pct unlock, and nothing BossMox can't vouch for is unlocked (ADR 0044)", async () => {
+  const ct = fake({ hastate: "error", lock: "backup", type: "lxc" });
+  await ct.ha.recover(root, 101, "backup");
+  assert.deepEqual(ct.calls.slice(0, 2), ["CONSOLE n3 pct unlock 101", 'PUT /cluster/ha/resources/ct%3A101 {"state":"disabled"}']);
+
+  const refused = async (opts: Parameters<typeof fake>[0], saw: string, why: RegExp) => {
+    const f = fake({ hastate: "error", lock: "backup", type: "lxc", ...opts });
+    await assert.rejects(f.ha.recover(root, 101, saw), (e: { message: string }) => why.test(e.message), String(why));
+    assert.deepEqual(f.calls, [], "nothing was sent");
+  };
+  await refused({}, "", /confirm that lock/);
+  await refused({}, "migrate", /confirm that lock/);
+  await refused({ tasks: [{ upid: "UPID:n1:1:2:3:vzdump:101:root@pam:", type: "vzdump", id: "101" }] }, "backup", /task for web is still running \(vzdump\)/);
+  await refused({ tasks: [{ upid: "UPID:n3:1:2:3:vzdump::root@pam:", type: "vzdump", id: "" }] }, "backup", /backup is running on n3/);
+  await refused({ tasks: null }, "backup", /couldn't read Proxmox's task list/);
+  await refused({ busy: "A run" }, "backup", /A run is going/);
+  await refused({ active: [{ upid: "UPID:n3:1:2:3:vzdump:101:root@pam:", type: "vzdump", id: "101" }] }, "backup", /task for web is still running/);
+  await refused({ offline: ["n1"] }, "backup", /n1 is offline/);
+  await refused({ lock: "mounted" }, "mounted", /something was half done/);
+  await refused({ lock: "create" }, "create", /something was half done/);
+  // Waiting for BossMox doesn't depend on a lock: an unlocked guest on a node about to restart waits too.
+  const unlocked = fake({ hastate: "error", busy: "The upgrade of n3" });
+  await assert.rejects(unlocked.ha.recover(root, 101), /The upgrade of n3 is going/);
+  assert.deepEqual(unlocked.calls, []);
+  const hibernated = fake({ hastate: "error", lock: "suspended" });
+  await assert.rejects(hibernated.ha.recover(root, 101, "suspended"), /hibernated/);
+  assert.deepEqual(hibernated.calls, []);
+  // A finished task holds nothing.
+  const done = fake({ hastate: "error", lock: "backup", type: "lxc", tasks: [{ upid: "UPID:n3:1:2:3:vzdump::root@pam:", type: "vzdump", endtime: 5 }] });
+  await done.ha.recover(root, 101, "backup");
+  assert.equal(done.calls[0], "CONSOLE n3 pct unlock 101");
 });
 
 test("recover waits for HA to leave its error state, and says so if it doesn't within a minute (lab, 2026-11-12)", async () => {

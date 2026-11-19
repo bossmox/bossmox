@@ -11,6 +11,7 @@ import { jobFor, stillAway } from "../moves.js";
 import { runFor } from "../run.js";
 import { buildUsage, RANGES, type Range, type RawPoint } from "../usage.js";
 import { NODE_NAME, UPID } from "../checks.js";
+import { KEEP_FREE_CHOICES } from "../preferences.js";
 import { buildMovePlan, buildRebootPlan, buildTaskLog, section, taskView, type RawBackupStorage, type RawMovePrecondition, type RawTask, type RawTaskStatus } from "../server-detail.js";
 import type { Session } from "../auth.js";
 import type { RawStorage, RouteContext } from "../server.js";
@@ -41,8 +42,11 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
     snapshotFixFor,
     updateView,
     viewerOf,
+    help,
   } = c;
   const routes: Record<string, GetRoute> = {
+    // Every article at once: the page never names a file, so nothing in a request reaches the disk (ADR 0044).
+    "/api/help": async (_route, _session, _params, _req, res) => json(res, 200, { articles: help }),
     "/api/task": async (_route, session, params, _req, res) => {
       const name = params.get("server") ?? "";
       const upid = params.get("task") ?? "";
@@ -257,7 +261,13 @@ export function getRoutes(c: RouteContext): Record<string, GetRoute> {
       const kind = asked === "restart" ? "restart" : asked === "upgrade" ? "upgrade" : "update";
       const name = params.get("server") ?? "";
       if (kind === "restart" && !NODE_NAME.test(name)) return json(res, 400, { error: "That server name isn't valid." });
-      return json(res, 200, await jobs.runPlan(session, kind, name));
+      const only = params.get("only") ?? "";
+      if (only && (kind !== "upgrade" || !NODE_NAME.test(only))) return json(res, 400, { error: "That server name isn't valid." });
+      // Keep free for this run only, to see the plan with it; starting it checks the permission (ADR 0044).
+      const keepAsked = params.get("keep");
+      const keep = keepAsked === null ? undefined : Number(keepAsked);
+      if (keep !== undefined && !KEEP_FREE_CHOICES.includes(keep)) return json(res, 400, { error: "That Keep free value isn't one of the choices." });
+      return json(res, 200, await jobs.runPlan(session, kind, name, [], only, keep));
     },
     "/api/moves": async (_route, session, _params, _req, res) => {
       // Only what's still where BossMox left it can go home; the rest was moved by someone since.

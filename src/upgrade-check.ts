@@ -63,40 +63,102 @@ export interface Explained {
   original: string;
   /** The fix BossMox runs for it, when there is one. */
   fixId?: "lvm-autoactivation";
+  /** The Help article that explains it in full (ADR 0044): a key in docs/help, never a path. */
+  help: HelpKey;
 }
+
+/** Every article the upgrade checker can point to. A finding BossMox doesn't know gets the general one. */
+export const UPGRADE_HELP = [
+  "upgrade-checker",
+  "upgrade-running-guests",
+  "upgrade-lvm-autoactivation",
+  "upgrade-microcode",
+  "upgrade-latest-8",
+  "upgrade-systemd-boot",
+  "upgrade-ceph",
+  "upgrade-root-space",
+  "upgrade-passthrough",
+  "upgrade-storage-plugins",
+  "upgrade-port-names",
+  "upgrade-free-channel",
+] as const;
+export type HelpKey = (typeof UPGRADE_HELP)[number];
 
 /** Findings BossMox knows, put in plain words. Anything else is shown as Proxmox wrote it. */
 const KNOWN: { match: RegExp; explain: (f: Finding, m: RegExpExecArray) => Omit<Explained, "level" | "original"> }[] = [
   {
     match: /(\d+) running guest\(s\) detected/,
     explain: (_f, m) => ({
-      title: `${m[1]} guests are running on this node`,
+      title: `${m[1]} ${m[1] === "1" ? "guest is" : "guests are"} running on this node`,
       detail: "BossMox moves them to another node before upgrading this one, as it does for updates.",
       handling: "bossmox",
+      help: "upgrade-running-guests",
     }),
   },
   {
+    // "Autoactivation" reads like switching something off, even HA (Rocky, 2026-11-19). Say what changes and what doesn't.
     match: /autoactivation will be disabled[\s\S]*shared LVM/,
     explain: () => ({
-      title: "Shared LVM storage: turn off autoactivation first",
+      title: "Shared storage: stop every node opening every old VM disk",
       detail:
-        "Proxmox VE 9 creates new disks on LVM storage with autoactivation off. Disks made before still have it on, and on storage shared between nodes that has known problems, so Proxmox strongly recommends turning it off. BossMox can run Proxmox's own command for it.",
+        "VM disks made before Proxmox VE 9 on the shared storage are opened by every node when it restarts, not just the node running the VM, which Proxmox says causes known problems. The fix changes one setting on each existing disk. It creates no disks and moves no data, and running VMs and HA aren't affected. BossMox runs Proxmox's own command for it.",
       handling: "fix",
       fixId: "lvm-autoactivation",
+      help: "upgrade-lvm-autoactivation",
     }),
   },
   {
     match: /autoactivation will be disabled/,
     explain: () => ({
-      title: "LVM storage: autoactivation can be turned off",
-      detail: "Proxmox VE 9 creates new disks with autoactivation off. Turning it off for older disks is optional on storage only this node uses. BossMox can run Proxmox's own command for it.",
+      title: "This node's own storage: an optional disk setting",
+      detail:
+        "VM disks made before Proxmox VE 9 are opened when the node restarts. On storage only this node uses that does no harm, so changing it is optional. It creates no disks and moves no data. BossMox can run Proxmox's own command for it.",
       handling: "fix",
       fixId: "lvm-autoactivation",
+      help: "upgrade-lvm-autoactivation",
     }),
   },
   {
     match: /has guest volumes with autoactivation enabled/,
-    explain: (f) => ({ title: "Disks with autoactivation on", detail: f.text, handling: "advice" }),
+    explain: (f) => ({ title: "Disks with autoactivation on", detail: f.text, handling: "advice", help: "upgrade-lvm-autoactivation" }),
+  },
+  {
+    match: /systemd-boot package installed on legacy-boot system/,
+    explain: () => ({
+      title: "A boot package this node doesn't use",
+      detail:
+        "This node starts the older (BIOS) way, so the systemd-boot package isn't used, and Proxmox's checker suggests removing it. It's a warning only: the upgrade goes ahead with it installed. BossMox doesn't remove it.",
+      handling: "advice",
+      help: "upgrade-systemd-boot",
+    }),
+  },
+  {
+    match: /Hyper-converged Ceph (\d+) (\w+) is too? old/,
+    explain: (_f, m) => ({
+      title: `Ceph ${m[1]} (${m[2]}) is installed and too old for Proxmox VE 9`,
+      detail:
+        "Proxmox VE 9 needs Ceph Squid (19.2) first. If this cluster keeps data in Ceph, upgrade Ceph in Proxmox's own interface before upgrading Proxmox: BossMox doesn't upgrade Ceph. If Ceph was set up once and never used, its leftover packages and settings cause this.",
+      handling: "blocks",
+      help: "upgrade-ceph",
+    }),
+  },
+  {
+    match: /unable to determine Ceph (status|daemon versions)|failed to get 'noout' flag status/,
+    explain: (f) => ({
+      title: "Ceph doesn't answer",
+      detail: `Proxmox's checker found Ceph set up on this node but couldn't reach it (${f.text.split("\n")[0]}). Either Ceph is down, or it's left over from a Ceph setup nothing uses any more.`,
+      handling: "blocks",
+      help: "upgrade-ceph",
+    }),
+  },
+  {
+    match: /'noout' flag not set/,
+    explain: () => ({
+      title: "Ceph's 'noout' flag isn't set",
+      detail: "The flag stops Ceph copying data around while a node restarts. It only matters if this cluster keeps data in Ceph.",
+      handling: "advice",
+      help: "upgrade-ceph",
+    }),
   },
   {
     // Proxmox VE 9's checker adds this FAIL beside the WARN below when the package isn't there (8.4's only warned).
@@ -106,6 +168,7 @@ const KNOWN: { match: RegExp; explain: (f: Finding, m: RegExpExecArray) => Omit<
       title: "No processor microcode package",
       detail: `Proxmox VE 9's checker counts a missing ${m[1]} as a failure, but it doesn't stop the upgrade. The package carries security fixes for the processor, from Debian's non-free-firmware section, and can be installed any time. On a virtual machine it does nothing.`,
       handling: "advice",
+      help: "upgrade-microcode",
     }),
   },
   {
@@ -114,18 +177,19 @@ const KNOWN: { match: RegExp; explain: (f: Finding, m: RegExpExecArray) => Omit<
       title: "No processor microcode package",
       detail: `The package ${m[1]} carries security fixes for the processor. It comes from Debian's non-free-firmware section. On a virtual machine it does nothing.`,
       handling: "advice",
+      help: "upgrade-microcode",
     }),
   },
   {
     match: /proxmox-ve package (is too old|has version)/,
     explain: (f) =>
       f.level === "PASS"
-        ? { title: "On the latest Proxmox VE 8", detail: "", handling: "advice" }
-        : { title: "Not on the latest Proxmox VE 8 yet", detail: "Run Update all nodes first: the upgrade starts from the newest 8.4.", handling: "blocks" },
+        ? { title: "On the latest Proxmox VE 8", detail: "", handling: "advice", help: "upgrade-latest-8" }
+        : { title: "Not on the latest Proxmox VE 8 yet", detail: "Run Update all nodes first: the upgrade starts from the newest 8.4.", handling: "blocks", help: "upgrade-latest-8" },
   },
   {
     match: /updates? (available|pending)|not all packages up-to-date/i,
-    explain: () => ({ title: "Updates are waiting", detail: "Run Update all nodes first: the upgrade starts from the newest 8.4.", handling: "blocks" }),
+    explain: () => ({ title: "Updates are waiting", detail: "Run Update all nodes first: the upgrade starts from the newest 8.4.", handling: "blocks", help: "upgrade-latest-8" }),
   },
 ];
 
@@ -135,7 +199,14 @@ export function explain(f: Finding): Explained {
     if (m) return { level: f.level, original: f.text, ...k.explain(f, m) };
   }
   const first = f.text.split("\n")[0] ?? f.text;
-  return { level: f.level, title: first, detail: f.text === first ? "" : f.text.slice(first.length + 1), handling: f.level === "FAIL" ? "blocks" : "advice", original: f.text };
+  return {
+    level: f.level,
+    title: first,
+    detail: f.text === first ? "" : f.text.slice(first.length + 1),
+    handling: f.level === "FAIL" ? "blocks" : "advice",
+    original: f.text,
+    help: "upgrade-checker",
+  };
 }
 
 /** What needs the person's attention: failures, warnings and notices, explained. Passes and info stay out of the way. */

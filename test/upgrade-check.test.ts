@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { attention, blockers, explain, parseChecker } from "../src/upgrade-check.js";
+import { UPGRADE_HELP, attention, blockers, explain, parseChecker } from "../src/upgrade-check.js";
 
 /** pve8to9 --full on a Proxmox 8.4.21 lab node with shared LVM over iSCSI, names and address changed. */
 const LAB = readFileSync(new URL("../../test/pve8to9-8.4-shared-lvm.txt", import.meta.url), "utf8");
@@ -39,7 +39,7 @@ test("what needs attention is explained in plain words, with who deals with it",
     [
       ["WARN", "bossmox", "2 guests are running on this node"],
       ["NOTICE", "advice", "Disks with autoactivation on"],
-      ["WARN", "fix", "Shared LVM storage: turn off autoactivation first"],
+      ["WARN", "fix", "Shared storage: stop every node opening every old VM disk"],
       ["WARN", "advice", "No processor microcode package"],
     ],
   );
@@ -78,4 +78,58 @@ test("a failure BossMox doesn't know still blocks, in Proxmox's words", () => {
 test("an old proxmox-ve blocks until Update all nodes has run", () => {
   assert.equal(explain({ level: "FAIL", section: "", text: "proxmox-ve package is too old, please upgrade to >= 8.4-1!" }).handling, "blocks");
   assert.equal(explain({ level: "PASS", section: "", text: "proxmox-ve package has version >= 8.4-0" }).handling, "advice");
+});
+
+/** pve8to9 --full lines from a real 8.4 cluster with a Ceph setup nobody used (2026-11-18), exactly as printed. */
+const CEPH_LEFTOVER = [
+  "FAIL: failed to get 'noout' flag status - got timeout",
+  "FAIL: unable to determine Ceph status!",
+  "FAIL: Hyper-converged Ceph 17 Quincy is to old for upgrade!",
+  "FAIL: unable to determine Ceph daemon versions!",
+  "WARN: 'noout' flag not set - recommended to prevent rebalancing during upgrades.",
+  "WARN: systemd-boot package installed on legacy-boot system is not necessary, consider removing it",
+].join("\n\n");
+
+test("the shared-storage warning says what changes and what doesn't (ADR 0044: it read like turning off HA)", () => {
+  const lvm = attention(parseChecker(LAB)).find((e) => e.fixId === "lvm-autoactivation" && e.level === "WARN");
+  assert.ok(lvm, "found");
+  assert.doesNotMatch(lvm.title, /autoactivation|turn off/i);
+  assert.match(lvm.detail, /creates no disks/);
+  assert.match(lvm.detail, /running VMs and HA aren't affected/);
+  assert.equal(lvm.help, "upgrade-lvm-autoactivation");
+});
+
+test("a Ceph setup nobody used is explained, and still blocks the upgrade", () => {
+  const run = parseChecker(CEPH_LEFTOVER);
+  const fails = attention(run).filter((e) => e.level === "FAIL");
+  assert.deepEqual(
+    fails.map((e) => [e.handling, e.title, e.help]),
+    [
+      ["blocks", "Ceph doesn't answer", "upgrade-ceph"],
+      ["blocks", "Ceph doesn't answer", "upgrade-ceph"],
+      ["blocks", "Ceph 17 (Quincy) is installed and too old for Proxmox VE 9", "upgrade-ceph"],
+      ["blocks", "Ceph doesn't answer", "upgrade-ceph"],
+    ],
+  );
+  assert.equal(blockers(run).length, 4, "the same four still stop it");
+  assert.equal(explain({ level: "FAIL", section: "", text: "Hyper-converged Ceph 18 Reef is too old for upgrade!" }).title, "Ceph 18 (Reef) is installed and too old for Proxmox VE 9");
+  const noout = attention(run).find((e) => e.title === "Ceph's 'noout' flag isn't set");
+  assert.equal(noout?.handling, "advice");
+});
+
+test("systemd-boot on a BIOS node is advice in plain words, not a blocker, and BossMox says it doesn't remove it", () => {
+  const e = attention(parseChecker(CEPH_LEFTOVER)).find((x) => x.help === "upgrade-systemd-boot");
+  assert.equal(e?.handling, "advice");
+  assert.equal(e?.title, "A boot package this node doesn't use");
+  assert.match(e?.detail ?? "", /BossMox doesn't remove it/);
+});
+
+test("every item, known or not, names a Help article from the fixed list", () => {
+  const all = [...attention(parseChecker(LAB)), ...attention(parseChecker(AFTER)), ...attention(parseChecker(CEPH_LEFTOVER)), explain({ level: "FAIL", section: "", text: "something new" })];
+  for (const e of all) assert.ok((UPGRADE_HELP as readonly string[]).includes(e.help), `${e.title}: ${e.help}`);
+  assert.equal(explain({ level: "WARN", section: "", text: "something new" }).help, "upgrade-checker");
+});
+
+test("one running guest reads as one guest (lab browser check, 2026-11-19)", () => {
+  assert.equal(explain({ level: "WARN", section: "", text: "1 running guest(s) detected - consider migrating or stopping them." }).title, "1 guest is running on this node");
 });

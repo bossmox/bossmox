@@ -259,3 +259,107 @@ test("runs and moves wait while a node is upgrading on its own (review 2026-11-1
     c.done();
   }
 });
+
+test("Upgrade this node plans the same run cut to that node, and refuses a node not waiting for it (ADR 0044)", async () => {
+  const c = cluster();
+  c.ctx.upgrade = {
+    plan: async () => [
+      { name: "n1", version: "8.4.21", to: 9, finishing: false },
+      { name: "n2", version: "8.4.21", to: 9, finishing: false },
+    ],
+    run: async () => {
+      throw new Error("not in this test");
+    },
+  } as never;
+  try {
+    const jobs = createJobs(c.ctx);
+    const all = await jobs.runPlan(person, "upgrade", "");
+    assert.deepEqual(
+      all.nodes.map((n) => n.name),
+      ["n1", "n2"],
+    );
+    const one = await jobs.runPlan(person, "upgrade", "", [], "n2");
+    assert.deepEqual(
+      one.nodes.map((n) => [n.name, n.restart, n.upgrade?.to]),
+      [["n2", true, 9]],
+    );
+    assert.deepEqual(one.blocked, [], "the same checks ran and passed");
+    await assert.rejects(jobs.runPlan(person, "upgrade", "", [], "n3"), /n3 isn't waiting for the upgrade/);
+    await assert.rejects(jobs.runPlan(person, "restart", "n1", [], "n1"), /Only an upgrade can be run for one node/);
+    await assert.rejects(jobs.startRun(person, "upgrade", "", true, {}, "n3"), /n3 isn't waiting for the upgrade/);
+  } finally {
+    c.done();
+  }
+});
+
+test("BossMox's own guest is found among a node's moves by its network card; an unreadable one refuses (Empty this node)", async () => {
+  const c = cluster({
+    guests: [
+      { id: 100, name: "web", node: "n1" },
+      { id: 101, name: "bossmox", node: "n1", type: "lxc" },
+    ],
+  });
+  c.ctx.macs = () => new Set(["bc:24:11:00:00:101"]);
+  const real = c.ctx.pve.get;
+  c.ctx.pve.get = ((p: string, t: string) => (p.includes("/999/") ? Promise.reject(new Error("403")) : real(p, t))) as never;
+  try {
+    const jobs = createJobs(c.ctx);
+    const moves = [
+      { id: 100, name: "web", type: "qemu" as const, target: "n2" },
+      { id: 101, name: "bossmox", type: "lxc" as const, target: "n2" },
+    ];
+    assert.equal((await jobs.selfGuest("t", "n1", moves))?.name, "bossmox");
+    assert.equal(await jobs.selfGuest("t", "n1", moves.slice(0, 1)), null);
+    await assert.rejects(jobs.selfGuest("t", "n1", [{ id: 999, name: "ghost", type: "qemu", target: "n2" }]), /couldn't read ghost's settings/);
+  } finally {
+    c.done();
+  }
+});
+
+test("a run's own Keep free plans its moves, and the saved setting stays as it was (ADR 0044)", async () => {
+  const c = cluster();
+  try {
+    const jobs = createJobs(c.ctx);
+    assert.equal((await jobs.runPlan("t", "restart", "n1")).keepFreePct, 10, "the saved setting by default");
+    assert.equal((await jobs.runPlan("t", "restart", "n1", [], "", 25)).keepFreePct, 25, "this run's own value");
+    assert.equal(c.ctx.preferences().keepFreePct, 10, "nothing saved");
+  } finally {
+    c.done();
+  }
+});
+
+test("while a run with its own Keep free goes, other planning still uses the saved setting (review 0.3.2, Gemini H2)", async () => {
+  const c = cluster();
+  try {
+    const jobs = createJobs(c.ctx);
+    const release = c.hold();
+    const started = jobs.startRun(person, "restart", "n1", true, {}, "", 25);
+    release();
+    await started;
+    assert.equal(jobs.currentRun?.keepFreePct, 25, "the run carries its own value");
+    assert.equal((await jobs.runPlan("t", "restart", "n2")).keepFreePct, 10, "another plan, during the run, gets the saved setting");
+    assert.equal((await jobs.planEvacuation("t", "n2")).keepFreePct, 10, "and so does a move or HA's check");
+    // Stop the run and let it end, so nothing is still writing when the test's folder goes.
+    if (jobs.currentRun) jobs.currentRun.stop = "test over";
+    for (let i = 0; i < 200 && jobs.currentRun?.running; i++) await new Promise((r) => setTimeout(r, 10));
+  } finally {
+    c.done();
+  }
+});
+
+test("a guest whose settings can't be read is never quietly planned for a shut down: it could be BossMox (review 0.3.2, R12)", async () => {
+  const c = cluster();
+  const real = c.ctx.pve.get;
+  c.ctx.pve.get = ((p: string, t: string) => (p.endsWith("/qemu/101/config") ? Promise.reject(new Error("403")) : real(p, t))) as never;
+  try {
+    const outcome = await createJobs(c.ctx)
+      .runPlan("t", "restart", "n1")
+      .then(
+        (plan) => ({ refused: plan.blocked.some((b) => /couldn't read the settings of db/.test(b)), plan }),
+        () => ({ refused: true, plan: null }),
+      );
+    assert.ok(outcome.refused, "the plan is refused, never offered with db shut down as if it weren't BossMox");
+  } finally {
+    c.done();
+  }
+});

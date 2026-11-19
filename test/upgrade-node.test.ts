@@ -12,10 +12,12 @@ import {
   onRelease,
   READY_FOR_MS,
   readUpgrade,
+  readProgress,
   followCommand,
   UPGRADE_NEEDS_MS,
   UPGRADE_SCRIPT,
   upgradeCommand,
+  upgradeScript,
   type NodeUpgrade,
   type NodeUpgradeDeps,
 } from "../src/upgrade-node.js";
@@ -49,8 +51,8 @@ test("the upgrade answers no questions, keeps changed config files, and runs as 
   assert.match(UPGRADE_SCRIPT, /^if ! systemctl is-active --quiet bossmox-upgrade; then/);
   assert.ok(UPGRADE_SCRIPT.endsWith(FOLLOW_SCRIPT));
   // Typed as base64, so the console's echo can't hold a marker line.
-  assert.doesNotMatch(upgradeCommand(), /BMXUP/);
-  assert.equal(Buffer.from(/'([A-Za-z0-9+/=]+)'/.exec(upgradeCommand())?.[1] ?? "", "base64").toString(), UPGRADE_SCRIPT);
+  assert.doesNotMatch(upgradeCommand("0000000000000000"), /BMXUP/);
+  assert.equal(Buffer.from(/'([A-Za-z0-9+/=]+)'/.exec(upgradeCommand("0000000000000000"))?.[1] ?? "", "base64").toString(), UPGRADE_SCRIPT);
 });
 
 test("reading the node: running, ended with a code, killed, or nothing readable", () => {
@@ -102,10 +104,17 @@ function lab(
     follow?: string[];
     /** A guest starts on n2 once its packages are in, before the restart. */
     arrive?: boolean;
+    /** The node's sources once its packages are in, and its subscription (keeping the free channel, ADR 0044). */
+    reposAfter?: RawRepositories;
+    sub?: { status: string };
   } = {},
 ) {
   const calls: string[] = [];
+  const off = new Set<string>();
   const follow = [...(over.follow ?? [])];
+  // What the node's id file holds: a stuck node's job was started by an earlier upgrade.
+  let jobId: string | null = over.stuck ? "feedfacefeedface" : null;
+  const withId = (text: string) => (jobId && !text.startsWith("BMXID") ? `BMXID ${jobId}\n${text}` : text);
   let upgraded = over.stuck ?? false;
   let rebooted = false;
   const deps: NodeUpgradeDeps = {
@@ -126,14 +135,26 @@ function lab(
               ...(over.guests ?? [{ node: "n1", vmid: 100, name: "bossmox", status: "running" }]),
               ...(over.arrive && upgraded ? [{ node: "n2", vmid: 105, name: "late", status: "running" }] : []),
             ];
-          if (path.endsWith("/apt/repositories")) return over.repos ?? ON_TRIXIE;
+          if (path.endsWith("/apt/repositories")) {
+            const r = upgraded && over.reposAfter ? over.reposAfter : (over.repos ?? ON_TRIXIE);
+            // What BossMox turned off reads back as off, as Proxmox would show it.
+            return { ...r, files: (r.files ?? []).map((f) => ({ ...f, repositories: (f.repositories ?? []).map((x, i) => (off.has(`${f.path}#${i}`) ? { ...x, Enabled: 0 } : x)) })) };
+          }
+          if (path.endsWith("/subscription")) {
+            if (!over.sub) throw new Error("no subscription answer");
+            return over.sub;
+          }
           if (path.endsWith("/apt/update")) return over.apt ?? [];
           if (path.endsWith("/apt/versions")) return upgraded ? kernels(rebooted ? (over.kernelAfter ?? "6.17.2-1-pve") : "6.8.12-43-pve") : [];
           throw new Error(`unexpected ${path}`);
         })();
         return r as T;
       },
-      async post<T>(): Promise<T> {
+      async post<T>(path: string, _who: unknown, form?: Record<string, string>): Promise<T> {
+        if (path.endsWith("/apt/repositories") && form?.enabled === "0") {
+          calls.push(`off ${form.path}`);
+          off.add(`${form.path}#${form.index}`);
+        }
         return null as T;
       },
     },
@@ -144,11 +165,12 @@ function lab(
       }
       if (line === followCommand()) {
         calls.push("follow");
-        return out(follow.shift() ?? "BMXUP noexit\n");
+        return out(withId(follow.shift() ?? "BMXUP noexit\n"));
       }
       calls.push("upgrade");
+      jobId = idIn(line);
       upgraded = true;
-      return out("BMXUP exit 0\nConfiguration file '/etc/issue'\n");
+      return out(withId("BMXUP exit 0\nConfiguration file '/etc/issue'\n"));
     },
     pin: async () => {
       calls.push("pin");
@@ -164,6 +186,8 @@ function lab(
   };
   return { deps, calls };
 }
+/** The upgrade id in a typed upgrade command, as the node would write it. */
+const idIn = (line: string) => /echo ([0-9a-f]{16}) >/.exec(Buffer.from(/'([A-Za-z0-9+/=]+)'/.exec(line)?.[1] ?? "", "base64").toString())?.[1] ?? null;
 const finish = async (job: ReturnType<typeof createNodeUpgrade>, node: string) => {
   for (let i = 0; i < 100 && job.running(); i++) await new Promise((r) => setTimeout(r, 1));
   return job.view()[node];
@@ -175,7 +199,7 @@ test("a switched, empty node goes through every step in order and is checked on 
   await job.start(root(), "n2", "N2");
   const r = await finish(job, "n2");
   assert.equal(r?.phase, "done", r?.error ?? "");
-  assert.deepEqual(calls, ["checker", "forget", "upgrade", "checker-after", "pin", "reboot"]);
+  assert.deepEqual(calls, ["checker", "upgrade", "forget", "checker-after", "pin", "reboot"]);
   assert.equal(r?.version, "9.1.1");
   assert.equal(r?.kernel, "6.17.2-1-pve");
   assert.deepEqual(r?.keptConfig, ["/etc/issue"]);
@@ -201,6 +225,7 @@ test("a checker failure before the packages changes nothing, not even the way ba
   const r = await finish(job, "n2");
   assert.equal(r?.phase, "failed");
   assert.match(r?.error ?? "", /Nothing was changed/);
+  assert.equal(r?.packagesTouched, false, "the run may start its guests again: the node is as it was");
   assert.deepEqual(calls, ["checker"]);
 });
 
@@ -210,7 +235,7 @@ test("the 9 checker's missing-microcode failure doesn't stop the restart (it's o
   await job.start(root(), "n2", "n2");
   const r = await finish(job, "n2");
   assert.equal(r?.phase, "done", r?.error ?? "");
-  assert.deepEqual(calls, ["checker", "forget", "upgrade", "checker-after", "pin", "reboot"]);
+  assert.deepEqual(calls, ["checker", "upgrade", "forget", "checker-after", "pin", "reboot"]);
   assert.equal(r?.after?.failures, 1);
   assert.deepEqual(r?.after?.blocking, []);
 });
@@ -238,7 +263,7 @@ test("an apt error stops before the restart and says where the log is", async ()
   deps.console = async (_n, _s, line) => {
     if (line.startsWith("pve8to9")) return out(CHECK_OK);
     calls.push("upgrade");
-    return out("BMXUP exit 100\nBMXERR E: Sub-process /usr/bin/dpkg returned an error code (1)\n");
+    return out(`BMXID ${idIn(line)}\nBMXUP exit 100\nBMXERR E: Sub-process /usr/bin/dpkg returned an error code (1)\n`);
   };
   const job = createNodeUpgrade(deps);
   await job.start(root(), "n2", "n2");
@@ -252,19 +277,21 @@ test("a console that drops mid-upgrade is followed until the job on the node end
   const { deps } = lab();
   let follows = 0;
   let upgraded = false;
+  let started: string | null = null;
   const get = deps.pve.get.bind(deps.pve);
   deps.pve.get = async <T>(path: string) => (path.endsWith("/version") ? ({ version: upgraded ? "9.1.1" : "8.4.21" } as T) : get<T>(path, "t"));
   deps.console = async (_n, _s, line) => {
     if (line.startsWith("pve8to9")) return out(CHECK_OK);
-    // The first console is the upgrade: pveproxy restarts and takes it.
-    if (follows === 0 && line === upgradeCommand()) {
+    // The first console is the upgrade: the job starts, then pveproxy restarts and takes the console.
+    if (follows === 0 && idIn(line)) {
       follows++;
+      started = idIn(line);
       throw new Error("The console on n2 closed before the install finished.");
     }
     follows++;
-    if (follows < 4) return out("BMXUP running\n");
+    if (follows < 4) return out(`BMXID ${started}\nBMXUP running\n`);
     upgraded = true;
-    return out("BMXUP exit 0\n");
+    return out(`BMXID ${started}\nBMXUP exit 0\n`);
   };
   const job = createNodeUpgrade(deps);
   await job.start(root(), "n2", "n2");
@@ -359,7 +386,7 @@ test("the run's plan is refused without a fresh, clear readiness check, for anyo
 
 test("one node in a run: sources switched first when they aren't, then the whole upgrade", async () => {
   const log: string[] = [];
-  const done = { restarted: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve" } as unknown as NodeUpgrade;
+  const done = { restarted: true, packagesTouched: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve" } as unknown as NodeUpgrade;
   const ru = (repos: RawRepositories, stuck = false, switchError: string | null = null) =>
     createRunUpgrade({
       pve: planPve({ a: { v: stuck ? "9.2.28" : "8.4.21", stuck } }, repos),
@@ -379,7 +406,7 @@ test("one node in a run: sources switched first when they aren't, then the whole
       },
       ready: () => readyNow(),
     });
-  assert.deepEqual(await ru(ON_BOOKWORM).run(root(), "a"), { restarted: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve" });
+  assert.deepEqual(await ru(ON_BOOKWORM).run(root(), "a"), { restarted: true, packagesTouched: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve" });
   assert.deepEqual(log.splice(0), ["switch a a bookworm->trixie", "upgrade a"]);
   await ru(ON_TRIXIE).run(root(), "a");
   assert.deepEqual(log.splice(0), ["upgrade a"], "already switched: not again");
@@ -387,6 +414,7 @@ test("one node in a run: sources switched first when they aren't, then the whole
   assert.deepEqual(log.splice(0), ["upgrade a"], "a stuck node is finished without touching its sources");
   const bad = await ru(ON_BOOKWORM, false, "apt couldn't use the new sources, so the old ones were put back.").run(root(), "a");
   assert.equal(bad.restarted, false);
+  assert.equal(bad.packagesTouched, false, "a failed switch never touched the packages");
   assert.match(bad.error ?? "", /a's update sources weren't switched: apt couldn't/);
   assert.deepEqual(log.splice(0), ["switch a a bookworm->trixie"], "no upgrade after a failed switch");
 });
@@ -422,13 +450,14 @@ test("packages left half in after the upgrade's own job also stop the restart (r
   deps.console = async (_n, _s, line) => {
     if (line.startsWith("pve8to9")) return out(CHECK_OK);
     calls.push("upgrade");
-    return out("BMXUP exit 0\nBMXUP unfinished-packages\n");
+    return out(`BMXID ${idIn(line)}\nBMXUP exit 0\nBMXUP unfinished-packages\n`);
   };
   const job = createNodeUpgrade(deps);
   await job.start(root(), "n2", "n2");
   const r = await finish(job, "n2");
   assert.equal(r?.phase, "failed");
   assert.match(r?.error ?? "", /didn't finish installing/);
+  assert.equal(r?.packagesTouched, true, "part way between versions: the run must not start its guests here");
 });
 
 test("a guest that starts on the node during the upgrade stops it before the pins and the restart (review 2026-11-16)", async () => {
@@ -489,4 +518,106 @@ test("a run that switched a node's sources and then stopped before its packages 
   assert.deepEqual(log.splice(0), ["switch a", "undo a"]);
   await ru(true).run(root(), "a");
   assert.deepEqual(log.splice(0), ["switch a"], "a node that restarted keeps its new sources");
+});
+
+test("the package job reports how far it is, from its own log, numbers only (ADR 0044)", () => {
+  assert.match(FOLLOW_SCRIPT, /BMXPROG/);
+  assert.doesNotMatch(UPGRADE_SCRIPT, /--wait/, "the job starts and the console returns; short checks follow it");
+  assert.deepEqual(readProgress("BMXPROG 168 40 12\nBMXUP running\n"), { total: 168, done: 40, quietSeconds: 12 });
+  assert.deepEqual(readProgress("BMXPROG 0 0 -3\n"), { total: 0, done: 0, quietSeconds: 0 }, "a clock a little off isn't negative");
+  for (const bad of ["BMXPROG 1 2", "BMXPROG a b c", "BMXPROG 1 2 3 <script>", "xBMXPROG 1 2 3"]) assert.equal(readProgress(bad), null, bad);
+  assert.deepEqual(readUpgrade("BMXPROG 10 4 2\nBMXUP running\n").progress, { total: 10, done: 4, quietSeconds: 2 });
+});
+
+test("while the packages install, the node's upgrade carries their progress, and drops it once they're in", async () => {
+  const seen: unknown[] = [];
+  const { deps } = lab({ follow: ["BMXPROG 168 40 3\nBMXUP running\n", "BMXPROG 168 168 1\nBMXUP exit 0\n"] });
+  let job: ReturnType<typeof createNodeUpgrade> | null = null;
+  deps.pause = async () => {
+    const p = job?.view().n2?.progress;
+    seen.push(p ? { ...p, at: 0 } : null);
+  };
+  deps.console = ((orig) => async (n: string, sess: never, line: string, t?: number) => {
+    // The upgrade's first answer: started, still running.
+    if (line !== followCommand() && !line.startsWith("pve8to9")) {
+      await orig(n, sess, line, t);
+      return out("BMXPROG 168 0 0\nBMXUP running\n");
+    }
+    return orig(n, sess, line, t);
+  })(deps.console) as never;
+  job = createNodeUpgrade(deps);
+  await job.start(root(), "n2", "n2");
+  const r = await finish(job, "n2");
+  assert.equal(r?.phase, "done", r?.error ?? "");
+  assert.deepEqual(seen.slice(0, 2), [
+    { total: 168, done: 0, quietSeconds: 0, at: 0 },
+    { total: 168, done: 40, quietSeconds: 3, at: 0 },
+  ]);
+  assert.equal(r?.progress, null, "gone once the packages are in");
+});
+
+test("the upgrade keeps a free-channel node on the free channel: the paid source the packages add is turned off (ADR 0044)", async () => {
+  const before: RawRepositories = {
+    files: [
+      { path: "/etc/apt/sources.list.d/proxmox.sources", repositories: [{ Enabled: 1, URIs: ["http://download.proxmox.com/debian/pve"], Suites: ["trixie"], Components: ["pve-no-subscription"] }] },
+    ],
+    infos: [],
+  };
+  const after: RawRepositories = {
+    files: [
+      ...(before.files ?? []),
+      {
+        path: "/etc/apt/sources.list.d/pve-enterprise.sources",
+        repositories: [{ Enabled: 1, URIs: ["https://enterprise.proxmox.com/debian/pve"], Suites: ["trixie"], Components: ["pve-enterprise"] }],
+      },
+    ],
+    infos: [],
+  };
+  const { deps, calls } = lab({ repos: before, reposAfter: after, sub: { status: "notfound" } });
+  const job = createNodeUpgrade(deps);
+  await job.start(root(), "n2", "n2");
+  const r = await finish(job, "n2");
+  assert.equal(r?.phase, "done", r?.error ?? "");
+  assert.deepEqual(r?.freeChannel, { planned: true, why: "", turnedOff: ["/etc/apt/sources.list.d/pve-enterprise.sources"], note: null });
+  assert.ok(calls.indexOf("off /etc/apt/sources.list.d/pve-enterprise.sources") < calls.indexOf("reboot"), "before the restart");
+
+  const subscribed = lab({ repos: before, reposAfter: after, sub: { status: "Active" } });
+  const j2 = createNodeUpgrade(subscribed.deps);
+  await j2.start(root(), "n2", "n2");
+  const r2 = await finish(j2, "n2");
+  assert.equal(r2?.phase, "done");
+  assert.equal(r2?.freeChannel?.planned, false);
+  assert.ok(!subscribed.calls.some((c) => c.startsWith("off ")), "a subscribed node's sources are left as Proxmox sets them");
+});
+
+test("an upgrade whose job never started is a failure before the packages: nothing touched, sources not given up (review 0.3.2)", async () => {
+  for (const [why, answer] of [
+    ["the console never reached the node", "BMXUP noexit\n"],
+    ["an older upgrade's exit file is still there", "BMXID 0123456789abcdef\nBMXUP exit 0\n"],
+  ] as const) {
+    const { deps, calls } = lab();
+    deps.console = async (_n, _s, line) => {
+      if (line.startsWith("pve8to9")) return out(CHECK_OK);
+      if (line === followCommand()) {
+        calls.push("follow");
+        return out(answer);
+      }
+      calls.push("upgrade");
+      throw new Error("The console on n2 didn't open.");
+    };
+    const job = createNodeUpgrade(deps);
+    await job.start(root(), "n2", "n2");
+    const r = await finish(job, "n2");
+    assert.equal(r?.phase, "failed", why);
+    assert.match(r?.error ?? "", /didn't start, so nothing was installed/, why);
+    assert.equal(r?.packagesTouched, false, `${why}: the run may start its guests again`);
+    assert.ok(!calls.includes("forget"), `${why}: the old sources can still go back`);
+    assert.ok(!calls.includes("reboot"), why);
+  }
+});
+
+test("the upgrade id reaches the node line only as 16 hex characters", () => {
+  assert.throws(() => upgradeScript("0; reboot"), /isn't valid/);
+  assert.throws(() => upgradeScript("ABCDEF0123456789"), /isn't valid/);
+  assert.match(upgradeScript("0123456789abcdef"), /^echo 0123456789abcdef >\/root\/bossmox-upgrade\.id$/m);
 });

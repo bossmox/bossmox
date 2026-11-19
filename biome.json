@@ -54,7 +54,8 @@
     },
     {
       "includes": [
-        "public/guest-list.js"
+        "public/guest-list.js",
+        "public/help.js"
       ],
       "linter": {
         "rules": {

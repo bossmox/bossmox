@@ -12,7 +12,7 @@ import { readMoves, runMoveHome, runMoveOff, writeMoves, type MoveDeps } from ".
 import { INSTALL_COMMAND, runOnNode, STILL_RUNNING, type ShellConfig } from "./node-shell.js";
 import { rebootAndWait } from "./reboot.js";
 import { releaseMismatch } from "./release-guard.js";
-import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type MovePlan, type NodeRoom, type Pending, type RawPrecondition } from "./placement.js";
+import { asEjected, gbText, guestNeed, planMoves, room as roomFor, type Move, type MovePlan, type NodeRoom, type Pending, type RawPrecondition } from "./placement.js";
 import type { Preferences } from "./preferences.js";
 import { PveError, type PveClient } from "./pve.js";
 import { drive, readRun, writeRun, type Choice, type Run, type RunDeps, type RunNode } from "./run.js";
@@ -79,7 +79,13 @@ export function createJobs(ctx: JobsContext) {
    * Fresh numbers from Proxmox, and where each guest of `from` would go (ADR 0025). Without `ids` it plans every
    * running guest. With `only`, that node is the one target allowed (sending guests home).
    */
-  async function planEvacuation(ticket: string, from: string, ids?: number[], only?: string, pending: Pending = {}, assumeEjected: number[] = []) {
+  /**
+   * The saved Keep free. A run with its own value passes it explicitly to its own planning only: nothing else that
+   * plans while it runs (HA protect, Empty this node, another plan screen) ever sees it (review 0.3.2, Gemini H2).
+   */
+  const keepNow = () => ctx.preferences().keepFreePct;
+
+  async function planEvacuation(ticket: string, from: string, ids?: number[], only?: string, pending: Pending = {}, assumeEjected: number[] = [], keepFreePct: number = keepNow()) {
     const resources = await pve.get<RawResource[]>("/cluster/resources", ticket);
     const online = resources.filter((r) => r.type === "node" && r.status === "online" && (!only || r.node === from || r.node === only));
     const statuses = await Promise.all(online.map((n) => pve.get<RawStatus>(`/nodes/${enc(n.node ?? "")}/status`, ticket).catch(() => null)));
@@ -158,7 +164,7 @@ export function createJobs(ctx: JobsContext) {
         });
       }),
     );
-    const keep = ctx.preferences().keepFreePct;
+    const keep = keepFreePct;
     const plan: MovePlan = planMoves(from, needs, nodes, keep);
     // What each other node has now and would have after, so the person sees why it was picked.
     const room = nodes
@@ -177,9 +183,9 @@ export function createJobs(ctx: JobsContext) {
   }
 
   /** How a move job reaches Proxmox: always with the person's current login, which renewals replace. */
-  function moveDeps(session: Session): MoveDeps {
+  function moveDeps(session: Session, keepFreePct?: number): MoveDeps {
     return {
-      plan: (from, ids, only, pending) => planEvacuation(session.ticket, from, ids, only, pending),
+      plan: (from, ids, only, pending) => planEvacuation(session.ticket, from, ids, only, pending, [], keepFreePct ?? keepNow()),
       migrate: async (move, from) => {
         const base = `/nodes/${enc(from)}/${move.type}/${move.id}`;
         const now = await pve.get<{ status?: string }>(`${base}/status/current`, session.ticket);
@@ -201,6 +207,8 @@ export function createJobs(ctx: JobsContext) {
         return { finished: s.status === "stopped", ok: exit === "OK" || exit.startsWith("WARNINGS"), error: exit || "unknown error" };
       },
       where: async () => new Map((await pve.get<RawResource[]>("/cluster/resources?type=vm", session.ticket)).map((r) => [Number(r.vmid), r.node ?? ""])),
+      // A few lines at a time from where the last read ended: only moves BossMox started reach here (ADR 0044, R11).
+      progress: async (node, upid, start) => (await pve.get<{ n?: number; t?: string }[]>(`/nodes/${enc(node)}/tasks/${enc(upid)}/log?start=${start}&limit=50`, session.ticket)).map((l) => l.t ?? ""),
       stopped: () => moveJob.stop,
       wait: (ms) => new Promise((r) => setTimeout(r, ms)),
       save: (record) => {
@@ -254,7 +262,7 @@ export function createJobs(ctx: JobsContext) {
     }
   }
 
-  async function loadRollingPlan(ticket: string, assumeEjected: number[] = []) {
+  async function loadRollingPlan(ticket: string, assumeEjected: number[] = [], keepFreePct: number = keepNow()) {
     const data = await ctx.loadOverview(ticket);
     const [cluster, tieBreaker, servers] = await Promise.all([
       section(pve.get<{ type?: string; quorate?: number }[]>("/cluster/status", ticket)),
@@ -276,7 +284,10 @@ export function createJobs(ctx: JobsContext) {
           // Each node that restarts is planned against the cluster as it is now: guests go home before the next one.
           const evac =
             list?.rebootNeeded && list.total > 0
-              ? await planEvacuation(ticket, n.name, undefined, undefined, {}, assumeEjected).catch((err: Error) => ({ problems: [`BossMox couldn't plan the moves: ${err.message}`], ejectable: [] }))
+              ? await planEvacuation(ticket, n.name, undefined, undefined, {}, assumeEjected, keepFreePct).catch((err: Error) => ({
+                  problems: [`BossMox couldn't plan the moves: ${err.message}`],
+                  ejectable: [],
+                }))
               : { problems: [], ejectable: [] };
           const cantMove = evac.problems.map((p) => `${n.name}: ${p}`);
           const ejectable = (evac.ejectable ?? []).map((g) => ({ ...g, node: n.name }));
@@ -336,34 +347,41 @@ export function createJobs(ctx: JobsContext) {
     choice: "move" | "shutdown";
   }
   /** What a run would do on each node, with a choice per running VM: what it can do, and the safe default. */
-  async function runPlan(who: string | Pick<Session, "username" | "ticket">, kind: RunKind, server: string, assumeEjected: number[] = []) {
+  async function runPlan(who: string | Pick<Session, "username" | "ticket">, kind: RunKind, server: string, assumeEjected: number[] = [], only = "", keepFreePct: number = keepNow()) {
     // A ticket alone is enough for updates and restarts; an upgrade also needs to know it's root@pam.
     const session = typeof who === "string" ? { username: "", ticket: who } : who;
     const ticket = session.ticket;
     const macs = (ctx.macs ?? ownMacs)();
-    const rolling = kind === "update" ? await loadRollingPlan(ticket, assumeEjected) : null;
+    const rolling = kind === "update" ? await loadRollingPlan(ticket, assumeEjected, keepFreePct) : null;
     // An upgrade empties and restarts every node still to go, one at a time, oldest first (ADR 0042).
-    const upgrades = kind === "upgrade" ? await upgradePlan(session) : [];
+    // Upgrade this node (ADR 0044): the same plan, cut to one node, so it gets every check the cluster run has.
+    const planned = kind === "upgrade" ? await upgradePlan(session) : [];
+    if (only && kind !== "upgrade") throw new HttpError(400, "Only an upgrade can be run for one node.");
+    const upgrades = only ? planned.filter((u) => u.name === only) : planned;
+    if (only && !upgrades.length) throw new HttpError(400, `${only} isn't waiting for the upgrade: it's on the new version already, or it isn't in this cluster.`);
     const nodes: { name: string; version: string | null; updates: number; restart: boolean; install: boolean; upgrade?: { to: number; finishing: boolean } }[] =
       kind === "update"
         ? (rolling?.servers ?? []).map((s) => ({ name: s.name, version: s.version, updates: s.updates ?? 0, restart: s.rebootNeeded, install: true }))
         : kind === "upgrade"
           ? upgrades.map((u) => ({ name: u.name, version: u.version, updates: 0, restart: true, install: false, upgrade: { to: u.to, finishing: u.finishing } }))
           : [{ name: server, version: null, updates: 0, restart: true, install: false }];
+    const unreadable: string[] = [];
     const out = await Promise.all(
       nodes.map(async (n) => {
         if (!n.restart) return { ...n, vms: [] as PlanVm[] };
-        const evac = await planEvacuation(ticket, n.name, undefined, undefined, {}, assumeEjected);
+        const evac = await planEvacuation(ticket, n.name, undefined, undefined, {}, assumeEjected, keepFreePct);
         const resources = await pve.get<RawResource[]>("/cluster/resources?type=vm", ticket);
         const running = resources.filter((r) => r.node === n.name && (r.status === "running" || r.status === "paused") && r.template !== 1);
         const vms: PlanVm[] = await Promise.all(
           running.map(async (r) => {
             const id = Number(r.vmid);
             const type = r.type === "lxc" ? "lxc" : "qemu";
-            const config = await pve.get<RawConfig>(`/nodes/${enc(n.name)}/${type}/${id}/config`, ticket).catch((): RawConfig => ({}));
+            const config = await pve.get<RawConfig>(`/nodes/${enc(n.name)}/${type}/${id}/config`, ticket).catch(() => null);
+            // Not readable means BossMox can't tell whether it's itself: never planned for a shut down (review 0.3.2, R12).
+            if (!config) unreadable.push(`${r.name ?? `VM ${id}`} on ${n.name}`);
             const unplaced = evac.unplaced?.find((u) => u.id === id);
             const to = evac.tentative?.find((m) => m.id === id)?.target ?? null;
-            const self = isSelf(config, macs);
+            const self = config ? isSelf(config, macs) : false;
             return {
               id,
               name: r.name ?? `VM ${id}`,
@@ -381,7 +399,10 @@ export function createJobs(ctx: JobsContext) {
       }),
     );
     // Rooms counted with every VM moving; a person's Shut down choices only free more.
-    const blocked = [...(rolling?.blocked.filter((b) => !rolling.servers.some((s) => b.startsWith(`${s.name}: `))) ?? [])];
+    const blocked = [
+      ...(unreadable.length ? [`BossMox couldn't read the settings of ${unreadable.join(", ")}, so it can't tell whether that's BossMox itself. Try again.`] : []),
+      ...(rolling?.blocked.filter((b) => !rolling.servers.some((s) => b.startsWith(`${s.name}: `))) ?? []),
+    ];
     for (const n of out)
       for (const v of n.vms) {
         if (!v.self) continue;
@@ -414,7 +435,7 @@ export function createJobs(ctx: JobsContext) {
       blocked,
       votes,
       keepsMajority: votes >= 3,
-      keepFreePct: ctx.preferences().keepFreePct,
+      keepFreePct,
       moveBatch: net.batch,
       moveShared: net.known && net.shared,
     };
@@ -461,7 +482,9 @@ export function createJobs(ctx: JobsContext) {
   /** How a run reaches Proxmox and the move job, always with the starting person's current login. */
   function runDeps(session: Session, run: Run): RunDeps {
     const t = () => session.ticket;
-    const moves: MoveDeps = { ...moveDeps(session), stopped: () => run.stop ?? moveJob.stop };
+    // This run's own Keep free, for its moves and its planning only (ADR 0044).
+    const keep = run.keepFreePct ?? keepNow();
+    const moves: MoveDeps = { ...moveDeps(session, keep), stopped: () => run.stop ?? moveJob.stop };
     return {
       stopped: () => run.stop,
       save: saveRun,
@@ -488,7 +511,7 @@ export function createJobs(ctx: JobsContext) {
         await waitTask(node, upid, t(), 5 * 60 * 1000);
       },
       moveOff: async (node, ids) => {
-        const plan = await planEvacuation(t(), node, ids);
+        const plan = await planEvacuation(t(), node, ids, undefined, {}, [], keep);
         if (plan.problems.length) throw new Error(plan.problems.join(" "));
         await runMoveOff(moveRecord, moves, node, session.username, plan.moves, await batchFor(t()));
         // Where each one is now, read from Proxmox: one may already have gone, moved home to another node earlier in the run.
@@ -530,7 +553,7 @@ export function createJobs(ctx: JobsContext) {
         const notes = new Map<number, string>();
         if (moveRecord.away[node]?.guests.length) {
           // A node just back from a restart is busy for a while. Give it up to 5 minutes to drop under the processor cap.
-          const cap = 100 - ctx.preferences().keepFreePct;
+          const cap = 100 - keep;
           const until = Date.now() + RETURN_SETTLE_MS;
           for (; Date.now() < until; await new Promise((r) => setTimeout(r, 10_000))) {
             const s = await pve.get<RawStatus>(`/nodes/${enc(node)}/status`, t()).catch(() => null);
@@ -560,7 +583,7 @@ export function createJobs(ctx: JobsContext) {
   }
 
   /** Starts a run with the person's choices. Everything is checked again here; the page's copy is only a request. */
-  async function startRun(session: Session, kind: RunKind, server: string, confirmed: boolean, choices: Record<string, unknown>): Promise<string> {
+  async function startRun(session: Session, kind: RunKind, server: string, confirmed: boolean, choices: Record<string, unknown>, only = "", keepFreePct?: number): Promise<string> {
     if (!confirmed) throw new HttpError(400, "It wasn't confirmed.");
     // A run stops when the sign-in that started it ends. One that won't last a long update is refused up front (#59).
     const left = session.expiresAt - Date.now();
@@ -575,7 +598,8 @@ export function createJobs(ctx: JobsContext) {
       const eject = Object.entries(choices)
         .filter(([, c]) => c === "eject")
         .map(([id]) => Number(id));
-      const plan = await runPlan(session, kind, server, eject);
+      const keep = keepFreePct ?? ctx.preferences().keepFreePct;
+      const plan = await runPlan(session, kind, server, eject, only, keep);
       if (plan.blocked.length) throw new HttpError(400, plan.blocked.join(" "));
       if (kind === "update" && !plan.nodes.length) throw new HttpError(400, "Every node is up to date.");
       if (kind === "upgrade" && !plan.nodes.length) throw new HttpError(400, "Every node is on the new version already.");
@@ -598,7 +622,7 @@ export function createJobs(ctx: JobsContext) {
       for (const n of nodes) {
         const moving = n.vms.filter((v) => v.choice === "move").map((v) => v.id);
         if (!moving.length || !n.restart) continue;
-        const check = await planEvacuation(session.ticket, n.name, moving, undefined, {}, eject);
+        const check = await planEvacuation(session.ticket, n.name, moving, undefined, {}, eject, keep);
         if (check.problems.length) throw new HttpError(400, `${n.name}: ${check.problems.join(" ")} Choose Shut down for it, or lower Keep free.`);
       }
       // Every check passed. Only now do the chosen discs come out.
@@ -610,9 +634,22 @@ export function createJobs(ctx: JobsContext) {
           for (const slot of slots) await pve.put<null>(`${path}/config`, session, discForm("", current, slot));
           if (slots.length) ctx.audit("eject", session.username, "run", { node: n.name, guest: v.id });
         }
-      currentRun = { id: `run:${Date.now()}`, kind, by: session.username, startedAt: Date.now(), finishedAt: null, running: true, stop: null, error: null, current: 0, nodes };
+      currentRun = {
+        id: `run:${Date.now()}`,
+        kind,
+        by: session.username,
+        startedAt: Date.now(),
+        finishedAt: null,
+        running: true,
+        stop: null,
+        error: null,
+        current: 0,
+        nodes,
+        ...(keepFreePct !== undefined ? { keepFreePct } : {}),
+      };
       const run = currentRun;
       runState.session = session;
+
       moveJob.stop = null;
       saveRun(run);
       void drive(run, runDeps(session, run))
@@ -627,6 +664,20 @@ export function createJobs(ctx: JobsContext) {
     }
   }
 
+  /**
+   * BossMox's own guest among these moves, if it's one of them (Empty this node, ADR 0044, design review M7). A guest
+   * whose settings can't be read is a refusal, not a pass: it could be BossMox (rule R12).
+   */
+  async function selfGuest(ticket: string, node: string, moves: Move[]): Promise<Move | null> {
+    const macs = (ctx.macs ?? ownMacs)();
+    for (const m of moves) {
+      const config = await pve.get<RawConfig>(`/nodes/${enc(node)}/${m.type}/${m.id}/config`, ticket).catch(() => null);
+      if (!config) throw new HttpError(400, `BossMox couldn't read ${m.name}'s settings, so it can't tell whether that's BossMox itself. Try again.`);
+      if (isSelf(config, macs)) return m;
+    }
+    return null;
+  }
+
   return {
     moveRecord,
     moveJob,
@@ -636,6 +687,7 @@ export function createJobs(ctx: JobsContext) {
     },
     saveRun,
     planEvacuation,
+    selfGuest,
     runPlan,
     startRun,
     startMoveJob,

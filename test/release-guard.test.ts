@@ -74,3 +74,10 @@ test("one node on the wrong release stops the whole run, even with nothing to in
   const plan = buildRollingPlan([server({ name: "pve1" }), server({ name: "pve2", updates: 0, releaseMismatch: "pve2 points at trixie" })], { available: true, value: true }, { available: false });
   assert.deepEqual(plan.blocked, ["pve2 points at trixie"]);
 });
+
+test("the refusal points at BossMox's own upgrade, not Proxmox's steps (ADR 0044)", () => {
+  const why = releaseMismatch("pve1", flagged(PVE, 0, "ignore-pre-upgrade-warning", "suite 'trixie' should not be used in production!")) ?? "";
+  assert.match(why, /use Get ready to upgrade in BossMox/);
+  assert.match(why, /Put the old sources back/);
+  assert.doesNotMatch(why, /Proxmox's upgrade steps/);
+});

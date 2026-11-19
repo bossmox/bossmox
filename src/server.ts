@@ -68,9 +68,12 @@ import { createHa } from "./ha.js";
 import { createTieBreaker } from "./qdevice.js";
 import { createHeartbeat, nodeConsole } from "./heartbeat.js";
 import { getRoutes, type GetRoute } from "./routes/get.js";
+import { loadHelp } from "./help.js";
 import { HttpError } from "./http-error.js";
 
 const PUBLIC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../public");
+/** Help articles, read once at startup (ADR 0044). The release carries docs/help beside public/. */
+const HELP = loadHelp(path.resolve(PUBLIC, "../docs/help"));
 /** Written into a release. A copy run from the repo has none, and the page then shows nothing. */
 const VERSION = (() => {
   try {
@@ -84,6 +87,7 @@ const STATIC: Record<string, [string, string]> = {
   "/style.css": ["style.css", "text/css; charset=utf-8"],
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/guest-list.js": ["guest-list.js", "text/javascript; charset=utf-8"],
+  "/help.js": ["help.js", "text/javascript; charset=utf-8"],
   "/vendor/xterm.js": ["vendor/xterm.js", "text/javascript; charset=utf-8"],
   "/vendor/addon-fit.js": ["vendor/addon-fit.js", "text/javascript; charset=utf-8"],
   "/vendor/xterm.css": ["vendor/xterm.css", "text/css; charset=utf-8"],
@@ -120,7 +124,11 @@ const terminals = new Terminals({
 sessions.onEnd = (session) => {
   terminals.closeSession(session);
   if (session === jobs.moveJob.session) jobs.moveJob.stop = `${session.username} signed out.`;
-  if (session === jobs.runState.session && jobs.currentRun?.running) jobs.currentRun.stop = `${session.username} signed out.`;
+  if (session === jobs.runState.session && jobs.currentRun?.running) {
+    jobs.currentRun.stop = `${session.username} signed out.`;
+    // Written down like a pressed Stop, so a BossMox restart right after still knows why it stopped (design review L3).
+    jobs.saveRun(jobs.currentRun);
+  }
 };
 // A move job keeps its person's Proxmox login renewed, like an open console does.
 // So does a one-node upgrade: it carries on after its person signs out, like a run's node under way, and must not fail
@@ -215,6 +223,14 @@ const ha = createHa({
   netCheck: (t) => jobs.readNetCheck(t),
   audit: (event, who, detail) => audit(event, who, "guest", detail),
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
+  // Looked up when used: the root console is set up further down.
+  console: (node, session, line) => rootConsole(node, session, line),
+  busy: () => {
+    if (jobs.currentRun?.running || jobs.runState.starting) return "A run";
+    if (jobs.moveRecord.job?.running || jobs.moveJob.starting) return "A move";
+    const node = nodeUpgrade.running();
+    return node ? `The upgrade of ${node}` : null;
+  },
 });
 
 /** Moves and runs (ADR 0025, 0027), in their own module; the server hands them Proxmox and its settings. */
@@ -821,7 +837,16 @@ async function runAction(req: http.IncomingMessage, res: http.ServerResponse, ac
     const task = await run(name, session, body);
     // No task means it's already done, so nothing else will clear the old view of it.
     if (!task) cache.delete(session);
-    audit(action, session.username, addressOf(req), { node: name, ...(text(body.guest, 12) ? { guest: text(body.guest, 12) } : {}) });
+    // A run is recorded by what it is, not the node the request happened to name (review 0.3.2).
+    const runDetail =
+      action === "run-start"
+        ? { kind: text(body.kind, 12), ...(text(body.only, 64) ? { only: text(body.only, 64) } : {}), ...(body.keepFreePct !== undefined ? { keep: Number(body.keepFreePct) } : {}) }
+        : {};
+    audit(action, session.username, addressOf(req), {
+      node: action === "run-start" ? text(body.only, 64) || "cluster" : name,
+      ...runDetail,
+      ...(text(body.guest, 12) ? { guest: text(body.guest, 12) } : {}),
+    });
     return json(res, 200, { task });
   } catch (err) {
     if (answerPveError(res, id, err) === false) throw err;
@@ -1016,6 +1041,7 @@ const routeContext = {
   upgradeSources,
   nodeUpgrade,
   viewerOf,
+  help: HELP,
   epoch: () => preferencesEpoch,
 };
 export type RouteContext = typeof routeContext;

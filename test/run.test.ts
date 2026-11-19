@@ -430,7 +430,7 @@ const upgraded =
   (log: string[], result: Partial<import("../src/run.js").UpgradeResult> = {}) =>
   async (n: string) => {
     log.push(`upgrade ${n}`);
-    return { restarted: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve", ...result };
+    return { restarted: true, packagesTouched: true, error: null, keptConfig: ["/etc/issue"], version: "9.2.28", kernel: "7.0.14-29-pve", ...result };
   };
 
 test("an upgrade run: empty the node, upgrade it, start what was shut down, bring guests home; then the next", async () => {
@@ -445,16 +445,28 @@ test("an upgrade run: empty the node, upgrade it, start what was shut down, brin
   assert.deepEqual(r.nodes[0]?.keptConfig, ["/etc/issue"]);
 });
 
-test("an upgrade that fails before its restart stops the run and starts again what was shut down", async () => {
+test("an upgrade that fails before its packages stops the run and starts again what was shut down", async () => {
   const r = { ...run([up("n1", [vm(1, "web"), vm(2, "app", "shutdown")]), up("n2", [])]), kind: "upgrade" as const };
   const { deps, log } = fake({ at: r });
-  deps.upgrade = upgraded(log, { restarted: false, error: "After the packages, Proxmox's checker found 1 problem (x) on n1, so it wasn't restarted." });
+  deps.upgrade = upgraded(log, { restarted: false, packagesTouched: false, error: "Proxmox's checker found 1 problem (x) on n1. Nothing was changed; fix them first." });
   await drive(r, deps);
   assert.deepEqual(log, ["check n1", "shutdown app", "moveOff n1 1", "upgrade n1", "start app"]);
-  assert.match(r.error ?? "", /^n1: After the packages/);
+  assert.match(r.error ?? "", /^n1: Proxmox's checker found/);
   assert.equal(r.nodes[0]?.phase, "failed");
   assert.equal(r.nodes[1]?.phase, "waiting", "the next node is never touched");
   assert.equal(r.nodes[0]?.vms.find((v) => v.name === "app")?.note, "started again: n1 wasn't restarted");
+});
+
+test("an upgrade that fails after its packages began, before the restart, leaves what was shut down off (design review 2026-11-19)", async () => {
+  const r = { ...run([up("n1", [vm(1, "web"), vm(2, "app", "shutdown")]), up("n2", [])]), kind: "upgrade" as const };
+  const { deps, log } = fake({ at: r });
+  deps.upgrade = upgraded(log, { restarted: false, packagesTouched: true, error: "After the packages, Proxmox's checker found 1 problem (x) on n1, so it wasn't restarted." });
+  await drive(r, deps);
+  assert.deepEqual(log, ["check n1", "shutdown app", "moveOff n1 1", "upgrade n1"], "nothing starts on a node part way between versions");
+  const app = r.nodes[0]?.vms.find((v) => v.name === "app");
+  assert.equal(app?.state, "off");
+  assert.match(app?.note ?? "", /still off: the upgrade of n1 stopped after its packages began installing/);
+  assert.equal(r.nodes[1]?.phase, "waiting");
 });
 
 test("an upgrade that fails after its restart doesn't start guests again or bring any home", async () => {
@@ -500,4 +512,24 @@ test("a guest that lands on the node during its moves is moved off before the up
   deps.upgrade = upgraded(log);
   await drive(r, deps);
   assert.deepEqual(log.slice(0, 4), ["check n1", "moveOff n1 1", "moveOff n1 9", "upgrade n1"]);
+});
+
+test("a limited account gets an allowed list of a run's fields, counted against the nodes it sees (rule R11)", () => {
+  const away = { ...vm(1, "web"), state: "moved" as const, on: "secret-node" };
+  const r = {
+    ...run([node("secret-node", [vm(9, "hidden")]), node("n1", [away, vm(2, "app")]), node("n2", [])]),
+    running: true,
+    current: 1,
+    keepFreePct: 5,
+    somethingAddedLater: "a name nobody chose to show",
+  } as Run & { somethingAddedLater: string };
+  const seen = runFor(r, { full: false, nodes: new Set(["n1", "n2"]), guests: new Set([1, 2]) }) as Run & Record<string, unknown>;
+  assert.deepEqual(
+    seen.nodes.map((n) => n.name),
+    ["n1", "n2"],
+  );
+  assert.equal(seen.current, 0, "n1 is the first node this person sees, and it's the one under way");
+  assert.equal(seen.keepFreePct, undefined, "not chosen to show");
+  assert.equal(seen.somethingAddedLater, undefined, "a new field stays hidden until it's added on purpose");
+  assert.equal(seen.nodes[0]?.vms.find((v) => v.id === 1)?.on, undefined, "a node it can't see isn't named as where a guest went");
 });
