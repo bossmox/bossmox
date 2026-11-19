@@ -46,6 +46,9 @@ function fake(
     type?: "qemu" | "lxc";
     /** Proxmox's cluster task list; null when it can't be read. */
     tasks?: { upid: string; type?: string; id?: string; endtime?: number }[] | null;
+    /** What the guest's node itself says runs now. */
+    active?: { upid: string; type?: string; id?: string }[];
+    offline?: string[];
     busy?: string | null;
   } = {},
 ) {
@@ -60,6 +63,8 @@ function fake(
         if (opts.tasks === null) throw new Error("403");
         return opts.tasks ?? [];
       }
+      if (path === "/nodes/n3/tasks?source=active") return opts.active ?? [];
+      if (path === "/cluster/resources?type=node") return ["n1", "n2", "n3"].map((n) => ({ node: n, status: opts.offline?.includes(n) ? "offline" : "online" }));
       if (path === "/nodes/n3/lxc/101/config") return { rootfs: "ISCSI_SHARE:vm-101-disk-0", ...(lock ? { lock } : {}) };
       if (path === "/cluster/resources?type=storage")
         return [
@@ -100,7 +105,7 @@ function fake(
       if (line === "pct unlock 101") lock = undefined;
       return { exitCode: 0, output: "" };
     },
-    busyWith: () => opts.busy ?? null,
+    busy: () => opts.busy ?? null,
   });
   return { ha, calls };
 }
@@ -154,7 +159,15 @@ test("a container is unlocked with Proxmox's own pct unlock, and nothing BossMox
   await refused({ tasks: [{ upid: "UPID:n1:1:2:3:vzdump:101:root@pam:", type: "vzdump", id: "101" }] }, "backup", /task for web is still running \(vzdump\)/);
   await refused({ tasks: [{ upid: "UPID:n3:1:2:3:vzdump::root@pam:", type: "vzdump", id: "" }] }, "backup", /backup is running on n3/);
   await refused({ tasks: null }, "backup", /couldn't read Proxmox's task list/);
-  await refused({ busy: "A run" }, "backup", /A run includes web/);
+  await refused({ busy: "A run" }, "backup", /A run is going/);
+  await refused({ active: [{ upid: "UPID:n3:1:2:3:vzdump:101:root@pam:", type: "vzdump", id: "101" }] }, "backup", /task for web is still running/);
+  await refused({ offline: ["n1"] }, "backup", /n1 is offline/);
+  await refused({ lock: "mounted" }, "mounted", /something was half done/);
+  await refused({ lock: "create" }, "create", /something was half done/);
+  // Waiting for BossMox doesn't depend on a lock: an unlocked guest on a node about to restart waits too.
+  const unlocked = fake({ hastate: "error", busy: "The upgrade of n3" });
+  await assert.rejects(unlocked.ha.recover(root, 101), /The upgrade of n3 is going/);
+  assert.deepEqual(unlocked.calls, []);
   const hibernated = fake({ hastate: "error", lock: "suspended" });
   await assert.rejects(hibernated.ha.recover(root, 101, "suspended"), /hibernated/);
   assert.deepEqual(hibernated.calls, []);

@@ -225,10 +225,11 @@ const ha = createHa({
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
   // Looked up when used: the root console is set up further down.
   console: (node, session, line) => rootConsole(node, session, line),
-  busyWith: (id) => {
-    if (jobs.currentRun?.running && jobs.currentRun.nodes.some((n) => n.vms.some((v) => v.id === id))) return "A run";
-    if (jobs.moveRecord.job?.running && jobs.moveRecord.job.guests.some((g) => g.id === id)) return "A move";
-    return null;
+  busy: () => {
+    if (jobs.currentRun?.running || jobs.runState.starting) return "A run";
+    if (jobs.moveRecord.job?.running || jobs.moveJob.starting) return "A move";
+    const node = nodeUpgrade.running();
+    return node ? `The upgrade of ${node}` : null;
   },
 });
 

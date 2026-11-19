@@ -94,11 +94,21 @@ export interface HaDeps {
   wait: (ms: number) => Promise<void>;
   /** The node's root console, for Proxmox's own pct unlock: the container config call can't clear a lock (ADR 0044). */
   console?: (node: string, session: Session, line: string) => Promise<{ exitCode: number | null; output: string }>;
-  /** A BossMox run or move that includes this guest, if one is going: its lock may be BossMox's own. */
-  busyWith?: (id: number) => string | null;
+  /**
+   * A BossMox run, move or node upgrade that's going or starting, if any: Fix this waits for it, so HA doesn't start a
+   * guest on a node about to restart, or clear a lock BossMox's own move holds (review 0.3.2).
+   */
+  busy?: () => string | null;
 }
 
 const sidOf = (type: "qemu" | "lxc", id: number) => `${type === "lxc" ? "ct" : "vm"}:${id}`;
+
+/**
+ * The only locks BossMox clears: ones a backup, move or snapshot task leaves behind when it stops part way. The others
+ * mean something is half done (a guest being created, deleted or cloned, a disk being changed or mounted, memory being
+ * saved) and clearing them could damage the guest (review 0.3.2, Gemini H1).
+ */
+export const CLEARABLE_LOCKS = new Set(["backup", "migrate", "snapshot", "snapshot-delete"]);
 
 export function createHa(deps: HaDeps) {
   const { pve } = deps;
@@ -157,22 +167,47 @@ export function createHa(deps: HaDeps) {
    * read is a refusal (design review H2, rule R12).
    */
   async function notHeld(session: Session, node: string, id: number, name: string) {
-    const tasks = await pve.get<RawTask[]>("/cluster/tasks", session.ticket).catch(() => null);
-    if (!tasks) throw new HttpError(503, `BossMox couldn't read Proxmox's task list, so it can't tell whether something is still using ${name}. Try again.`);
-    const running = tasks.filter((t) => !t.endtime && t.status !== "OK");
+    const [cluster, local, nodes] = await Promise.all([
+      pve.get<RawTask[]>("/cluster/tasks", session.ticket).catch(() => null),
+      // The node's own list of what runs now: the cluster's list can lag by a few seconds.
+      pve.get<RawTask[]>(`/nodes/${encodeURIComponent(node)}/tasks?source=active`, session.ticket).catch(() => null),
+      pve.get<RawResource[]>("/cluster/resources?type=node", session.ticket).catch(() => null),
+    ]);
+    if (!cluster || !local || !nodes) throw new HttpError(503, `BossMox couldn't read Proxmox's task lists, so it can't tell whether something is still using ${name}. Try again.`);
+    // An offline node's tasks may be missing from the list, so the list can't vouch for anything (rule R12).
+    const off = nodes.filter((n) => n.status !== "online").map((n) => n.node);
+    if (off.length)
+      throw new HttpError(
+        409,
+        `${off.join(", ")} ${off.length === 1 ? "is" : "are"} offline, so BossMox can't see every task that might hold ${name}'s lock. Try again once ${off.length === 1 ? "it's" : "they're"} back.`,
+      );
+    const running = [...cluster.filter((t) => !t.endtime && t.status !== "OK"), ...local];
     const own = running.find((t) => t.id === String(id));
     if (own) throw new HttpError(409, `A Proxmox task for ${name} is still running (${own.type ?? "a task"}). Its lock is in use; wait for it to finish.`);
     if (running.some((t) => t.type === "vzdump" && t.upid.startsWith(`UPID:${node}:`)))
       throw new HttpError(409, `A backup is running on ${node}. It may be holding ${name}'s lock; wait for it to finish.`);
-    const bossmox = deps.busyWith?.(id);
-    if (bossmox) throw new HttpError(409, `${bossmox} includes ${name}. Wait for it to finish.`);
   }
+
+  /** One Fix this per guest at a time: two at once would unlock and set HA states over each other. */
+  const fixing = new Set<number>();
 
   /**
    * A guest HA gave up on: unlock it if it's locked, then disabled and started again under HA. The person confirms the
    * lock they saw; a different one now is refused (ADR 0044).
    */
   async function recover(session: Session, id: number, sawLock = "") {
+    const bossmox = deps.busy?.();
+    if (bossmox) throw new HttpError(409, `${bossmox} is going. Use Fix this once it has finished.`);
+    if (fixing.has(id)) throw new HttpError(409, "Fix this is already working on that guest.");
+    fixing.add(id);
+    try {
+      await recoverOne(session, id, sawLock);
+    } finally {
+      fixing.delete(id);
+    }
+  }
+
+  async function recoverOne(session: Session, id: number, sawLock: string) {
     const { r, type, node } = await guest(session.ticket, id);
     const name = r.name ?? String(id);
     if (r.hastate !== "error") throw new HttpError(400, `HA hasn't given up on ${name}.`);
@@ -184,6 +219,11 @@ export function createHa(deps: HaDeps) {
       if (sawLock !== lock) throw new HttpError(409, `${name} is locked (${lock}). Look at what holds it, then confirm that lock to clear it.`);
       // A hibernated VM keeps its memory on disk under this lock; starting it resumes it, clearing the lock could lose that.
       if (lock === "suspended") throw new HttpError(409, `${name} is hibernated. Start it to resume it; BossMox won't clear that lock, which could lose its saved memory.`);
+      if (!CLEARABLE_LOCKS.has(lock))
+        throw new HttpError(
+          409,
+          `${name} is locked (${lock}): something was half done to it. BossMox only clears locks a stopped backup, move or snapshot leaves behind, so this one needs checking in Proxmox first.`,
+        );
       await notHeld(session, node, id, name);
       if (type === "qemu") await pve.put<null>(path, session, { delete: "lock", skiplock: "1" });
       else {
@@ -195,6 +235,8 @@ export function createHa(deps: HaDeps) {
       // Said only once Proxmox shows it (rule R4).
       const after = await pve.get<RawConfig>(path, session.ticket);
       if (after.lock) throw new HttpError(502, `${name} is still locked (${String(after.lock)}).`);
+      // Recorded on its own, so it's on record even if the HA steps after it fail.
+      deps.audit("ha-unlock", session.username, { guest: id, type, lock });
     }
     const sid = encodeURIComponent(sidOf(type, id));
     await pve.put<null>(`/cluster/ha/resources/${sid}`, session, { state: "disabled" });
