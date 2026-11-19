@@ -38,7 +38,7 @@ export function clusterActions(c: ActionContext): Record<string, Action> {
       return null;
     },
     "ha-recover": async (_name, who, body) => {
-      await c.ha.recover(who, guestId(body.id));
+      await c.ha.recover(who, guestId(body.id), text(body.lock, 32));
       return null;
     },
     "alerts-save": async (_name, who, body) => {

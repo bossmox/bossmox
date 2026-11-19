@@ -8,7 +8,7 @@ import { HttpError } from "./http-error.js";
 import type { RawConfig, RawResource } from "./model.js";
 import type { PveClient } from "./pve.js";
 import type { HeartbeatState } from "./redundancy.js";
-import { tieBreakerVotes } from "./server-detail.js";
+import { tieBreakerVotes, type RawTask } from "./server-detail.js";
 
 export interface HaProblem {
   text: string;
@@ -92,6 +92,10 @@ export interface HaDeps {
   netCheck: (ticket: string) => Promise<NetCheck | null>;
   audit: (event: string, who: string, detail: Record<string, string | number>) => void;
   wait: (ms: number) => Promise<void>;
+  /** The node's root console, for Proxmox's own pct unlock: the container config call can't clear a lock (ADR 0044). */
+  console?: (node: string, session: Session, line: string) => Promise<{ exitCode: number | null; output: string }>;
+  /** A BossMox run or move that includes this guest, if one is going: its lock may be BossMox's own. */
+  busyWith?: (id: number) => string | null;
 }
 
 const sidOf = (type: "qemu" | "lxc", id: number) => `${type === "lxc" ? "ct" : "vm"}:${id}`;
@@ -147,15 +151,50 @@ export function createHa(deps: HaDeps) {
     deps.audit("ha-unprotect", session.username, { guest: id });
   }
 
-  /** A guest HA gave up on: unlock it if it's locked, then disabled and started again under HA. */
-  async function recover(session: Session, id: number) {
+  /**
+   * Nothing may still be holding the guest's lock: a Proxmox task naming it on any node, a backup on its node (a whole
+   * backup job's task may not name each guest), or a BossMox run or move that includes it. A task list that can't be
+   * read is a refusal (design review H2, rule R12).
+   */
+  async function notHeld(session: Session, node: string, id: number, name: string) {
+    const tasks = await pve.get<RawTask[]>("/cluster/tasks", session.ticket).catch(() => null);
+    if (!tasks) throw new HttpError(503, `BossMox couldn't read Proxmox's task list, so it can't tell whether something is still using ${name}. Try again.`);
+    const running = tasks.filter((t) => !t.endtime && t.status !== "OK");
+    const own = running.find((t) => t.id === String(id));
+    if (own) throw new HttpError(409, `A Proxmox task for ${name} is still running (${own.type ?? "a task"}). Its lock is in use; wait for it to finish.`);
+    if (running.some((t) => t.type === "vzdump" && t.upid.startsWith(`UPID:${node}:`)))
+      throw new HttpError(409, `A backup is running on ${node}. It may be holding ${name}'s lock; wait for it to finish.`);
+    const bossmox = deps.busyWith?.(id);
+    if (bossmox) throw new HttpError(409, `${bossmox} includes ${name}. Wait for it to finish.`);
+  }
+
+  /**
+   * A guest HA gave up on: unlock it if it's locked, then disabled and started again under HA. The person confirms the
+   * lock they saw; a different one now is refused (ADR 0044).
+   */
+  async function recover(session: Session, id: number, sawLock = "") {
     const { r, type, node } = await guest(session.ticket, id);
-    if (r.hastate !== "error") throw new HttpError(400, `HA hasn't given up on ${r.name ?? id}.`);
-    const config = await pve.get<RawConfig>(`/nodes/${encodeURIComponent(node)}/${type}/${id}/config`, session.ticket);
+    const name = r.name ?? String(id);
+    if (r.hastate !== "error") throw new HttpError(400, `HA hasn't given up on ${name}.`);
+    const path = `/nodes/${encodeURIComponent(node)}/${type}/${id}/config`;
+    const config = await pve.get<RawConfig>(path, session.ticket);
     if (config.lock) {
-      if (session.username !== "root@pam" || type !== "qemu")
-        throw new HttpError(403, `${r.name ?? id} is locked (${config.lock}). As root on ${node}, run "${type === "lxc" ? "pct" : "qm"} unlock ${id}", then use Fix this again.`);
-      await pve.put<null>(`/nodes/${encodeURIComponent(node)}/qemu/${id}/config`, session, { delete: "lock", skiplock: "1" });
+      const lock = String(config.lock);
+      if (session.username !== "root@pam") throw new HttpError(403, `${name} is locked (${lock}). Only root@pam can clear a lock: sign in as root@pam and use Fix this again.`);
+      if (sawLock !== lock) throw new HttpError(409, `${name} is locked (${lock}). Look at what holds it, then confirm that lock to clear it.`);
+      // A hibernated VM keeps its memory on disk under this lock; starting it resumes it, clearing the lock could lose that.
+      if (lock === "suspended") throw new HttpError(409, `${name} is hibernated. Start it to resume it; BossMox won't clear that lock, which could lose its saved memory.`);
+      await notHeld(session, node, id, name);
+      if (type === "qemu") await pve.put<null>(path, session, { delete: "lock", skiplock: "1" });
+      else {
+        if (!deps.console) throw new HttpError(400, "This BossMox can't unlock containers.");
+        // Proxmox's own command, with a guest number checked as a whole number; nothing else reaches the line (rule R2).
+        const out = await deps.console(node, session, `pct unlock ${Number(id)}`);
+        if (out.exitCode !== 0) throw new HttpError(502, `Proxmox didn't unlock ${name} (exit code ${out.exitCode ?? "unknown"}).`);
+      }
+      // Said only once Proxmox shows it (rule R4).
+      const after = await pve.get<RawConfig>(path, session.ticket);
+      if (after.lock) throw new HttpError(502, `${name} is still locked (${String(after.lock)}).`);
     }
     const sid = encodeURIComponent(sidOf(type, id));
     await pve.put<null>(`/cluster/ha/resources/${sid}`, session, { state: "disabled" });
@@ -167,7 +206,7 @@ export function createHa(deps: HaDeps) {
       if (i >= 20) throw new HttpError(502, `HA didn't take ${r.name ?? id} out of its error state within a minute. It's unlocked and set to disabled; try Fix this again shortly.`);
     }
     await pve.put<null>(`/cluster/ha/resources/${sid}`, session, { state: "started" });
-    deps.audit("ha-recover", session.username, { guest: id, unlocked: config.lock ? String(config.lock) : "" });
+    deps.audit("ha-recover", session.username, { guest: id, type, unlocked: config.lock ? String(config.lock) : "" });
   }
 
   /** The protected guests with HA's state each, for Settings. */

@@ -1716,11 +1716,32 @@ async function askHa(id) {
     ${fencing}
     <div class="row-end"><button class="btn" data-dlg="cancel">Cancel</button><button class="btn primary" data-dlg="ok">Keep it running</button></div>`);
 }
+/** What each of Proxmox's lock names means, in plain words (the list from Proxmox's own code, 2026-11-19). */
+const LOCK_WORDS = {
+  backup: "a backup was taking it",
+  create: "it was being created",
+  destroyed: "it was being deleted",
+  disk: "a disk was being changed",
+  fstrim: "its disk was being trimmed",
+  migrate: "it was being moved to another node",
+  mounted: "its disk was mounted for maintenance",
+  rollback: "a snapshot was being rolled back",
+  snapshot: "a snapshot was being taken",
+  "snapshot-delete": "a snapshot was being deleted",
+  clone: "it was being copied",
+  suspending: "it was being suspended",
+  suspended: "it's suspended",
+};
 async function askHaRecover(id, node) {
   const v = S.data?.vms.find((x) => x.id === id);
   const name = v?.name ?? `Guest ${id}`;
-  confirmAction(`Bring ${name} back under HA?`, `${v?.lock ? `BossMox unlocks ${name} (${v.lock}), then ` : "BossMox "}sets it to disabled under HA and starts it again.`, "Bring it back", () =>
-    runAction("ha-recover", node, `Bringing ${name} back`, { id }, () => {
+  // The lock seen here is the one confirmed: a different one by the time it's cleared is refused (ADR 0044).
+  const lock = v?.lock ?? "";
+  const held = lock
+    ? `${name} is locked: ${LOCK_WORDS[lock] ?? `"${lock}"`}. BossMox clears the lock only if no Proxmox task, backup, or BossMox move or run is still using ${name}; then `
+    : "BossMox ";
+  confirmAction(`Bring ${name} back under HA?`, `${held}it sets ${name} to disabled under HA and starts it again.`, "Bring it back", () =>
+    runAction("ha-recover", node, `Bringing ${name} back`, { id, lock }, () => {
       // Read fresh, past the health cache, so the item that was fixed goes.
       S.healthChecks = null;
       S.healthAgain = true;
